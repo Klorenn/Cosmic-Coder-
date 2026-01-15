@@ -148,7 +148,15 @@ export default class ArenaScene extends Phaser.Scene {
       'hallucination': { health: 1, speed: 50, damage: 0, xpValue: 1, behavior: 'fake', waveMin: 20 },
       'token-overflow': { health: 40, speed: 45, damage: 5, xpValue: 40, behavior: 'growDamage', growRate: 0.0005, waveMin: 25 },
       'context-loss': { health: 50, speed: 60, damage: 7, xpValue: 60, behavior: 'contextLoss', teleportCooldown: 2500, wanderChance: 0.3, waveMin: 30 },
-      'prompt-injection': { health: 60, speed: 40, damage: 5, xpValue: 100, behavior: 'hijack', hijackDuration: 5000, hijackCooldown: 10000, waveMin: 40 }
+      'prompt-injection': { health: 60, speed: 40, damage: 5, xpValue: 100, behavior: 'hijack', hijackDuration: 5000, hijackCooldown: 10000, waveMin: 40 },
+
+      // NEW v2 enemies (Mixed AI + Coding)
+      '404-not-found': { health: 25, speed: 55, damage: 4, xpValue: 20, behavior: 'invisible', waveMin: 18 },
+      'cors-error': { health: 35, speed: 0, damage: 8, xpValue: 30, behavior: 'blocker', blockDuration: 5000, waveMin: 22 },
+      'type-error': { health: 30, speed: 50, damage: 5, xpValue: 25, behavior: 'morph', morphInterval: 3000, waveMin: 28 },
+      'git-conflict': { health: 45, speed: 40, damage: 4, xpValue: 35, behavior: 'split', waveMin: 32 },
+      'overfitting': { health: 50, speed: 65, damage: 6, xpValue: 45, behavior: 'predict', waveMin: 38 },
+      'mode-collapse': { health: 70, speed: 35, damage: 7, xpValue: 60, behavior: 'clone', cloneCooldown: 8000, cloneRadius: 120, waveMin: 45 }
     };
 
     // Mini-boss definitions (appear at waves 10, 30, 50...)
@@ -562,6 +570,65 @@ export default class ArenaScene extends Phaser.Scene {
   getWeaponDurationBonus() {
     const upgrades = window.VIBE_UPGRADES || { getBonus: () => 1 };
     return upgrades.getBonus('weaponDuration');
+  }
+
+  calculateAutoMove() {
+    // Auto-move AI: move away from enemies while staying in bounds
+    const px = this.player.x;
+    const py = this.player.y;
+    const detectionRadius = 200;
+    let threatX = 0;
+    let threatY = 0;
+    let threatCount = 0;
+
+    // Find average threat direction from nearby enemies
+    this.enemies.children.each((enemy) => {
+      if (!enemy.active) return;
+      const dist = Phaser.Math.Distance.Between(px, py, enemy.x, enemy.y);
+      if (dist < detectionRadius && dist > 0) {
+        // Weight by proximity (closer = bigger threat)
+        const weight = 1 - (dist / detectionRadius);
+        threatX += (enemy.x - px) * weight;
+        threatY += (enemy.y - py) * weight;
+        threatCount++;
+      }
+    });
+
+    // If no nearby threats, wander toward center or stay put
+    if (threatCount === 0) {
+      // Gentle drift toward map center to avoid getting stuck at edges
+      const centerX = this.worldWidth / 2;
+      const centerY = this.worldHeight / 2;
+      const distToCenter = Phaser.Math.Distance.Between(px, py, centerX, centerY);
+      if (distToCenter > 500) {
+        const angle = Phaser.Math.Angle.Between(px, py, centerX, centerY);
+        return {
+          x: Math.cos(angle) * 0.3,
+          y: Math.sin(angle) * 0.3
+        };
+      }
+      return { x: 0, y: 0 }; // Stay put if centered and safe
+    }
+
+    // Move away from threats
+    let moveX = -threatX;
+    let moveY = -threatY;
+
+    // Normalize
+    const magnitude = Math.sqrt(moveX * moveX + moveY * moveY);
+    if (magnitude > 0) {
+      moveX /= magnitude;
+      moveY /= magnitude;
+    }
+
+    // Check world bounds and adjust if needed
+    const margin = 100;
+    if (px < margin) moveX = Math.max(moveX, 0.5);
+    if (px > this.worldWidth - margin) moveX = Math.min(moveX, -0.5);
+    if (py < margin) moveY = Math.max(moveY, 0.5);
+    if (py > this.worldHeight - margin) moveY = Math.min(moveY, -0.5);
+
+    return { x: moveX, y: moveY };
   }
 
   getEnemyAnimKey(enemyType) {
@@ -1089,6 +1156,26 @@ export default class ArenaScene extends Phaser.Scene {
       spawnPool.push('prompt-injection');
     }
 
+    // NEW v2 enemies
+    if (this.waveNumber >= 18) {
+      spawnPool.push('404-not-found');
+    }
+    if (this.waveNumber >= 22) {
+      spawnPool.push('cors-error');
+    }
+    if (this.waveNumber >= 28) {
+      spawnPool.push('type-error');
+    }
+    if (this.waveNumber >= 32) {
+      spawnPool.push('git-conflict');
+    }
+    if (this.waveNumber >= 38) {
+      spawnPool.push('overfitting');
+    }
+    if (this.waveNumber >= 45) {
+      spawnPool.push('mode-collapse');
+    }
+
     const type = Phaser.Utils.Array.GetRandom(spawnPool);
     const typeData = this.enemyTypes[type];
 
@@ -1106,7 +1193,14 @@ export default class ArenaScene extends Phaser.Scene {
       'hallucination': 'enemy-hallucination',
       'token-overflow': 'enemy-token-overflow',
       'context-loss': 'enemy-context-loss',
-      'prompt-injection': 'enemy-prompt-injection'
+      'prompt-injection': 'enemy-prompt-injection',
+      // NEW v2 enemies
+      '404-not-found': 'enemy-404-not-found',
+      'cors-error': 'enemy-cors-error',
+      'type-error': 'enemy-type-error',
+      'git-conflict': 'enemy-git-conflict',
+      'overfitting': 'enemy-overfitting',
+      'mode-collapse': 'enemy-mode-collapse'
     };
     const textureName = textureMap[type] || type;
 
@@ -1189,6 +1283,47 @@ export default class ArenaScene extends Phaser.Scene {
       enemy.lastHijack = 0;
       enemy.hijackCooldown = typeData.hijackCooldown;
       enemy.hijackDuration = typeData.hijackDuration;
+    }
+
+    // NEW v2 behaviors
+    if (typeData.behavior === 'invisible') {
+      // 404 - Only visible when close to player
+      enemy.setAlpha(0.1);
+    }
+    if (typeData.behavior === 'blocker') {
+      // CORS Error - Creates blocking damage zone, stationary
+      enemy.blockDuration = typeData.blockDuration;
+      enemy.spawnTime = this.time.now;
+      // Pulsing danger zone effect
+      this.tweens.add({
+        targets: enemy,
+        scale: 1.3,
+        alpha: 0.7,
+        duration: 800,
+        yoyo: true,
+        repeat: -1
+      });
+    }
+    if (typeData.behavior === 'morph') {
+      // Type Error - Changes appearance every few seconds
+      enemy.nextMorph = this.time.now + typeData.morphInterval;
+      enemy.morphInterval = typeData.morphInterval;
+      enemy.originalTint = 0xffffff;
+    }
+    if (typeData.behavior === 'split') {
+      // Git Conflict - Splits into 2 smaller enemies on death (handled in hitEnemy)
+      enemy.canSplit = true;
+    }
+    if (typeData.behavior === 'predict') {
+      // Overfitting - Moves toward where player is going
+      enemy.playerLastX = this.player.x;
+      enemy.playerLastY = this.player.y;
+    }
+    if (typeData.behavior === 'clone') {
+      // Mode Collapse - Converts nearby enemies to copies
+      enemy.lastClone = 0;
+      enemy.cloneCooldown = typeData.cloneCooldown;
+      enemy.cloneRadius = typeData.cloneRadius;
     }
   }
 
@@ -2540,6 +2675,41 @@ export default class ArenaScene extends Phaser.Scene {
       window.VIBE_CODER.addXP(enemy.xpValue);
       window.VIBE_CODER.kills++;
 
+      // GIT CONFLICT: Split into 2 smaller enemies on death
+      if (enemy.behavior === 'split' && enemy.canSplit) {
+        for (let i = 0; i < 2; i++) {
+          const offsetX = Phaser.Math.Between(-30, 30);
+          const offsetY = Phaser.Math.Between(-30, 30);
+          const splitEnemy = this.enemies.create(
+            enemy.x + offsetX,
+            enemy.y + offsetY,
+            'enemy-git-conflict'
+          );
+          splitEnemy.health = Math.floor(enemy.health * 0.4) + 10;
+          splitEnemy.speed = enemy.speed * 1.2;
+          splitEnemy.damage = Math.floor(enemy.damage * 0.7);
+          splitEnemy.xpValue = Math.floor(enemy.xpValue * 0.3);
+          splitEnemy.enemyType = 'git-conflict';
+          splitEnemy.behavior = 'split';
+          splitEnemy.canSplit = false; // Can't split again
+          splitEnemy.setScale(0.7);
+          splitEnemy.setTint(i === 0 ? 0xff6600 : 0x0066ff);
+          // Flash effect
+          const splitText = this.add.text(splitEnemy.x, splitEnemy.y - 15, 'MERGE CONFLICT!', {
+            fontFamily: 'monospace',
+            fontSize: '8px',
+            color: '#ffff00'
+          }).setOrigin(0.5);
+          this.tweens.add({
+            targets: splitText,
+            y: splitText.y - 10,
+            alpha: 0,
+            duration: 600,
+            onComplete: () => splitText.destroy()
+          });
+        }
+      }
+
       // Boss death - special handling
       if (enemy.isBoss) {
         // Epic boss death sound!
@@ -2790,10 +2960,25 @@ export default class ArenaScene extends Phaser.Scene {
     let vx = 0;
     let vy = 0;
 
-    if (this.cursors.left.isDown || this.wasd.left.isDown) vx = -1;
-    if (this.cursors.right.isDown || this.wasd.right.isDown) vx = 1;
-    if (this.cursors.up.isDown || this.wasd.up.isDown) vy = -1;
-    if (this.cursors.down.isDown || this.wasd.down.isDown) vy = 1;
+    // Check for manual input first
+    const manualLeft = this.cursors.left.isDown || this.wasd.left.isDown;
+    const manualRight = this.cursors.right.isDown || this.wasd.right.isDown;
+    const manualUp = this.cursors.up.isDown || this.wasd.up.isDown;
+    const manualDown = this.cursors.down.isDown || this.wasd.down.isDown;
+    const hasManualInput = manualLeft || manualRight || manualUp || manualDown;
+
+    if (hasManualInput) {
+      // Manual input takes priority
+      if (manualLeft) vx = -1;
+      if (manualRight) vx = 1;
+      if (manualUp) vy = -1;
+      if (manualDown) vy = 1;
+    } else if (window.VIBE_SETTINGS.autoMove && window.VIBE_CODER.isCodingActive()) {
+      // Auto-move: find safest direction (away from enemies)
+      const autoMove = this.calculateAutoMove();
+      vx = autoMove.x;
+      vy = autoMove.y;
+    }
 
     // Normalize diagonal movement
     if (vx !== 0 && vy !== 0) {
@@ -3070,6 +3255,106 @@ export default class ArenaScene extends Phaser.Scene {
                 onComplete: () => hijackText.destroy()
               });
             }
+          }
+          // Chase player
+          enemy.setVelocity(
+            Math.cos(angle) * enemy.speed,
+            Math.sin(angle) * enemy.speed
+          );
+          break;
+
+        case 'invisible':
+          // 404 NOT FOUND: Only visible when close to player
+          const visibilityDist = 100;
+          enemy.setAlpha(dist < visibilityDist ? 1 : 0.1);
+          // Chase normally
+          enemy.setVelocity(
+            Math.cos(angle) * enemy.speed,
+            Math.sin(angle) * enemy.speed
+          );
+          break;
+
+        case 'blocker':
+          // CORS ERROR: Stationary damage zone that despawns
+          enemy.setVelocity(0, 0);
+          // Check if expired
+          if (this.time.now - enemy.spawnTime > enemy.blockDuration) {
+            enemy.destroy();
+          }
+          break;
+
+        case 'morph':
+          // TYPE ERROR: Changes tint/appearance periodically
+          if (this.time.now > enemy.nextMorph) {
+            enemy.nextMorph = this.time.now + enemy.morphInterval;
+            // Random tint to simulate "type change"
+            const morphTints = [0xff00ff, 0x00ffff, 0xffff00, 0xff8800, 0x88ff00];
+            enemy.setTint(Phaser.Utils.Array.GetRandom(morphTints));
+            // Briefly change speed too
+            enemy.speed = Phaser.Math.Between(30, 80);
+          }
+          enemy.setVelocity(
+            Math.cos(angle) * enemy.speed,
+            Math.sin(angle) * enemy.speed
+          );
+          break;
+
+        case 'split':
+          // GIT CONFLICT: Normal chase, splits on death (handled in hitEnemy)
+          enemy.setVelocity(
+            Math.cos(angle) * enemy.speed,
+            Math.sin(angle) * enemy.speed
+          );
+          break;
+
+        case 'predict':
+          // OVERFITTING: Predicts where player is going
+          const playerVelX = this.player.x - enemy.playerLastX;
+          const playerVelY = this.player.y - enemy.playerLastY;
+          enemy.playerLastX = this.player.x;
+          enemy.playerLastY = this.player.y;
+          // Predict future position
+          const predictionFactor = 15;
+          const predictX = this.player.x + playerVelX * predictionFactor;
+          const predictY = this.player.y + playerVelY * predictionFactor;
+          const predictAngle = Phaser.Math.Angle.Between(enemy.x, enemy.y, predictX, predictY);
+          enemy.setVelocity(
+            Math.cos(predictAngle) * enemy.speed,
+            Math.sin(predictAngle) * enemy.speed
+          );
+          break;
+
+        case 'clone':
+          // MODE COLLAPSE: Converts nearby enemies to clones
+          if (this.time.now - enemy.lastClone > enemy.cloneCooldown) {
+            enemy.lastClone = this.time.now;
+            // Find nearby non-clone enemies
+            this.enemies.children.each((otherEnemy) => {
+              if (!otherEnemy.active || otherEnemy === enemy) return;
+              if (otherEnemy.behavior === 'clone') return; // Don't convert clones
+              const cloneDist = Phaser.Math.Distance.Between(enemy.x, enemy.y, otherEnemy.x, otherEnemy.y);
+              if (cloneDist < enemy.cloneRadius) {
+                // Convert to mode-collapse behavior
+                otherEnemy.setTint(0x8800ff);
+                otherEnemy.behavior = 'clone';
+                otherEnemy.lastClone = this.time.now;
+                otherEnemy.cloneCooldown = 10000; // Converted clones are slower
+                otherEnemy.cloneRadius = 80;
+                // Show effect
+                const cloneText = this.add.text(otherEnemy.x, otherEnemy.y - 20, 'COLLAPSED!', {
+                  fontFamily: 'monospace',
+                  fontSize: '10px',
+                  color: '#aa00ff'
+                }).setOrigin(0.5);
+                this.tweens.add({
+                  targets: cloneText,
+                  y: cloneText.y - 15,
+                  alpha: 0,
+                  duration: 800,
+                  onComplete: () => cloneText.destroy()
+                });
+              }
+            });
           }
           // Chase player
           enemy.setVelocity(

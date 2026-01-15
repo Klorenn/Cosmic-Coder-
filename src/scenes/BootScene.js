@@ -64,6 +64,14 @@ export default class BootScene extends Phaser.Scene {
     this.generateContextLossTexture();
     this.generatePromptInjectionTexture();
 
+    // NEW v2 enemies
+    this.generate404NotFoundTexture();
+    this.generateCorsErrorTexture();
+    this.generateTypeErrorTexture();
+    this.generateGitConflictTexture();
+    this.generateOverfittingTexture();
+    this.generateModeCollapseTexture();
+
     // Mini-boss texture
     this.generateMiniBossTexture();
 
@@ -1965,6 +1973,208 @@ export default class BootScene extends Phaser.Scene {
     g.fillRect(size/2 - 1, size/2 + 4, 2, 6);
 
     g.generateTexture('enemy-prompt-injection', size, size);
+    g.destroy();
+  }
+
+  // === NEW V2 ENEMIES ===
+
+  generate404NotFoundTexture() {
+    // Ghost-like question mark - only visible when close
+    const size = 28;
+    const g = this.add.graphics();
+
+    // Outer ghostly glow
+    g.fillStyle(0x888888, 0.2);
+    g.fillCircle(size/2, size/2, 12);
+
+    // Ghost body
+    g.fillStyle(0x666666, 0.7);
+    g.fillCircle(size/2, size/2 - 2, 9);
+    g.fillRect(size/2 - 8, size/2 + 2, 16, 8);
+
+    // Wavy bottom
+    g.fillCircle(size/2 - 5, size/2 + 9, 3);
+    g.fillCircle(size/2, size/2 + 10, 3);
+    g.fillCircle(size/2 + 5, size/2 + 9, 3);
+
+    // Question mark
+    g.fillStyle(0xffffff, 0.9);
+    g.lineStyle(3, 0xffffff, 0.9);
+    g.beginPath();
+    g.arc(size/2, size/2 - 4, 5, -Math.PI, 0, false);
+    g.strokePath();
+    g.lineBetween(size/2 + 5, size/2 - 4, size/2, size/2 + 2);
+    g.fillCircle(size/2, size/2 + 6, 2);
+
+    g.generateTexture('enemy-404-not-found', size, size);
+    g.destroy();
+  }
+
+  generateCorsErrorTexture() {
+    // Red X shield - blocking zone
+    const size = 36;
+    const g = this.add.graphics();
+
+    // Danger zone circle
+    g.fillStyle(0xff0000, 0.3);
+    g.fillCircle(size/2, size/2, size/2 - 2);
+
+    // Shield shape
+    g.fillStyle(0xcc0000, 0.9);
+    g.beginPath();
+    g.moveTo(size/2, size/2 - 14);
+    g.lineTo(size/2 - 12, size/2 - 6);
+    g.lineTo(size/2 - 12, size/2 + 6);
+    g.lineTo(size/2, size/2 + 14);
+    g.lineTo(size/2 + 12, size/2 + 6);
+    g.lineTo(size/2 + 12, size/2 - 6);
+    g.closePath();
+    g.fillPath();
+
+    // X mark
+    g.lineStyle(4, 0xffffff, 1);
+    g.lineBetween(size/2 - 6, size/2 - 6, size/2 + 6, size/2 + 6);
+    g.lineBetween(size/2 + 6, size/2 - 6, size/2 - 6, size/2 + 6);
+
+    // Outer glow
+    g.lineStyle(2, 0xff4444, 0.5);
+    g.strokeCircle(size/2, size/2, size/2 - 4);
+
+    g.generateTexture('enemy-cors-error', size, size);
+    g.destroy();
+  }
+
+  generateTypeErrorTexture() {
+    // Glitchy shifting shape
+    const size = 30;
+    const g = this.add.graphics();
+
+    // Glitch layers
+    g.fillStyle(0xff00ff, 0.4);
+    g.fillRect(size/2 - 10, size/2 - 10, 18, 18);
+
+    g.fillStyle(0x00ffff, 0.4);
+    g.fillCircle(size/2 + 2, size/2 - 2, 9);
+
+    g.fillStyle(0xffff00, 0.4);
+    g.fillTriangle(size/2, size/2 - 8, size/2 - 8, size/2 + 6, size/2 + 8, size/2 + 6);
+
+    // Main body (shifting colors)
+    g.fillStyle(0xff88ff, 0.9);
+    g.fillCircle(size/2, size/2, 8);
+
+    // Error symbol
+    g.fillStyle(0x000000, 1);
+    g.fillRect(size/2 - 4, size/2 - 5, 8, 2);
+    g.fillRect(size/2 - 1, size/2 - 5, 2, 10);
+
+    // Static lines
+    g.lineStyle(1, 0xffffff, 0.6);
+    g.lineBetween(size/2 - 12, size/2 - 6, size/2 - 8, size/2 - 6);
+    g.lineBetween(size/2 + 8, size/2 + 4, size/2 + 12, size/2 + 4);
+
+    g.generateTexture('enemy-type-error', size, size);
+    g.destroy();
+  }
+
+  generateGitConflictTexture() {
+    // Split arrow symbol (>>>)
+    const size = 34;
+    const g = this.add.graphics();
+
+    // Body (two-toned to show conflict)
+    g.fillStyle(0xff6600, 0.8);
+    g.fillRect(size/2 - 10, size/2 - 12, 10, 24);
+    g.fillStyle(0x0066ff, 0.8);
+    g.fillRect(size/2, size/2 - 12, 10, 24);
+
+    // Conflict line in middle
+    g.lineStyle(3, 0xffff00, 1);
+    g.lineBetween(size/2, size/2 - 14, size/2, size/2 + 14);
+
+    // >>> arrows
+    g.fillStyle(0xffffff, 1);
+    // Arrow 1
+    g.fillTriangle(size/2 - 8, size/2 - 6, size/2 - 4, size/2 - 3, size/2 - 8, size/2);
+    // Arrow 2
+    g.fillTriangle(size/2 - 4, size/2 - 6, size/2, size/2 - 3, size/2 - 4, size/2);
+    // Arrow 3
+    g.fillTriangle(size/2, size/2 - 6, size/2 + 4, size/2 - 3, size/2, size/2);
+
+    // <<< arrows (other direction)
+    g.fillTriangle(size/2 + 8, size/2 + 6, size/2 + 4, size/2 + 3, size/2 + 8, size/2);
+    g.fillTriangle(size/2 + 4, size/2 + 6, size/2, size/2 + 3, size/2 + 4, size/2);
+    g.fillTriangle(size/2, size/2 + 6, size/2 - 4, size/2 + 3, size/2, size/2);
+
+    g.generateTexture('enemy-git-conflict', size, size);
+    g.destroy();
+  }
+
+  generateOverfittingTexture() {
+    // Brain with crosshairs - predicts player movement
+    const size = 32;
+    const g = this.add.graphics();
+
+    // Brain shape
+    g.fillStyle(0xff88aa, 1);
+    g.fillCircle(size/2 - 4, size/2 - 2, 8);
+    g.fillCircle(size/2 + 4, size/2 - 2, 8);
+    g.fillCircle(size/2, size/2 + 4, 6);
+
+    // Brain folds
+    g.lineStyle(2, 0xcc6688, 1);
+    g.lineBetween(size/2 - 6, size/2 - 4, size/2 - 2, size/2);
+    g.lineBetween(size/2 + 2, size/2 - 4, size/2 + 6, size/2);
+    g.lineBetween(size/2 - 3, size/2 + 2, size/2 + 3, size/2 + 2);
+
+    // Crosshairs overlay
+    g.lineStyle(2, 0x00ff00, 0.8);
+    g.lineBetween(size/2, size/2 - 14, size/2, size/2 + 14);
+    g.lineBetween(size/2 - 14, size/2, size/2 + 14, size/2);
+    g.strokeCircle(size/2, size/2, 10);
+
+    // Target dot
+    g.fillStyle(0xff0000, 1);
+    g.fillCircle(size/2, size/2, 2);
+
+    g.generateTexture('enemy-overfitting', size, size);
+    g.destroy();
+  }
+
+  generateModeCollapseTexture() {
+    // Multiplying squares - converts enemies
+    const size = 36;
+    const g = this.add.graphics();
+
+    // Central square
+    g.fillStyle(0x8800ff, 1);
+    g.fillRect(size/2 - 6, size/2 - 6, 12, 12);
+
+    // Surrounding squares (clones)
+    g.fillStyle(0x6600cc, 0.7);
+    g.fillRect(size/2 - 14, size/2 - 14, 8, 8);
+    g.fillRect(size/2 + 6, size/2 - 14, 8, 8);
+    g.fillRect(size/2 - 14, size/2 + 6, 8, 8);
+    g.fillRect(size/2 + 6, size/2 + 6, 8, 8);
+
+    // Connection lines
+    g.lineStyle(2, 0xaa44ff, 0.6);
+    g.lineBetween(size/2, size/2, size/2 - 10, size/2 - 10);
+    g.lineBetween(size/2, size/2, size/2 + 10, size/2 - 10);
+    g.lineBetween(size/2, size/2, size/2 - 10, size/2 + 10);
+    g.lineBetween(size/2, size/2, size/2 + 10, size/2 + 10);
+
+    // Pulsing glow
+    g.lineStyle(2, 0xcc00ff, 0.4);
+    g.strokeCircle(size/2, size/2, 16);
+
+    // Inner eye
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(size/2, size/2, 3);
+    g.fillStyle(0x000000, 1);
+    g.fillCircle(size/2, size/2, 1);
+
+    g.generateTexture('enemy-mode-collapse', size, size);
     g.destroy();
   }
 }

@@ -5,8 +5,9 @@ export default class TitleScene extends Phaser.Scene {
   constructor() {
     super({ key: 'TitleScene' });
     this.selectedOption = 0;
-    this.menuOptions = ['START GAME', 'UPGRADES', 'WEAPONS', 'MUSIC: OFF', 'CONTROLS'];
+    this.menuOptions = ['START GAME', 'UPGRADES', 'WEAPONS', 'SETTINGS', 'CONTROLS'];
     this.isMusicOn = false;
+    this.settingsMenuOpen = false;
   }
 
   create() {
@@ -320,17 +321,20 @@ export default class TitleScene extends Phaser.Scene {
     ];
 
     this.warglaiveQuotes = [
-      "Oh boy...",
-      "Luu a wild mfer",
-      "LUUUUU!!\nYou legend",
-      "Shoutout Luu\nfor this masterpiece",
-      "Luu made this btw\n*respect*",
-      "The creator's blade",
-      "0.01% btw",
-      "Twin blades of\ndestruction",
-      "*chef's kiss*",
-      "Luu's artwork\nhits different",
-      "Legendary drip\nby Luu"
+      // Rawglaive puns (primary)
+      "RAWGLAIVE\nactivated",
+      "Raw's creation\nhits different",
+      "The RAWGLAIVE\nfeels illegal",
+      "Raw made this btw\n*absolute legend*",
+      "RAWWWW!!\nYou did it again",
+      "Shoutout Raw\nfor the drip",
+      "Raw's blade\nof destruction",
+      "Twin blades\nby Raw himself",
+      "0.01% drop rate\nRaw's masterpiece",
+      "*Raw would be proud*",
+      "The Rawglaive\ngoes crazy",
+      // Keep subtle Luu nod
+      "Luu a.k.a. Raw\nthe GOAT"
     ];
 
     // Coding activity quotes
@@ -358,8 +362,70 @@ export default class TitleScene extends Phaser.Scene {
       "Connection lost\n*sad beep*"
     ];
 
+    // Time-based easter egg quotes
+    this.lateNightQuotes = [
+      "Coding at this hour?\n*respect*",
+      "Sleep is for the weak",
+      "3am coding\nhits different",
+      "Night owl mode\nACTIVATED",
+      "The bugs come out\nat night..."
+    ];
+
+    this.earlyMorningQuotes = [
+      "Early bird\ngets the bugs!",
+      "Morning grind\nlet's go",
+      "Coffee + code\n= productivity"
+    ];
+
+    this.workHoursQuotes = [
+      "Work mode?\nI see you",
+      "Meeting in 5?\nOne more wave",
+      "Standup can wait"
+    ];
+
+    this.eveningQuotes = [
+      "After hours grind!",
+      "Off the clock\nstill coding",
+      "Side project time?"
+    ];
+
+    this.nightQuotes = [
+      "Late night session",
+      "One more commit...",
+      "Debug o'clock"
+    ];
+
+    this.weekendQuotes = [
+      "Weekend warrior!",
+      "No rest for\nthe dedicated",
+      "Saturday deploy?\nBold move"
+    ];
+
+    // CLI source-specific quotes
+    this.claudeQuotes = [
+      "Claude cooking!",
+      "Opus mode\nactivated",
+      "Claude Code\ngoes hard"
+    ];
+
+    this.codexQuotes = [
+      "Codex in the house!",
+      "OpenAI assist!"
+    ];
+
+    this.geminiQuotes = [
+      "Gemini vibes!",
+      "Google AI\non the scene"
+    ];
+
+    this.cursorQuotes = [
+      "Cursor flow!",
+      "Tab-tab-tab\nCursor magic"
+    ];
+
     // Track last XP event time to avoid spam
     this.lastXPReaction = 0;
+    this.shownTimeQuote = false;
     this.xpReactionCooldown = 5000; // 5 second cooldown
 
     // Listen for coding activity events
@@ -408,8 +474,31 @@ export default class TitleScene extends Phaser.Scene {
     // Don't react if menu is open
     if (this.upgradeMenuOpen || this.weaponMenuOpen) return;
 
+    // Check for CLI-specific reactions
+    const source = window.VIBE_CODER?.lastXPSource?.name?.toLowerCase();
+    let quotePool = this.codingQuotes;
+
+    if (source === 'claude') {
+      // 50% chance to use Claude-specific quote
+      if (Math.random() < 0.5) {
+        quotePool = this.claudeQuotes;
+      }
+    } else if (source === 'codex') {
+      if (Math.random() < 0.5) {
+        quotePool = this.codexQuotes;
+      }
+    } else if (source === 'gemini') {
+      if (Math.random() < 0.5) {
+        quotePool = this.geminiQuotes;
+      }
+    } else if (source === 'cursor') {
+      if (Math.random() < 0.5) {
+        quotePool = this.cursorQuotes;
+      }
+    }
+
     // Get excited!
-    this.sayQuote(Phaser.Utils.Array.GetRandom(this.codingQuotes));
+    this.sayQuote(Phaser.Utils.Array.GetRandom(quotePool));
 
     // Maybe jump or react physically
     if (Phaser.Math.Between(0, 2) === 0) {
@@ -437,10 +526,22 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   doRandomAction() {
-    // Don't interrupt if menu is open
-    if (this.upgradeMenuOpen || this.weaponMenuOpen) return;
+    // Don't interrupt if any menu is open
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen) return;
 
-    const action = Phaser.Math.Between(0, 10);
+    // Show time-based quote on first idle action (personalized if name set)
+    if (!this.shownTimeQuote) {
+      this.shownTimeQuote = true;
+      const name = window.VIBE_SETTINGS?.playerName;
+      if (name) {
+        this.sayQuote(`Hey ${name}!\n${this.getTimeBasedQuote()}`);
+      } else {
+        this.sayQuote(this.getTimeBasedQuote());
+      }
+      return;
+    }
+
+    const action = Phaser.Math.Between(0, 12);
 
     if (action < 3) {
       // Walk to random position
@@ -451,6 +552,9 @@ export default class TitleScene extends Phaser.Scene {
     } else if (action < 7) {
       // Say random idle quote
       this.sayQuote(Phaser.Utils.Array.GetRandom(this.idleQuotes));
+    } else if (action < 9) {
+      // Say time-based quote (occasionally)
+      this.sayQuote(this.getTimeBasedQuote());
     } else {
       // Just chill, play idle
       this.idlePlayer.play('player-idle');
@@ -560,6 +664,39 @@ export default class TitleScene extends Phaser.Scene {
     });
   }
 
+  getTimeBasedQuote() {
+    const hour = new Date().getHours();
+    const day = new Date().getDay(); // 0 = Sunday
+
+    // Weekend special (Saturday = 6, Sunday = 0)
+    if (day === 0 || day === 6) {
+      return Phaser.Utils.Array.GetRandom(this.weekendQuotes);
+    }
+
+    // Late night (12am - 5am)
+    if (hour >= 0 && hour < 5) {
+      return Phaser.Utils.Array.GetRandom(this.lateNightQuotes);
+    }
+
+    // Early morning (5am - 9am)
+    if (hour >= 5 && hour < 9) {
+      return Phaser.Utils.Array.GetRandom(this.earlyMorningQuotes);
+    }
+
+    // Work hours (9am - 5pm)
+    if (hour >= 9 && hour < 17) {
+      return Phaser.Utils.Array.GetRandom(this.workHoursQuotes);
+    }
+
+    // Evening (5pm - 9pm)
+    if (hour >= 17 && hour < 21) {
+      return Phaser.Utils.Array.GetRandom(this.eveningQuotes);
+    }
+
+    // Night (9pm - 12am)
+    return Phaser.Utils.Array.GetRandom(this.nightQuotes);
+  }
+
   setupInput() {
     // Arrow keys
     this.input.keyboard.on('keydown-UP', () => this.moveSelection(-1));
@@ -637,9 +774,8 @@ export default class TitleScene extends Phaser.Scene {
         this.showWeapons();
         break;
 
-      case 3: // MUSIC TOGGLE
-        this.isMusicOn = Audio.toggleMusic();
-        this.menuTexts[3].setText(`MUSIC: ${this.isMusicOn ? 'ON' : 'OFF'}`);
+      case 3: // SETTINGS
+        this.showSettings();
         break;
 
       case 4: // CONTROLS
@@ -701,6 +837,179 @@ export default class TitleScene extends Phaser.Scene {
     // Close on any key
     this.input.keyboard.once('keydown', closeControls);
     this.input.once('pointerdown', closeControls);
+  }
+
+  showSettings() {
+    this.settingsMenuOpen = true;
+    this.settingsSelectedIndex = 0;
+
+    const settings = window.VIBE_SETTINGS;
+    const overlay = this.add.rectangle(400, 300, 600, 450, 0x000000, 0.95);
+    overlay.setStrokeStyle(2, 0x00ffff);
+
+    const title = this.add.text(400, 80, 'SETTINGS', {
+      fontFamily: 'monospace',
+      fontSize: '28px',
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+
+    // Settings options
+    const settingsData = [
+      { key: 'music', label: 'MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); }},
+      { key: 'sfx', label: 'SOUND FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },
+      { key: 'autoMove', label: 'AUTO-MOVE', type: 'toggle', getValue: () => settings.autoMove, toggle: () => settings.toggle('autoMove') },
+      { key: 'masterVol', label: 'MASTER VOL', type: 'slider', getValue: () => settings.masterVolume, setValue: (v) => settings.setVolume('master', v) },
+      { key: 'playerName', label: 'NAME', type: 'input', getValue: () => settings.playerName || '[NOT SET]', setValue: (v) => settings.setPlayerName(v) }
+    ];
+
+    const startY = 140;
+    const spacing = 55;
+    const settingTexts = [];
+
+    settingsData.forEach((setting, index) => {
+      let valueStr = '';
+      if (setting.type === 'toggle') {
+        valueStr = setting.getValue() ? '[ON]' : '[OFF]';
+      } else if (setting.type === 'slider') {
+        const val = Math.round(setting.getValue() * 100);
+        const bars = Math.round(val / 10);
+        valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + ` ${val}%`;
+      } else if (setting.type === 'input') {
+        valueStr = setting.getValue();
+      }
+
+      const text = this.add.text(400, startY + index * spacing,
+        `${setting.label}\n${valueStr}`, {
+        fontFamily: 'monospace',
+        fontSize: '14px',
+        color: index === 0 ? '#00ffff' : '#888888',
+        align: 'center',
+        lineSpacing: 4
+      }).setOrigin(0.5);
+
+      settingTexts.push({ text, setting });
+    });
+
+    // Selector
+    const selector = this.add.text(200, startY, '>', {
+      fontFamily: 'monospace',
+      fontSize: '18px',
+      color: '#ffff00'
+    }).setOrigin(0.5);
+
+    // Help text
+    const helpText = this.add.text(400, 420, 'UP/DOWN: Select | LEFT/RIGHT: Adjust | ENTER: Toggle/Edit', {
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      color: '#666666'
+    }).setOrigin(0.5);
+
+    const closeHint = this.add.text(400, 450, '[ ESC TO CLOSE ]', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#888888'
+    }).setOrigin(0.5);
+
+    // Update visuals
+    const updateVisuals = () => {
+      settingTexts.forEach((item, index) => {
+        let valueStr = '';
+        if (item.setting.type === 'toggle') {
+          valueStr = item.setting.getValue() ? '[ON]' : '[OFF]';
+        } else if (item.setting.type === 'slider') {
+          const val = Math.round(item.setting.getValue() * 100);
+          const bars = Math.round(val / 10);
+          valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + ` ${val}%`;
+        } else if (item.setting.type === 'input') {
+          valueStr = item.setting.getValue();
+        }
+        item.text.setText(`${item.setting.label}\n${valueStr}`);
+        item.text.setColor(index === this.settingsSelectedIndex ? '#00ffff' : '#888888');
+      });
+      selector.setY(startY + this.settingsSelectedIndex * spacing);
+    };
+
+    // Input handlers
+    const moveUp = () => {
+      this.settingsSelectedIndex--;
+      if (this.settingsSelectedIndex < 0) this.settingsSelectedIndex = settingsData.length - 1;
+      updateVisuals();
+      Audio.playXPGain();
+    };
+
+    const moveDown = () => {
+      this.settingsSelectedIndex++;
+      if (this.settingsSelectedIndex >= settingsData.length) this.settingsSelectedIndex = 0;
+      updateVisuals();
+      Audio.playXPGain();
+    };
+
+    const adjustLeft = () => {
+      const item = settingsData[this.settingsSelectedIndex];
+      if (item.type === 'slider') {
+        item.setValue(Math.max(0, item.getValue() - 0.1));
+        updateVisuals();
+      }
+    };
+
+    const adjustRight = () => {
+      const item = settingsData[this.settingsSelectedIndex];
+      if (item.type === 'slider') {
+        item.setValue(Math.min(1, item.getValue() + 0.1));
+        updateVisuals();
+      }
+    };
+
+    const select = () => {
+      const item = settingsData[this.settingsSelectedIndex];
+      if (item.type === 'toggle') {
+        item.toggle();
+        updateVisuals();
+        Audio.playHit();
+      } else if (item.type === 'input') {
+        // Prompt for name input using browser prompt
+        const newName = prompt('Enter your name (max 20 characters):', item.getValue() === '[NOT SET]' ? '' : item.getValue());
+        if (newName !== null) {
+          item.setValue(newName);
+          updateVisuals();
+        }
+      }
+    };
+
+    const close = () => {
+      this.input.keyboard.off('keydown-UP', moveUp);
+      this.input.keyboard.off('keydown-DOWN', moveDown);
+      this.input.keyboard.off('keydown-W', moveUp);
+      this.input.keyboard.off('keydown-S', moveDown);
+      this.input.keyboard.off('keydown-LEFT', adjustLeft);
+      this.input.keyboard.off('keydown-RIGHT', adjustRight);
+      this.input.keyboard.off('keydown-A', adjustLeft);
+      this.input.keyboard.off('keydown-D', adjustRight);
+      this.input.keyboard.off('keydown-ENTER', select);
+      this.input.keyboard.off('keydown-SPACE', select);
+      this.input.keyboard.off('keydown-ESC', close);
+
+      overlay.destroy();
+      title.destroy();
+      selector.destroy();
+      helpText.destroy();
+      closeHint.destroy();
+      settingTexts.forEach(item => item.text.destroy());
+      this.settingsMenuOpen = false;
+    };
+
+    this.input.keyboard.on('keydown-UP', moveUp);
+    this.input.keyboard.on('keydown-DOWN', moveDown);
+    this.input.keyboard.on('keydown-W', moveUp);
+    this.input.keyboard.on('keydown-S', moveDown);
+    this.input.keyboard.on('keydown-LEFT', adjustLeft);
+    this.input.keyboard.on('keydown-RIGHT', adjustRight);
+    this.input.keyboard.on('keydown-A', adjustLeft);
+    this.input.keyboard.on('keydown-D', adjustRight);
+    this.input.keyboard.on('keydown-ENTER', select);
+    this.input.keyboard.on('keydown-SPACE', select);
+    this.input.keyboard.on('keydown-ESC', close);
   }
 
   showUpgrades() {

@@ -219,6 +219,75 @@ window.VIBE_MELEE = {
   kunai: { name: 'KUNAI', damage: 0.8, attackRate: 2.0, range: 120, type: 'throw', projectiles: 3, color: 0x2f2f2f }
 };
 
+// Game settings - persisted to localStorage
+window.VIBE_SETTINGS = {
+  autoMove: true,         // Auto-move when coding is detected
+  sfxEnabled: true,       // Sound effects (weapons, hits)
+  musicEnabled: true,     // Background music
+  masterVolume: 0.7,      // Master volume (0-1)
+  sfxVolume: 0.8,         // SFX volume (0-1)
+  musicVolume: 0.5,       // Music volume (0-1)
+  playerName: '',         // Player name for personalization
+
+  load() {
+    const saved = localStorage.getItem('vibeCoderSettings');
+    if (saved) {
+      const data = JSON.parse(saved);
+      this.autoMove = data.autoMove !== undefined ? data.autoMove : true;
+      this.sfxEnabled = data.sfxEnabled !== undefined ? data.sfxEnabled : true;
+      this.musicEnabled = data.musicEnabled !== undefined ? data.musicEnabled : true;
+      this.masterVolume = data.masterVolume !== undefined ? data.masterVolume : 0.7;
+      this.sfxVolume = data.sfxVolume !== undefined ? data.sfxVolume : 0.8;
+      this.musicVolume = data.musicVolume !== undefined ? data.musicVolume : 0.5;
+      this.playerName = data.playerName || '';
+    }
+  },
+
+  save() {
+    localStorage.setItem('vibeCoderSettings', JSON.stringify({
+      autoMove: this.autoMove,
+      sfxEnabled: this.sfxEnabled,
+      musicEnabled: this.musicEnabled,
+      masterVolume: this.masterVolume,
+      sfxVolume: this.sfxVolume,
+      musicVolume: this.musicVolume,
+      playerName: this.playerName
+    }));
+  },
+
+  toggle(setting) {
+    if (typeof this[setting] === 'boolean') {
+      this[setting] = !this[setting];
+      this.save();
+      return this[setting];
+    }
+    return null;
+  },
+
+  setVolume(type, value) {
+    if (type === 'master') this.masterVolume = Math.max(0, Math.min(1, value));
+    if (type === 'sfx') this.sfxVolume = Math.max(0, Math.min(1, value));
+    if (type === 'music') this.musicVolume = Math.max(0, Math.min(1, value));
+    this.save();
+  },
+
+  setPlayerName(name) {
+    this.playerName = name.slice(0, 20); // Max 20 chars
+    this.save();
+  },
+
+  getEffectiveSfxVolume() {
+    return this.sfxEnabled ? this.masterVolume * this.sfxVolume : 0;
+  },
+
+  getEffectiveMusicVolume() {
+    return this.musicEnabled ? this.masterVolume * this.musicVolume : 0;
+  }
+};
+
+// Load settings on startup
+window.VIBE_SETTINGS.load();
+
 // Game state - will be updated by XP events
 window.VIBE_CODER = {
   xp: 0,
@@ -226,12 +295,21 @@ window.VIBE_CODER = {
   totalXP: 0,
   streak: 1,
   kills: 0,
+  lastCodingTime: 0,        // Timestamp of last coding activity
+  lastXPSource: null,       // { name, color } of last XP source
+  codingTimeout: 5000,      // How long after last activity to consider "active"
 
   // Calculate XP needed for next level
   xpForLevel: (level) => Math.floor(100 * Math.pow(level, 1.5)),
 
   // Add XP and handle level ups
-  addXP: function(amount) {
+  addXP: function(amount, source = null) {
+    // Track coding activity time
+    this.lastCodingTime = Date.now();
+    if (source) {
+      this.lastXPSource = source;
+    }
+
     // Apply XP gain bonus from upgrades
     const xpBonus = window.VIBE_UPGRADES.getBonus('xpGain');
     const multipliedXP = Math.floor(amount * this.streak * xpBonus);
@@ -247,9 +325,14 @@ window.VIBE_CODER = {
     }
 
     // Dispatch XP gained event
-    window.dispatchEvent(new CustomEvent('xpgained', { detail: { amount: multipliedXP, total: this.xp } }));
+    window.dispatchEvent(new CustomEvent('xpgained', { detail: { amount: multipliedXP, total: this.xp, source } }));
 
     return multipliedXP;
+  },
+
+  // Check if coding activity is recent (for auto-move)
+  isCodingActive() {
+    return Date.now() - this.lastCodingTime < this.codingTimeout;
   },
 
   // Reset for new run
