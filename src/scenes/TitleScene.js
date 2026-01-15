@@ -260,34 +260,27 @@ export default class TitleScene extends Phaser.Scene {
   createIdleCharacter() {
     // Floating Warglaive decoration in bottom right
     this.warglaiveDecor = this.add.sprite(680, 480, 'legendary-huntersWarglaive');
-    this.warglaiveDecor.setScale(2);
-    this.warglaiveDecor.setAlpha(0.9);
+    this.warglaiveDecor.setScale(3); // Scaled up since sprite is now 32x32
+    this.warglaiveDecor.setAlpha(0.95);
 
-    // Floating animation for warglaive
+    // Gentle floating animation - no rotation, just hovering
     this.tweens.add({
       targets: this.warglaiveDecor,
       y: 470,
-      duration: 2000,
+      duration: 2500,
       yoyo: true,
       repeat: -1,
       ease: 'Sine.easeInOut'
     });
 
-    // Subtle glow effect
+    // Subtle glow pulse
     this.tweens.add({
       targets: this.warglaiveDecor,
-      alpha: 0.6,
-      duration: 1500,
+      alpha: 0.75,
+      duration: 2000,
       yoyo: true,
-      repeat: -1
-    });
-
-    // Slow rotation
-    this.tweens.add({
-      targets: this.warglaiveDecor,
-      angle: 360,
-      duration: 8000,
-      repeat: -1
+      repeat: -1,
+      ease: 'Sine.easeInOut'
     });
 
     // Player character
@@ -336,8 +329,95 @@ export default class TitleScene extends Phaser.Scene {
       "Legendary drip"
     ];
 
+    // Coding activity quotes
+    this.codingQuotes = [
+      "Okay okay let me\ngo you coding maniac",
+      "TASK IN PROGRESS",
+      "Check your terminal!\nPrompt is done",
+      "Yooo you're on fire!",
+      "Code go brrrr",
+      "Stack overflow who?",
+      "Ship it ship it!",
+      "Clean code detected",
+      "*watching intensely*",
+      "10x developer mode"
+    ];
+
+    this.xpConnectedQuotes = [
+      "XP SERVER LIVE!\nLets get this bread",
+      "We're connected!\nTime to grind",
+      "Live mode activated"
+    ];
+
+    this.xpDisconnectedQuotes = [
+      "XP server down...\nPress SPACE manually",
+      "Connection lost\n*sad beep*"
+    ];
+
+    // Track last XP event time to avoid spam
+    this.lastXPReaction = 0;
+    this.xpReactionCooldown = 5000; // 5 second cooldown
+
+    // Listen for coding activity events
+    this.setupCodingListeners();
+
     // Start idle behavior loop
     this.startIdleBehavior();
+  }
+
+  setupCodingListeners() {
+    // XP gained from coding
+    this.xpGainedHandler = (event) => {
+      const now = Date.now();
+      if (now - this.lastXPReaction > this.xpReactionCooldown) {
+        this.lastXPReaction = now;
+        // React to coding!
+        this.reactToCoding();
+      }
+    };
+
+    // XP server connected
+    this.xpConnectedHandler = () => {
+      this.time.delayedCall(500, () => {
+        this.sayQuote(Phaser.Utils.Array.GetRandom(this.xpConnectedQuotes));
+      });
+    };
+
+    // XP server disconnected
+    this.xpDisconnectedHandler = () => {
+      this.sayQuote(Phaser.Utils.Array.GetRandom(this.xpDisconnectedQuotes));
+    };
+
+    // Level up event
+    this.levelUpHandler = (event) => {
+      this.sayQuote(`LEVEL ${event.detail.level}!\nLET'S GOOO`);
+    };
+
+    // Add the listeners
+    window.addEventListener('xpgained', this.xpGainedHandler);
+    window.addEventListener('xpserver-connected', this.xpConnectedHandler);
+    window.addEventListener('xpserver-disconnected', this.xpDisconnectedHandler);
+    window.addEventListener('levelup', this.levelUpHandler);
+  }
+
+  reactToCoding() {
+    // Don't react if menu is open
+    if (this.upgradeMenuOpen || this.weaponMenuOpen) return;
+
+    // Get excited!
+    this.sayQuote(Phaser.Utils.Array.GetRandom(this.codingQuotes));
+
+    // Maybe jump or react physically
+    if (Phaser.Math.Between(0, 2) === 0) {
+      // Little hop animation
+      this.tweens.add({
+        targets: this.idlePlayer,
+        y: this.idlePlayer.y - 15,
+        duration: 150,
+        yoyo: true,
+        ease: 'Quad.easeOut'
+      });
+    }
   }
 
   startIdleBehavior() {

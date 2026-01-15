@@ -16,6 +16,9 @@ export default class BootScene extends Phaser.Scene {
       color: '#00ffff'
     }).setOrigin(0.5);
 
+    // Load the actual Hunter's Warglaive image
+    this.load.image('legendary-huntersWarglaive', '/assets/hunters-warglaive.png');
+
     // We'll generate textures in create() instead of loading sprite sheets
     this.time.delayedCall(500, () => {
       loadingText.destroy();
@@ -82,7 +85,7 @@ export default class BootScene extends Phaser.Scene {
     this.generateKunaiTexture();
 
     // Legendary weapon textures
-    this.generateHuntersWarglaiveTexture();
+    // Hunter's Warglaive loaded from actual image in preload()
     this.generateVoidReaperTexture();
     this.generateCelestialBladeTexture();
 
