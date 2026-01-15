@@ -5,6 +5,10 @@ export default class ArenaScene extends Phaser.Scene {
   constructor() {
     super({ key: 'ArenaScene' });
 
+    // World dimensions (5x larger than viewport for exploration)
+    this.worldWidth = 4000;
+    this.worldHeight = 3000;
+
     // Game state
     this.player = null;
     this.enemies = null;
@@ -178,11 +182,19 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   create() {
+    // Set up larger world bounds for exploration
+    this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
+
     // Create tiled background
     this.createBackground();
 
     // Create player
     this.createPlayer();
+
+    // Setup camera to follow player smoothly
+    this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
+    this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
+    this.cameras.main.setDeadzone(100, 100);
 
     // Create enemy group
     this.enemies = this.physics.add.group();
@@ -271,6 +283,7 @@ export default class ArenaScene extends Phaser.Scene {
 
   createBackground() {
     // Clear existing background elements
+    if (this.bgTileSprite) this.bgTileSprite.destroy();
     if (this.bgGraphics) this.bgGraphics.destroy();
     if (this.bgParticles) {
       this.bgParticles.forEach(p => p.destroy());
@@ -282,120 +295,21 @@ export default class ArenaScene extends Phaser.Scene {
     this.dataStreams = [];
 
     const stage = this.stages[this.currentStage];
-    const graphics = this.add.graphics();
-    this.bgGraphics = graphics;
 
-    // === BASE LAYER: Gradient background ===
-    for (let y = 0; y < 600; y += 4) {
-      const alpha = 0.8 + (y / 600) * 0.2;
-      graphics.fillStyle(stage.bgColor, alpha);
-      graphics.fillRect(0, y, 800, 4);
-    }
+    // Generate tileable background texture for this stage
+    const texKey = this.generateBackgroundTexture(stage);
 
-    // === CIRCUIT BOARD PATTERN ===
-    graphics.lineStyle(1, stage.gridColor, 0.15);
+    // Create TileSprite that covers the entire world
+    this.bgTileSprite = this.add.tileSprite(0, 0, this.worldWidth, this.worldHeight, texKey);
+    this.bgTileSprite.setOrigin(0, 0);
+    this.bgTileSprite.setDepth(-10);
 
-    // Main grid
-    for (let x = 0; x < 800; x += 40) {
-      graphics.lineBetween(x, 0, x, 600);
-    }
-    for (let y = 0; y < 600; y += 40) {
-      graphics.lineBetween(0, y, 800, y);
-    }
-
-    // Circuit traces - horizontal
-    graphics.lineStyle(2, stage.gridColor, 0.25);
-    for (let y = 20; y < 600; y += 80) {
-      const startX = Phaser.Math.Between(0, 100);
-      const endX = Phaser.Math.Between(700, 800);
-      graphics.lineBetween(startX, y, endX, y);
-
-      // Add corner turns
-      if (Math.random() > 0.5) {
-        const turnX = Phaser.Math.Between(startX + 50, endX - 50);
-        const turnY = y + (Math.random() > 0.5 ? 40 : -40);
-        graphics.lineBetween(turnX, y, turnX, turnY);
-      }
-    }
-
-    // Circuit nodes with glowing effect
-    const nodePositions = [];
-    for (let x = 40; x < 800; x += 80) {
-      for (let y = 40; y < 600; y += 80) {
-        if (Math.random() > 0.6) {
-          nodePositions.push({ x, y });
-
-          // Outer glow
-          graphics.fillStyle(stage.nodeColor, 0.1);
-          graphics.fillCircle(x, y, 12);
-          graphics.fillStyle(stage.nodeColor, 0.2);
-          graphics.fillCircle(x, y, 8);
-          // Inner node
-          graphics.fillStyle(stage.nodeColor, 0.5);
-          graphics.fillCircle(x, y, 4);
-          // Bright center
-          graphics.fillStyle(0xffffff, 0.3);
-          graphics.fillCircle(x, y, 2);
-        }
-      }
-    }
-
-    // Connect some nodes with bright lines
-    graphics.lineStyle(1, stage.nodeColor, 0.3);
-    for (let i = 0; i < nodePositions.length - 1; i++) {
-      if (Math.random() > 0.7) {
-        const n1 = nodePositions[i];
-        const n2 = nodePositions[Math.min(i + 1, nodePositions.length - 1)];
-        // L-shaped connection
-        graphics.lineBetween(n1.x, n1.y, n2.x, n1.y);
-        graphics.lineBetween(n2.x, n1.y, n2.x, n2.y);
-      }
-    }
-
-    // === DATA BLOCKS (like memory addresses) ===
-    graphics.fillStyle(stage.gridColor, 0.08);
-    for (let i = 0; i < 15; i++) {
-      const x = Phaser.Math.Between(20, 760);
-      const y = Phaser.Math.Between(20, 560);
-      const w = Phaser.Math.Between(30, 80);
-      const h = Phaser.Math.Between(15, 30);
-      graphics.fillRect(x, y, w, h);
-
-      // Binary/hex text effect (just lines)
-      graphics.lineStyle(1, stage.gridColor, 0.15);
-      for (let lx = x + 4; lx < x + w - 4; lx += 6) {
-        if (Math.random() > 0.3) {
-          graphics.lineBetween(lx, y + h/2 - 3, lx + 3, y + h/2 - 3);
-        }
-        if (Math.random() > 0.3) {
-          graphics.lineBetween(lx, y + h/2 + 3, lx + 3, y + h/2 + 3);
-        }
-      }
-    }
-
-    // === CORNER DECORATIONS ===
-    graphics.lineStyle(2, stage.nodeColor, 0.4);
-    // Top-left corner bracket
-    graphics.lineBetween(10, 10, 10, 50);
-    graphics.lineBetween(10, 10, 50, 10);
-    // Top-right
-    graphics.lineBetween(790, 10, 790, 50);
-    graphics.lineBetween(790, 10, 750, 10);
-    // Bottom-left
-    graphics.lineBetween(10, 590, 10, 550);
-    graphics.lineBetween(10, 590, 50, 590);
-    // Bottom-right
-    graphics.lineBetween(790, 590, 790, 550);
-    graphics.lineBetween(790, 590, 750, 590);
-
-    graphics.setDepth(-10);
-
-    // === ANIMATED FLOATING PARTICLES ===
-    const particleCount = 20 + Math.floor(stage.glowIntensity * 30); // More particles in intense stages
+    // === ANIMATED FLOATING PARTICLES (spread across larger world) ===
+    const particleCount = 40 + Math.floor(stage.glowIntensity * 50); // More for larger world
     for (let i = 0; i < particleCount; i++) {
       const particle = this.add.circle(
-        Phaser.Math.Between(0, 800),
-        Phaser.Math.Between(0, 600),
+        Phaser.Math.Between(0, this.worldWidth),
+        Phaser.Math.Between(0, this.worldHeight),
         Phaser.Math.Between(1, 4),
         stage.particleColor || stage.nodeColor,
         Phaser.Math.FloatBetween(0.1, stage.glowIntensity || 0.4)
@@ -418,9 +332,9 @@ export default class ArenaScene extends Phaser.Scene {
     }
 
     // === STAGE-SPECIFIC EFFECTS ===
-    // Singularity stage: add vortex effect in center
+    // Singularity stage: add vortex effect at world center
     if (this.currentStage >= 5) {
-      const vortex = this.add.circle(400, 300, 80, 0x000000, 0.3);
+      const vortex = this.add.circle(this.worldWidth / 2, this.worldHeight / 2, 80, 0x000000, 0.3);
       vortex.setStrokeStyle(3, 0xffd700, 0.5);
       vortex.setDepth(-4);
       this.bgParticles.push(vortex);
@@ -436,7 +350,7 @@ export default class ArenaScene extends Phaser.Scene {
       });
 
       // Inner vortex ring
-      const innerVortex = this.add.circle(400, 300, 40, 0xffd700, 0.2);
+      const innerVortex = this.add.circle(this.worldWidth / 2, this.worldHeight / 2, 40, 0xffd700, 0.2);
       innerVortex.setDepth(-3);
       this.bgParticles.push(innerVortex);
 
@@ -448,14 +362,73 @@ export default class ArenaScene extends Phaser.Scene {
       });
     }
 
-    // === ANIMATED DATA STREAMS (Matrix-style) ===
-    for (let i = 0; i < 5; i++) {
+    // === ANIMATED DATA STREAMS (Matrix-style) - fewer but spread across world ===
+    for (let i = 0; i < 8; i++) {
       this.createDataStream(stage);
     }
   }
 
+  generateBackgroundTexture(stage) {
+    const texKey = `bg-stage-${this.currentStage}`;
+
+    // Only generate once per stage
+    if (this.textures.exists(texKey)) return texKey;
+
+    const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+    const tileW = 400; // Smaller tile for seamless tiling
+    const tileH = 300;
+
+    // === BASE LAYER: Solid background ===
+    graphics.fillStyle(stage.bgColor, 1);
+    graphics.fillRect(0, 0, tileW, tileH);
+
+    // === CIRCUIT BOARD PATTERN ===
+    graphics.lineStyle(1, stage.gridColor, 0.15);
+
+    // Main grid
+    for (let x = 0; x < tileW; x += 40) {
+      graphics.lineBetween(x, 0, x, tileH);
+    }
+    for (let y = 0; y < tileH; y += 40) {
+      graphics.lineBetween(0, y, tileW, y);
+    }
+
+    // Circuit traces
+    graphics.lineStyle(2, stage.gridColor, 0.2);
+    for (let y = 20; y < tileH; y += 60) {
+      graphics.lineBetween(0, y, tileW, y);
+    }
+
+    // Circuit nodes
+    for (let x = 40; x < tileW; x += 80) {
+      for (let y = 40; y < tileH; y += 80) {
+        graphics.fillStyle(stage.nodeColor, 0.15);
+        graphics.fillCircle(x, y, 8);
+        graphics.fillStyle(stage.nodeColor, 0.3);
+        graphics.fillCircle(x, y, 4);
+        graphics.fillStyle(0xffffff, 0.2);
+        graphics.fillCircle(x, y, 2);
+      }
+    }
+
+    // Data blocks
+    graphics.fillStyle(stage.gridColor, 0.06);
+    for (let i = 0; i < 5; i++) {
+      const x = (i * 73) % (tileW - 50);
+      const y = (i * 47) % (tileH - 25);
+      graphics.fillRect(x, y, 40, 20);
+    }
+
+    graphics.generateTexture(texKey, tileW, tileH);
+    graphics.destroy();
+
+    return texKey;
+  }
+
   createDataStream(stage) {
-    const x = Phaser.Math.Between(50, 750);
+    // Spread data streams across the larger world
+    const x = Phaser.Math.Between(50, this.worldWidth - 50);
+    const startY = Phaser.Math.Between(0, this.worldHeight - 700);
     const streamGroup = this.add.group();
 
     // Create falling characters
@@ -463,7 +436,7 @@ export default class ArenaScene extends Phaser.Scene {
     const charCount = Phaser.Math.Between(5, 12);
 
     for (let i = 0; i < charCount; i++) {
-      const char = this.add.text(x, -20 - (i * 20), chars[Phaser.Math.Between(0, chars.length - 1)], {
+      const char = this.add.text(x, startY - (i * 20), chars[Phaser.Math.Between(0, chars.length - 1)], {
         fontFamily: 'monospace',
         fontSize: '14px',
         color: `#${stage.nodeColor.toString(16).padStart(6, '0')}`
@@ -535,8 +508,8 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   createPlayer() {
-    // Create player at center
-    this.player = this.physics.add.sprite(400, 300, 'player');
+    // Create player at center of the larger world
+    this.player = this.physics.add.sprite(this.worldWidth / 2, this.worldHeight / 2, 'player');
     this.player.setCollideWorldBounds(true);
 
     // Player health
@@ -597,17 +570,21 @@ export default class ArenaScene extends Phaser.Scene {
     this.xpBarBg = this.add.graphics();
     this.xpBarBg.fillStyle(0x333333, 0.8);
     this.xpBarBg.fillRect(10, 10, 200, 20);
+    this.xpBarBg.setScrollFactor(0);
 
     // XP Bar fill
     this.xpBar = this.add.graphics();
+    this.xpBar.setScrollFactor(0);
 
     // Health bar background
     this.healthBarBg = this.add.graphics();
     this.healthBarBg.fillStyle(0x333333, 0.8);
     this.healthBarBg.fillRect(10, 35, 200, 15);
+    this.healthBarBg.setScrollFactor(0);
 
     // Health bar fill
     this.healthBar = this.add.graphics();
+    this.healthBar.setScrollFactor(0);
 
     // Level text
     this.levelText = this.add.text(10, 55, 'LVL 1', {
@@ -615,14 +592,14 @@ export default class ArenaScene extends Phaser.Scene {
       fontSize: '16px',
       color: '#00ffff',
       fontStyle: 'bold'
-    });
+    }).setScrollFactor(0);
 
     // XP text
     this.xpText = this.add.text(10, 75, 'XP: 0 / 100', {
       fontFamily: 'monospace',
       fontSize: '12px',
       color: '#aaaaaa'
-    });
+    }).setScrollFactor(0);
 
     // Wave text
     this.waveText = this.add.text(700, 10, 'WAVE 1', {
@@ -630,28 +607,28 @@ export default class ArenaScene extends Phaser.Scene {
       fontSize: '16px',
       color: '#ff00ff',
       fontStyle: 'bold'
-    }).setOrigin(1, 0);
+    }).setOrigin(1, 0).setScrollFactor(0);
 
     // Kills text
     this.killsText = this.add.text(700, 30, 'KILLS: 0', {
       fontFamily: 'monospace',
       fontSize: '12px',
       color: '#aaaaaa'
-    }).setOrigin(1, 0);
+    }).setOrigin(1, 0).setScrollFactor(0);
 
     // Current weapon indicator
     this.weaponText = this.add.text(10, 95, 'WEAPON: BASIC', {
       fontFamily: 'monospace',
       fontSize: '12px',
       color: '#00ffff'
-    });
+    }).setScrollFactor(0);
 
     // Connection status
     this.connectionText = this.add.text(400, 580, '⚡ CONNECTING... | M = MUSIC', {
       fontFamily: 'monospace',
       fontSize: '12px',
       color: '#ffff00'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     // Listen for connection events
     window.addEventListener('xpserver-connected', () => {
@@ -669,37 +646,39 @@ export default class ArenaScene extends Phaser.Scene {
       fontFamily: 'monospace',
       fontSize: '10px',
       color: '#00ffff'
-    }).setOrigin(1, 0);
+    }).setOrigin(1, 0).setScrollFactor(0);
 
     // High score display
     this.highScoreText = this.add.text(700, 70, `HI-WAVE: ${this.highWave}`, {
       fontFamily: 'monospace',
       fontSize: '10px',
       color: '#ffd700'
-    }).setOrigin(1, 0);
+    }).setOrigin(1, 0).setScrollFactor(0);
 
     // Collected weapons display (for evolution tracking)
     this.weaponsCollectedText = this.add.text(10, 115, 'COLLECTED: basic', {
       fontFamily: 'monospace',
       fontSize: '10px',
       color: '#888888'
-    });
+    }).setScrollFactor(0);
 
     // Boss health bar (hidden by default)
     this.bossHealthBarBg = this.add.graphics();
     this.bossHealthBarBg.fillStyle(0x333333, 0.8);
     this.bossHealthBarBg.fillRect(200, 560, 400, 25);
     this.bossHealthBarBg.setVisible(false);
+    this.bossHealthBarBg.setScrollFactor(0);
 
     this.bossHealthBar = this.add.graphics();
     this.bossHealthBar.setVisible(false);
+    this.bossHealthBar.setScrollFactor(0);
 
     this.bossNameText = this.add.text(400, 545, '', {
       fontFamily: 'monospace',
       fontSize: '14px',
       color: '#ff0000',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
     this.bossNameText.setVisible(false);
 
     this.updateHUD();
@@ -836,7 +815,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Screen flash
     this.cameras.main.flash(200, 0, 255, 255);
 
-    // Big level up text
+    // Big level up text (fixed to camera center)
     const levelUpText = this.add.text(400, 300, `LEVEL ${level}!`, {
       fontFamily: 'monospace',
       fontSize: '48px',
@@ -844,7 +823,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 4
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     // Animate
     this.tweens.add({
@@ -978,8 +957,10 @@ export default class ArenaScene extends Phaser.Scene {
     // Scale boss health with wave number
     const healthScale = 1 + Math.floor(this.waveNumber / 20) * 0.5;
 
-    // Spawn boss from top center
-    const boss = this.enemies.create(400, -80, bossKey);
+    // Spawn boss near player (above them)
+    const bossX = Phaser.Math.Clamp(this.player.x, 100, this.worldWidth - 100);
+    const bossY = Math.max(50, this.player.y - 300);
+    const boss = this.enemies.create(bossX, bossY, bossKey);
     boss.health = Math.floor(bossData.health * healthScale);
     boss.maxHealth = boss.health;
     boss.speed = bossData.speed;
@@ -1032,16 +1013,16 @@ export default class ArenaScene extends Phaser.Scene {
     const MAX_ENEMIES = 30;
     if (this.enemies.countActive() >= MAX_ENEMIES) return;
 
-    // Spawn from random edge
-    const side = Phaser.Math.Between(0, 3);
-    let x, y;
+    // Spawn in a ring around the player (not screen edges)
+    const spawnRadius = 500; // Distance from player
+    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
 
-    switch (side) {
-      case 0: x = Phaser.Math.Between(0, 800); y = -50; break; // Top
-      case 1: x = 850; y = Phaser.Math.Between(0, 600); break; // Right
-      case 2: x = Phaser.Math.Between(0, 800); y = 650; break; // Bottom
-      case 3: x = -50; y = Phaser.Math.Between(0, 600); break; // Left
-    }
+    let x = this.player.x + Math.cos(angle) * spawnRadius;
+    let y = this.player.y + Math.sin(angle) * spawnRadius;
+
+    // Clamp to world bounds
+    x = Phaser.Math.Clamp(x, 50, this.worldWidth - 50);
+    y = Phaser.Math.Clamp(y, 50, this.worldHeight - 50);
 
     // Choose enemy type based on wave with scaling pools
     const playerLevel = window.VIBE_CODER.level;
@@ -1098,7 +1079,10 @@ export default class ArenaScene extends Phaser.Scene {
     // Scale mini-boss health with wave
     const healthScale = 1 + Math.floor(this.waveNumber / 20) * 0.3;
 
-    const miniBoss = this.enemies.create(400, -60, 'miniboss');
+    // Spawn mini-boss near player
+    const mbX = Phaser.Math.Clamp(this.player.x + Phaser.Math.Between(-200, 200), 100, this.worldWidth - 100);
+    const mbY = Math.max(50, this.player.y - 250);
+    const miniBoss = this.enemies.create(mbX, mbY, 'miniboss');
     miniBoss.health = Math.floor(miniBossData.health * healthScale);
     miniBoss.maxHealth = miniBoss.health;
     miniBoss.speed = miniBossData.speed;
@@ -1363,9 +1347,10 @@ export default class ArenaScene extends Phaser.Scene {
     if (this.spawnTimer) this.spawnTimer.paused = true;
     if (this.waveTimer) this.waveTimer.paused = true;
 
-    // Create pause menu container
+    // Create pause menu container (fixed to camera)
     this.pauseMenu = this.add.container(400, 300);
     this.pauseMenu.setDepth(1000);
+    this.pauseMenu.setScrollFactor(0);
 
     // Dim overlay
     const overlay = this.add.rectangle(0, 0, 800, 600, 0x000000, 0.8);
@@ -2456,7 +2441,7 @@ export default class ArenaScene extends Phaser.Scene {
         this.cameras.main.shake(500, 0.03);
         this.cameras.main.flash(300, 255, 255, 255);
 
-        // Boss death announcement
+        // Boss death announcement (fixed to camera center)
         const deathText = this.add.text(400, 300, `${enemy.bossName}\nDEFEATED!`, {
           fontFamily: 'monospace',
           fontSize: '32px',
@@ -2465,7 +2450,7 @@ export default class ArenaScene extends Phaser.Scene {
           align: 'center',
           stroke: '#000000',
           strokeThickness: 4
-        }).setOrigin(0.5);
+        }).setOrigin(0.5).setScrollFactor(0);
 
         this.tweens.add({
           targets: deathText,
@@ -2608,7 +2593,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     window.VIBE_UPGRADES.addCurrency(totalBits);
 
-    // Show bits earned
+    // Show bits earned (fixed to camera center)
     const bitsText = this.add.text(400, 200, `+${totalBits} BITS EARNED!`, {
       fontFamily: 'monospace',
       fontSize: '24px',
@@ -2616,7 +2601,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 4
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: bitsText,
@@ -2630,10 +2615,10 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.fade(500, 0, 0, 0);
 
     this.time.delayedCall(500, () => {
-      // Reset player
+      // Reset player to world center
       this.player.health = this.player.maxHealth;
-      this.player.x = 400;
-      this.player.y = 300;
+      this.player.x = this.worldWidth / 2;
+      this.player.y = this.worldHeight / 2;
 
       // Clear enemies
       this.enemies.clear(true, true);
@@ -2720,6 +2705,9 @@ export default class ArenaScene extends Phaser.Scene {
     }
 
     // Move enemies toward player with unique behaviors
+    const cam = this.cameras.main;
+    const cullMargin = 100; // Extra margin beyond camera view
+
     this.enemies.children.each((enemy) => {
       if (!enemy.active) return;
 
@@ -2733,7 +2721,22 @@ export default class ArenaScene extends Phaser.Scene {
         this.player.x, this.player.y
       );
 
-      // Handle different enemy behaviors
+      // Performance culling: off-screen enemies use simplified movement
+      const isOnScreen = enemy.x > cam.scrollX - cullMargin &&
+                         enemy.x < cam.scrollX + cam.width + cullMargin &&
+                         enemy.y > cam.scrollY - cullMargin &&
+                         enemy.y < cam.scrollY + cam.height + cullMargin;
+
+      if (!isOnScreen) {
+        // Off-screen: simplified movement at 50% speed toward player
+        enemy.setVelocity(
+          Math.cos(angle) * enemy.speed * 0.5,
+          Math.sin(angle) * enemy.speed * 0.5
+        );
+        return; // Skip complex AI behaviors
+      }
+
+      // Handle different enemy behaviors (only for on-screen enemies)
       switch (enemy.behavior) {
         case 'teleport':
           // Syntax Error: teleports short distances periodically
