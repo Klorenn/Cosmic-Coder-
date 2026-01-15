@@ -795,17 +795,32 @@ export default class ArenaScene extends Phaser.Scene {
     // Subtle XP blip sound
     Audio.playXPGain();
 
+    // Check for CLI source info (from live XP server)
+    const source = window.VIBE_CODER?.lastXPSource;
+    const hasSource = source && source.name && source.name !== 'CODE';
+
+    // Format text with optional source tag
+    const text = hasSource ? `+${amount} XP [${source.name}]` : `+${amount} XP`;
+    const color = hasSource ? source.color : '#00ffff';
+
     const popup = this.add.text(
       this.player.x + Phaser.Math.Between(-30, 30),
       this.player.y - 40,
-      `+${amount} XP`,
+      text,
       {
         fontFamily: 'monospace',
-        fontSize: '14px',
-        color: '#00ffff',
-        fontStyle: 'bold'
+        fontSize: hasSource ? '16px' : '14px', // Slightly larger for CLI XP
+        color: color,
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: hasSource ? 2 : 0
       }
     ).setOrigin(0.5);
+
+    // Clear the source after displaying
+    if (window.VIBE_CODER?.lastXPSource) {
+      window.VIBE_CODER.lastXPSource = null;
+    }
 
     // Animate popup
     this.tweens.add({

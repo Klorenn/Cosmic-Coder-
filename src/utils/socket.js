@@ -33,10 +33,16 @@ export function connectToXPServer() {
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log(`📥 XP Event: ${data.type} +${data.amount}`);
+        const sourceName = data.sourceName || 'CODE';
+        console.log(`📥 XP Event: ${data.type} +${data.amount} [${sourceName}]`);
 
         // Add XP through the game state
         if (window.VIBE_CODER) {
+          // Store source info for popup display
+          window.VIBE_CODER.lastXPSource = {
+            name: data.sourceName || 'CODE',
+            color: data.sourceColor || '#ffffff'
+          };
           window.VIBE_CODER.addXP(data.amount);
         }
       } catch (e) {
