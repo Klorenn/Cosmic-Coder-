@@ -322,11 +322,15 @@ export default class TitleScene extends Phaser.Scene {
     this.warglaiveQuotes = [
       "Oh boy...",
       "Luu a wild mfer",
+      "LUUUUU!!\nYou legend",
+      "Shoutout Luu\nfor this masterpiece",
+      "Luu made this btw\n*respect*",
       "The creator's blade",
       "0.01% btw",
       "Twin blades of\ndestruction",
       "*chef's kiss*",
-      "Legendary drip"
+      "Luu's artwork\nhits different",
+      "Legendary drip\nby Luu"
     ];
 
     // Coding activity quotes
