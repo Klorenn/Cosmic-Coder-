@@ -6,20 +6,60 @@ A vampire survivors-style idle game where you earn XP from real coding activity.
 
 ## 🎯 About
 
-Vibe Coder is an idle survival game that rewards you for coding. Connect it to your development workflow and watch your character grow stronger as you write code. Every keystroke, every file save, every git commit powers up your in-game character.
+Vibe Coder is an idle survival game that rewards you for coding. Connect it to your development workflow and watch your character grow stronger as you write code. Every tool call, every prompt, every commit powers up your in-game character.
+
+**While you code, your character:**
+- 🎯 Hunts enemies intelligently
+- 🛡️ Evades when overwhelmed
+- 💬 Comments on your coding with 80+ unique quotes
+- ⚔️ Auto-attacks with your equipped weapons
+- 📈 Levels up from your real coding XP
 
 ## ✨ Features
 
-- **Vampire Survivors-style Gameplay** - Auto-attack enemies, collect weapons, survive waves
-- **Live XP from Coding** - WebSocket server integrates with Claude Code hooks
-- **Wave-based Combat** - Endless waves with increasing difficulty
-- **Boss Battles** - Epic bosses every 20 waves (Stack Overflow, Null Pointer, Memory Leak Prime, Kernel Panic)
-- **Weapon System** - Basic, Spread, Pierce, Orbital, Rapid Fire
-- **Rare Weapons** - `rm -rf` (nuke all), `sudo` (god mode), Fork Bomb
-- **Weapon Evolution** - Combine weapons for powerful upgrades
-- **Stage Progression** - Debug Zone → Memory Banks → Network Layer → Kernel Space
-- **Procedural Graphics** - All sprites generated with code
-- **Retro Synthwave Audio** - Web Audio API generated sounds
+### 🎮 Smart Auto-Play AI
+- **HUNT Mode** - Actively moves toward enemies
+- **EVADE Mode** - Kites when low HP or swarmed
+- **IDLE Mode** - Wanders when area is clear
+- Mode-specific quotes and visual indicators
+
+### 👾 18 Enemy Types
+| Type | Examples |
+|------|----------|
+| **Classic** | Bug, Glitch, Memory Leak, Syntax Error |
+| **Coding** | Segfault, Dependency Hell, Git Conflict, CORS Error |
+| **AI-Themed** | Hallucination, Token Overflow, Prompt Injection, Mode Collapse |
+
+### 👹 4 Epic Bosses
+- **Stack Overflow** (Wave 20) - Spawns minions
+- **Null Pointer** (Wave 40) - Teleports
+- **Memory Leak Prime** (Wave 60) - Splits on damage
+- **Kernel Panic** (Wave 80) - Enrages at low HP
+
+### ⚔️ 26 Weapons
+| Category | Count | Examples |
+|----------|-------|----------|
+| Ranged | 9 | Basic, Spread, Pierce, Homing, Freeze |
+| Melee | 4 | Sword, Spear, Boomerang, Kunai |
+| Rare | 3 | `rm -rf`, `sudo`, Fork Bomb |
+| Legendary | 3 | Hunter's Warglaive, Void Reaper, Celestial Blade |
+| Evolved | 10 | Laser Beam, Chain Lightning, Blizzard |
+
+### 🌍 6 Stage Themes
+Debug Zone → Memory Banks → Network Layer → Kernel Space → Cloud Cluster → Singularity
+
+### 📊 7 Meta-Progression Upgrades
+Persistent buffs: Damage, Health, Speed, Attack Rate, XP Gain, Crit Chance, Duration
+
+### 🎵 Full Audio System
+- 5 procedural synthwave music tracks
+- 13+ sound effects (weapons, hits, pickups)
+- Master/SFX/Music volume controls
+
+### 💬 80+ Character Quotes
+- Coding reactions: "Code go brrrr", "10x developer mode"
+- AI-specific: Claude, Cursor, Gemini, Codex reactions
+- Time-based easter eggs for late night coding
 
 ## 🎮 Controls
 
@@ -29,6 +69,7 @@ Vibe Coder is an idle survival game that rewards you for coding. Connect it to y
 | ESC / P | Pause |
 | M | Toggle Music |
 | SPACE | Manual XP (offline mode) |
+| G | Secret: Unlock Hunter's Warglaive |
 
 ## 🚀 Quick Start
 
@@ -50,64 +91,65 @@ Open http://localhost:3000 in your browser.
 Connect Vibe Coder to Claude Code for real XP gains while coding:
 
 1. Start the XP server: `npm run server`
-2. Copy the hooks to your Claude Code hooks directory
+2. Copy `hooks/on-prompt.sh` to your Claude Code hooks directory
 3. Code normally - XP flows into the game automatically!
 
 ### Hook Events
-- **Tool Use** - +5 XP per tool
-- **Response** - +10 XP per response
-- **Message** - +2 XP per message
+| Event | XP |
+|-------|-----|
+| Tool Use | +10 |
+| Response | +5 |
+| Message | +10 |
 
-## 🎖️ Enemies
-
-| Enemy | Behavior |
-|-------|----------|
-| Bug | Basic chase |
-| Glitch | Fast, glitchy movement |
-| Memory Leak | Slow, tanky |
-| Syntax Error | Teleports toward you |
-| Infinite Loop | Orbits around you |
-| Race Condition | Erratic speed changes |
-
-## 👹 Bosses
-
-| Boss | Wave | Ability |
-|------|------|---------|
-| Stack Overflow | 20 | Spawns minions |
-| Null Pointer | 40 | Teleports |
-| Memory Leak Prime | 60 | Splits on damage |
-| Kernel Panic | 80 | Enrages at low HP |
-
-## 🔧 Tech Stack
-
-- **Phaser 3** - Game engine
-- **Vite** - Build tool & dev server
-- **Web Audio API** - Procedural sound generation
-- **WebSocket** - Real-time XP streaming
-- **Node.js** - XP server backend
+The character reacts in real-time to your coding activity with speech bubbles and intelligent movement!
 
 ## 📁 Project Structure
 
 ```
 vibe-coder/
 ├── src/
-│   ├── main.js           # Game config & state
+│   ├── main.js           # Game config, upgrades, legendaries
 │   ├── scenes/
-│   │   ├── BootScene.js  # Texture generation
-│   │   ├── TitleScene.js # Main menu
-│   │   └── ArenaScene.js # Main gameplay
+│   │   ├── BootScene.js  # Procedural texture generation
+│   │   ├── TitleScene.js # Menu, upgrades, weapon gallery
+│   │   └── ArenaScene.js # Main gameplay, enemies, bosses
 │   └── utils/
-│       ├── audio.js      # Sound system
-│       └── socket.js     # WebSocket client
-├── server/
-│   └── index.js          # XP WebSocket server
-├── hooks/                 # Claude Code hooks
+│       ├── audio.js      # Procedural sound system
+│       └── socket.js     # WebSocket XP client
+├── xp-server.js          # XP WebSocket server
+├── hooks/                # Claude Code hooks
+│   └── on-prompt.sh
 └── index.html
 ```
+
+## 🎖️ Legendary Weapons
+
+Ultra-rare permanent unlocks that persist forever:
+
+| Legendary | Drop Rate | Effect |
+|-----------|-----------|--------|
+| Hunter's Warglaive | 0.01% | Twin spinning blades |
+| Void Reaper | 0.05% | Soul-consuming scythe |
+| Celestial Blade | 0.03% | Triple starlight orbitals |
+
+## 🔧 Tech Stack
+
+- **Phaser 3** - Game engine
+- **Vite** - Build tool & dev server
+- **Web Audio API** - Procedural sound generation
+- **Canvas API** - Procedural graphics (no external assets!)
+- **WebSocket** - Real-time XP streaming
+- **Node.js** - XP server backend
+
+## 📋 Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for full version history.
 
 ## 🎨 Credits
 
 Built with [Claude Code](https://claude.ai/claude-code) - the AI coding assistant.
+
+Hunter's Warglaive artwork inspired by Luu.
 
 ---
 
