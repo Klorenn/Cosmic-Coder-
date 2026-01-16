@@ -198,6 +198,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Pause state
     this.isPaused = false;
+    this.settingsOverlayOpen = false;
     this.pauseMenu = null;
     this.pauseSelectedOption = 0;
   }
@@ -273,9 +274,11 @@ export default class ArenaScene extends Phaser.Scene {
     window.addEventListener('xpgained', (e) => this.showXPPopup(e.detail.amount));
     window.addEventListener('levelup', (e) => this.showLevelUp(e.detail.level));
 
-    // For testing - press SPACE to simulate XP gain
+    // For testing - press SPACE to simulate XP gain (only when not paused)
     this.input.keyboard.on('keydown-SPACE', () => {
-      window.VIBE_CODER.addXP(10);
+      if (!this.isPaused) {
+        window.VIBE_CODER.addXP(10);
+      }
     });
 
     // Initialize audio on first interaction
@@ -1876,7 +1879,7 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   movePauseSelection(direction) {
-    if (!this.isPaused) return;
+    if (!this.isPaused || this.settingsOverlayOpen) return;
 
     this.pauseSelectedOption += direction;
     if (this.pauseSelectedOption < 0) this.pauseSelectedOption = this.pauseMenuOptions.length - 1;
@@ -1903,7 +1906,7 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   selectPauseOption() {
-    if (!this.isPaused) return;
+    if (!this.isPaused || this.settingsOverlayOpen) return;
 
     switch (this.pauseSelectedOption) {
       case 0: // RESUME
@@ -1931,6 +1934,7 @@ export default class ArenaScene extends Phaser.Scene {
   showPauseSettings() {
     // Simple settings toggle in pause menu
     const settings = window.VIBE_SETTINGS;
+    this.settingsOverlayOpen = true;
 
     // Create settings overlay
     const settingsOverlay = this.add.container(0, 0);
@@ -2008,6 +2012,7 @@ export default class ArenaScene extends Phaser.Scene {
     };
 
     const closeSettings = () => {
+      this.settingsOverlayOpen = false;
       this.input.keyboard.off('keydown-UP', settingUp);
       this.input.keyboard.off('keydown-DOWN', settingDown);
       this.input.keyboard.off('keydown-W', settingUp);
