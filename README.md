@@ -2,7 +2,9 @@
 
 A vampire survivors-style idle game where you earn XP from real coding activity. Code to conquer!
 
-![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Node](https://img.shields.io/badge/Node-18+-green)
+### [▶️ Play Now](https://daredev256.github.io/vibe-coder/) | [📖 Setup Guide](./SETUP.md) | [📋 Changelog](./CHANGELOG.md)
+
+![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Node](https://img.shields.io/badge/Node-18+-green) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen)
 
 ## 🎯 About
 
@@ -73,6 +75,12 @@ Persistent buffs: Damage, Health, Speed, Attack Rate, XP Gain, Crit Chance, Dura
 
 ## 🚀 Quick Start
 
+### Play Online (No Install)
+**[▶️ Play Vibe Coder Now](https://daredev256.github.io/vibe-coder/)**
+
+Press **SPACE** to manually gain XP, or connect the hooks for real coding rewards!
+
+### Local Development
 ```bash
 # Install dependencies
 npm install
@@ -88,11 +96,18 @@ Open http://localhost:3000 in your browser.
 
 ## 🔌 Claude Code Integration
 
-Connect Vibe Coder to Claude Code for real XP gains while coding:
+Connect Vibe Coder to Claude Code for real XP gains while coding!
 
-1. Start the XP server: `npm run server`
-2. Copy `hooks/on-prompt.sh` to your Claude Code hooks directory
-3. Code normally - XP flows into the game automatically!
+> **Note:** The online demo doesn't support live XP (requires local server). For the full experience, run locally with hooks connected.
+
+**Quick Setup:**
+1. Clone the repo and run `npm install`
+2. Start the XP server: `npm run server`
+3. Copy `hooks/on-prompt.sh` to `~/.claude/hooks/`
+4. Start the game: `npm run dev`
+5. Code normally - XP flows into the game automatically!
+
+**[📖 Full Setup Guide](./SETUP.md)** - Detailed instructions, troubleshooting, custom integrations
 
 ### Hook Events
 | Event | XP |
@@ -101,7 +116,7 @@ Connect Vibe Coder to Claude Code for real XP gains while coding:
 | Response | +5 |
 | Message | +10 |
 
-The character reacts in real-time to your coding activity with speech bubbles and intelligent movement!
+The character reacts in real-time to your coding activity with speech bubbles and intelligent auto-play!
 
 ## 📁 Project Structure
 
