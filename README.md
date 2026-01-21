@@ -2,9 +2,9 @@
 
 A vampire survivors-style idle game where you earn XP from real coding activity. Code to conquer!
 
-### [▶️ Play Now](https://daredev256.github.io/vibe-coder/) | [📖 Setup Guide](./SETUP.md) | [📋 Changelog](./CHANGELOG.md)
+### [▶️ Play Now](https://daredev256.github.io/vibe-coder/) | [⬇️ Download Desktop App](#-desktop-app) | [📖 Setup Guide](./SETUP.md) | [📋 Changelog](./CHANGELOG.md)
 
-![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Node](https://img.shields.io/badge/Node-18+-green) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen)
+![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Electron](https://img.shields.io/badge/Electron-33.x-9feaf9) ![Node](https://img.shields.io/badge/Node-18+-green) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen)
 
 ## 🎯 About
 
@@ -92,7 +92,35 @@ npm run dev
 npm run server
 ```
 
-Open http://localhost:3000 in your browser.
+Open http://localhost:5173 in your browser.
+
+## 🖥️ Desktop App
+
+Run Vibe Coder as a native desktop app with system tray integration!
+
+### Download
+Check the [Releases](https://github.com/DareDev256/vibe-coder/releases) page for pre-built binaries:
+- **macOS**: `.dmg` installer (Universal - Intel + Apple Silicon)
+- **Windows**: `.exe` installer
+- **Linux**: `.AppImage` or `.deb`
+
+### Features
+- **System Tray** - Lives in your menu bar, always accessible
+- **Built-in XP Server** - No separate server needed
+- **4 Window Modes** - Floating, Corner Snap, Desktop Widget, Mini HUD
+- **Global Shortcuts** - `Cmd/Ctrl+Shift+V` toggle, `Cmd/Ctrl+Shift+W` cycle modes
+- **Rich Tray Menu** - See game stats at a glance
+
+### Build from Source
+```bash
+# Development mode (hot reload)
+npm run electron:dev
+
+# Build distributable
+npm run electron:build
+```
+
+The desktop app includes a built-in WebSocket server on port 3001, so Claude Code hooks connect automatically!
 
 ## 🔌 Claude Code Integration
 
@@ -128,10 +156,17 @@ vibe-coder/
 │   │   ├── BootScene.js  # Procedural texture generation
 │   │   ├── TitleScene.js # Menu, upgrades, weapon gallery
 │   │   └── ArenaScene.js # Main gameplay, enemies, bosses
+│   ├── systems/          # Game systems (save, rebirth, shrines)
 │   └── utils/
 │       ├── audio.js      # Procedural sound system
 │       └── socket.js     # WebSocket XP client
-├── xp-server.js          # XP WebSocket server
+├── electron/             # Desktop app wrapper
+│   ├── main.js           # Electron main process
+│   ├── preload.js        # IPC bridge
+│   ├── server.js         # Built-in WebSocket server
+│   ├── tray.js           # System tray integration
+│   └── windows.js        # Window mode management
+├── server/               # Standalone XP server
 ├── hooks/                # Claude Code hooks
 │   └── on-prompt.sh
 └── index.html
@@ -151,10 +186,12 @@ Ultra-rare permanent unlocks that persist forever:
 
 - **Phaser 3** - Game engine
 - **Vite** - Build tool & dev server
+- **Electron** - Desktop app wrapper
 - **Web Audio API** - Procedural sound generation
 - **Canvas API** - Procedural graphics (no external assets!)
 - **WebSocket** - Real-time XP streaming
 - **Node.js** - XP server backend
+- **electron-builder** - Cross-platform packaging
 
 ## 📋 Changelog
 
