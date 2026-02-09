@@ -151,23 +151,35 @@ The character reacts in real-time to your coding activity with speech bubbles an
 ```
 vibe-coder/
 ├── src/
-│   ├── main.js           # Game config, upgrades, legendaries
+│   ├── main.js               # Game config, upgrades, legendaries
+│   ├── __tests__/             # Vitest unit tests (66 tests)
+│   │   ├── SpatialHash.test.js
+│   │   ├── RunModifiers.test.js
+│   │   ├── SaveManager.test.js
+│   │   └── EventManager.test.js
 │   ├── scenes/
-│   │   ├── BootScene.js  # Procedural texture generation
-│   │   ├── TitleScene.js # Menu, upgrades, weapon gallery
-│   │   └── ArenaScene.js # Main gameplay, enemies, bosses
-│   ├── systems/          # Game systems (save, rebirth, shrines)
+│   │   ├── BootScene.js       # Procedural texture generation
+│   │   ├── TitleScene.js      # Menu, upgrades, weapon gallery
+│   │   └── ArenaScene.js      # Main gameplay, enemies, bosses
+│   ├── systems/
+│   │   ├── EventManager.js    # Mid-wave random events (boss, double XP, curse)
+│   │   ├── MapManager.js      # Procedural map generation & biomes
+│   │   ├── RebirthManager.js  # Prestige system (permanent bonuses)
+│   │   ├── RunModifiers.js    # Run-start mutators (glass cannon, etc.)
+│   │   ├── SaveManager.js     # Run continuation & auto-save
+│   │   └── ShrineManager.js   # Interactive risk/reward shrines
 │   └── utils/
-│       ├── audio.js      # Procedural sound system
-│       └── socket.js     # WebSocket XP client
-├── electron/             # Desktop app wrapper
-│   ├── main.js           # Electron main process
-│   ├── preload.js        # IPC bridge
-│   ├── server.js         # Built-in WebSocket server
-│   ├── tray.js           # System tray integration
-│   └── windows.js        # Window mode management
-├── server/               # Standalone XP server
-├── hooks/                # Claude Code hooks
+│       ├── SpatialHash.js     # O(n) spatial collision detection
+│       ├── audio.js           # Procedural sound system
+│       └── socket.js          # WebSocket XP client
+├── electron/                  # Desktop app wrapper
+│   ├── main.js                # Electron main process
+│   ├── preload.js             # IPC bridge
+│   ├── server.js              # Built-in WebSocket server
+│   ├── tray.js                # System tray integration
+│   └── windows.js             # Window mode management
+├── server/                    # Standalone XP server
+├── hooks/                     # Claude Code hooks
 │   └── on-prompt.sh
 └── index.html
 ```
@@ -192,6 +204,15 @@ Ultra-rare permanent unlocks that persist forever:
 - **WebSocket** - Real-time XP streaming
 - **Node.js** - XP server backend
 - **electron-builder** - Cross-platform packaging
+
+## 🧪 Testing
+
+```bash
+npm test            # Run all tests once
+npm run test:watch  # Watch mode (re-runs on file changes)
+```
+
+66 unit tests cover core game systems: `SpatialHash`, `RunModifiers`, `SaveManager`, and `EventManager`.
 
 ## 📋 Changelog
 

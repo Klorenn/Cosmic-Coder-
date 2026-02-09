@@ -12,6 +12,10 @@ All notable changes to Vibe Coder will be documented in this file.
   - `SaveManager` — getTimeAgo time formatting across seconds/minutes/hours/days boundaries
   - `EventManager` — event definitions, active effects, effect application/clearing, trigger guards
 
+### Changed
+- **README** — Expanded project structure to document all 6 systems (EventManager, MapManager, RebirthManager, RunModifiers, SaveManager, ShrineManager), all 3 utils (SpatialHash, audio, socket), and the test directory
+- **README** — Added Testing section with test commands and coverage summary
+
 ---
 
 ## [0.5.0] - 2025-01-15 - The AI Uprising Update
