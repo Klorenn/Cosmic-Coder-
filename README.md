@@ -4,7 +4,7 @@ A vampire survivors-style idle game where you earn XP from real coding activity.
 
 ### [▶️ Play Now](https://daredev256.github.io/vibe-coder/) | [⬇️ Download Desktop App](#-desktop-app) | [📖 Setup Guide](./SETUP.md) | [📋 Changelog](./CHANGELOG.md)
 
-![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Electron](https://img.shields.io/badge/Electron-33.x-9feaf9) ![Node](https://img.shields.io/badge/Node-18+-green) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen) ![Tests](https://img.shields.io/badge/Tests-102_passing-brightgreen)
+![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Electron](https://img.shields.io/badge/Electron-33.x-9feaf9) ![Node](https://img.shields.io/badge/Node-18+-green) ![Tests](https://img.shields.io/badge/Tests-102_passing-brightgreen) ![Deploy](https://img.shields.io/github/actions/workflow/status/DareDev256/vibe-coder/deploy.yml?label=Deploy) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen)
 
 ## 🎯 About
 
@@ -12,10 +12,26 @@ Vibe Coder is an idle survival game that rewards you for coding. Connect it to y
 
 **While you code, your character:**
 - 🎯 Hunts enemies with smart auto-play AI (HUNT / EVADE / IDLE modes)
-- ⚔️ Auto-attacks with 26 weapons including 10 evolved combos
+- ⚔️ Auto-attacks with 30 weapons including 11 evolved combos
 - 🔄 Earns permanent prestige bonuses through the Rebirth system
 - 🎲 Discovers interactive shrines with risk/reward choices
-- 💬 Comments on your coding with 80+ unique quotes
+- 💬 Comments on your coding with 95+ unique quotes
+
+### How It Works
+
+```
+ You Code                    Vibe Coder
+┌──────────┐  WebSocket   ┌──────────────────────────────┐
+│ Claude   │──on-prompt──▶│  XP Server (:3333)           │
+│ Code     │  hook fires  │    │                          │
+│          │              │    ▼                          │
+│ IDE      │──HTTP POST──▶│  Game Engine (Phaser 3)      │
+│ Terminal │              │    ├─ Auto-Play AI            │
+│ etc.     │              │    ├─ 18 Enemy Types + Bosses │
+└──────────┘              │    ├─ Weapon Evolution        │
+                          │    └─ Prestige System         │
+                          └──────────────────────────────┘
+```
 
 ## ✨ Core Gameplay
 
@@ -41,25 +57,30 @@ Vibe Coder is an idle survival game that rewards you for coding. Connect it to y
 | **Kernel Panic** | 80 | Enrages at low HP |
 | **Deadlock** | Mini | Freezes player on hit |
 
-### ⚔️ 26 Weapons & Evolution System
+### ⚔️ 30 Weapons & Evolution System
 | Category | Count | Examples |
 |----------|-------|----------|
 | Ranged | 9 | Basic, Spread, Pierce, Homing, Freeze |
 | Melee | 4 | Sword, Spear, Boomerang, Kunai |
 | Rare | 3 | `rm -rf`, `sudo`, Fork Bomb |
 | Legendary | 3 | Hunter's Warglaive, Void Reaper, Celestial Blade |
-| **Evolved** | **10** | **Combine 2 weapons for super forms** |
+| **Evolved** | **11** | **Combine 2 weapons for super forms** |
 
-**Weapon Evolution Recipes** — Collect both ingredients to evolve:
+**All 11 Weapon Evolution Recipes** — Collect both ingredients to evolve:
 
-| Recipe | Result |
-|--------|--------|
-| Spread + Pierce | LASER BEAM |
-| Pierce + Rapid | CHAIN LIGHTNING |
-| Spread + Rapid | BULLET HELL |
-| Freeze + AOE | BLIZZARD |
-| Homing + Pierce | SEEKING MISSILE |
-| + 5 more recipes to discover... | |
+| Recipe | Result | Special |
+|--------|--------|---------|
+| Spread + Pierce | LASER BEAM | Multi-pierce |
+| Orbital + Rapid | PLASMA ORB | 5 orbitals |
+| Pierce + Rapid | CHAIN LIGHTNING | 3-chain arcs |
+| Spread + Rapid | BULLET HELL | 8-projectile spray |
+| Orbital + Spread | RING OF FIRE | 8-orbital ring |
+| Homing + Pierce | SEEKING MISSILE | Piercing tracker |
+| Bounce + Spread | CHAOS BOUNCE | 5-bounce scatter |
+| AOE + Orbital | DEATH AURA | 150px kill zone |
+| Freeze + Pierce | ICE LANCE | 3s freeze-through |
+| Homing + Rapid | SWARM | 3 homing drones |
+| Freeze + AOE | BLIZZARD | AoE freeze field |
 
 ### 🌍 6 Biome Stages
 Each biome has distinct visuals, environmental hazards, and destructible objects:
@@ -244,6 +265,16 @@ vibe-coder/
 └── index.html
 ```
 
+## 🏗️ Technical Highlights
+
+| Decision | Why |
+|----------|-----|
+| **Zero external assets** | All graphics + audio generated procedurally at runtime via Canvas/Web Audio API — no sprite sheets, no sound files, instant load |
+| **Spatial hashing** | O(n) collision detection via `SpatialHash` grid instead of O(n²) pairwise checks — handles 200+ entities at 60fps |
+| **Real-time XP pipeline** | WebSocket bridge turns any dev tool (Claude Code, IDE, CLI) into a game controller via simple HTTP POST |
+| **Procedural maps** | Each biome generates walls, hazards, destructibles, and teleporters at runtime — no static level data |
+| **102 unit tests** | Core systems (SpatialHash, RunModifiers, SaveManager, EventManager, RebirthManager) tested with Vitest |
+
 ## 🔧 Tech Stack
 
 - **Phaser 3** - Game engine
@@ -266,11 +297,11 @@ npm run test:watch  # Watch mode (re-runs on file changes)
 
 ## 📋 Changelog
 
-**v0.6.6** — Fixed split enemy health (spawned with 10 HP instead of ~28), uncapped vampiric healing, missing `maxHealth` on enemies, and XP server event listener memory leak.
+**v0.6.7** — README accuracy pass: corrected weapon count (26→30), evolution count (10→11), added architecture diagram, Technical Highlights section, all 11 evolution recipes, deploy badge.
 
-**v0.6.5** — Portfolio-grade README documenting all game systems: Rebirth prestige, Run Modifiers, Shrines, Mid-Wave Events, Map biomes, Weapon Evolution recipes.
+**v0.6.6** — Fixed split enemy health, uncapped vampiric healing, missing `maxHealth`, XP server event listener memory leak.
 
-**v0.6.4** — Added 36 RebirthManager unit tests. 102 total tests.
+**v0.6.5** — Portfolio-grade README documenting all game systems.
 
 See [CHANGELOG.md](./CHANGELOG.md) for full version history.
 

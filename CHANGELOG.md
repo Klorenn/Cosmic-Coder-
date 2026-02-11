@@ -2,6 +2,17 @@
 
 All notable changes to Vibe Coder will be documented in this file.
 
+## [0.6.7] - 2026-02-11
+
+### Changed
+- **README accuracy pass** — Corrected weapon count from 26 to 30 (16 base + 11 evolved + 3 legendary), evolution count from 10 to 11, quote count from "80+" to "95+"
+- **Architecture diagram** — Added ASCII pipeline diagram showing real-time XP flow from dev tools through WebSocket to game engine
+- **Technical Highlights section** — New table showcasing engineering decisions: zero-asset procedural generation, spatial hashing, real-time XP pipeline, procedural maps, and test coverage
+- **Full evolution table** — Expanded from 5 shown + "discover more" to all 11 recipes with Special column
+- **Deploy badge** — Added GitHub Actions deploy workflow status badge to shield row
+
+---
+
 ## [0.6.6] - 2026-02-11
 
 ### Fixed
