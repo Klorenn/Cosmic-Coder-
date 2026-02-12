@@ -1399,7 +1399,7 @@ export default class ArenaScene extends Phaser.Scene {
         fontSize: isBossWave ? '28px' : '32px',
         color: waveColor,
         fontStyle: 'bold'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setScrollFactor(0);
 
       this.tweens.add({
         targets: waveAnnounce,
@@ -1466,7 +1466,7 @@ export default class ArenaScene extends Phaser.Scene {
       align: 'center',
       stroke: '#000000',
       strokeThickness: 4
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: bossAnnounce,
@@ -1522,6 +1522,7 @@ export default class ArenaScene extends Phaser.Scene {
     const spawnPool = this.buildSpawnPool(this.waveNumber);
 
     const type = Phaser.Utils.Array.GetRandom(spawnPool);
+    if (!type) return;
     const typeData = this.enemyTypes[type];
     const textureName = typeData.texture || type;
 
@@ -1684,7 +1685,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 3
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: miniBossAnnounce,
@@ -1894,7 +1895,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontSize: '16px',
       color: isPlaying ? '#00ff00' : '#ff6666',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: statusText,
@@ -2256,7 +2257,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontSize: '28px',
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: restartText,
@@ -2762,7 +2763,7 @@ export default class ArenaScene extends Phaser.Scene {
       align: 'center',
       stroke: '#000000',
       strokeThickness: 5
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: rmrfText,
@@ -2814,7 +2815,7 @@ export default class ArenaScene extends Phaser.Scene {
         fontFamily: 'monospace',
         fontSize: '18px',
         color: '#ff6666'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setScrollFactor(0);
 
       this.tweens.add({
         targets: killText,
@@ -2839,7 +2840,7 @@ export default class ArenaScene extends Phaser.Scene {
       align: 'center',
       stroke: '#000000',
       strokeThickness: 4
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: sudoText,
@@ -2963,7 +2964,7 @@ export default class ArenaScene extends Phaser.Scene {
       align: 'center',
       stroke: '#000000',
       strokeThickness: 5
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: evoText,
@@ -3005,7 +3006,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 3
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: magnetText,
@@ -3174,7 +3175,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 4
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     this.tweens.add({
       targets: equipText,
@@ -3269,7 +3270,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 6
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     const nameText = this.add.text(400, 250, weapon.name, {
       fontFamily: 'monospace',
@@ -3278,7 +3279,7 @@ export default class ArenaScene extends Phaser.Scene {
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 4
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     const descText = this.add.text(400, 290, weapon.desc, {
       fontFamily: 'monospace',
@@ -3286,14 +3287,14 @@ export default class ArenaScene extends Phaser.Scene {
       color: '#ffffff',
       stroke: '#000000',
       strokeThickness: 2
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     const equipText = this.add.text(400, 330, 'PERMANENTLY UNLOCKED!', {
       fontFamily: 'monospace',
       fontSize: '16px',
       color: '#ffff00',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setScrollFactor(0);
 
     // Spawn the weapon sprite at drop location
     const textureKey = `legendary-${key}`;
@@ -3685,7 +3686,7 @@ export default class ArenaScene extends Phaser.Scene {
         color: isNewHighWave ? '#ffd700' : '#00ffff',
         fontStyle: 'bold',
         align: 'center'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setScrollFactor(0);
 
       this.tweens.add({
         targets: respawnText,

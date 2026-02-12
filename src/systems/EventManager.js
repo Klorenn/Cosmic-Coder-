@@ -337,7 +337,7 @@ export default class EventManager {
     if (this.eventTimerBar && this.activeEvent) {
       const totalDuration = this.activeEvent.duration;
       const remaining = this.eventEndTime - time;
-      const progress = remaining / totalDuration;
+      const progress = Math.max(0, Math.min(1, remaining / totalDuration));
       this.eventTimerBar.setScale(progress, 1);
     }
   }

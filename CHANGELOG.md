@@ -2,6 +2,15 @@
 
 All notable changes to Vibe Coder will be documented in this file.
 
+## [0.7.2] - 2026-02-12
+
+### Fixed
+- **15 announcement texts invisible off-camera** — Wave complete, boss spawn, mini-boss, weapon evolution, legendary weapon, rm-rf, sudo mode, XP magnet, music toggle, game restart, and respawn texts were placed at world coordinates without `setScrollFactor(0)`, making them invisible when the player was away from the top-left corner of the 2400x1800 map
+- **Event timer bar negative/overflow scale** — `EventManager` timer bar could scale below 0 or above 1 on edge cases where `remaining` exceeded `totalDuration` or went negative, causing visual glitches. Now clamped to [0, 1]
+- **Empty spawn pool crash guard** — `spawnEnemy()` could crash with `TypeError` on `undefined` access if `buildSpawnPool()` ever returned an empty array (defensive guard added)
+
+---
+
 ## [0.7.1] - 2026-02-12
 
 ### Changed
