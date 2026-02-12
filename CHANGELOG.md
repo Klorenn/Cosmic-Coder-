@@ -2,6 +2,29 @@
 
 All notable changes to Vibe Coder will be documented in this file.
 
+## [0.7.5] - 2026-02-12
+
+### Added
+- **31 ShrineManager unit tests** — New test suite covering shrine system data integrity and logic:
+  - `SHRINES` — 5 shrine definitions with required fields, unique ids/names, valid hex colors
+  - `Shrine specifics` — POWER cost/buff values, GAMBLE free entry, XP cost/levelup, SHIELD weapon-for-invincibility trade, CHAOS health-for-random-effect
+  - `GAMBLE_OUTCOMES` — 5 outcomes, weight distribution sums to 100, NOTHING most common, JACKPOT rarest
+  - `CHAOS_EFFECTS` — 6 effects with unique keys, includes SPAWN BOSS (dangerous) and INVINCIBILITY (beneficial)
+  - `canPayCost logic` — free/null always payable, health threshold check, XP sufficiency check
+  - `getBuffMultiplier` — returns 1 with no buff, correct multiplier when active, 1 for unrelated type
+  - `Constructor defaults` — shrines array, activeBuffs, shrinesPerMap, interactRadius
+- **19 SaveManager persistence tests** — Expanded test coverage from time formatting to full save/load lifecycle:
+  - `saveRun` — success return, correct key, timestamp/version, wave/stage/player preservation, Set-to-array conversion, QuotaExceededError handling
+  - `loadRun` — null for missing save, valid data round-trip, 24h expiry enforcement, corrupted JSON recovery, auto-cleanup of expired saves
+  - `hasSave` — false when empty, true after save
+  - `clearSave` — removes from storage, hasSave returns false after
+  - `getSaveSummary` — null when empty, summary fields, "just now" for fresh saves
+
+### Changed
+- **Test count** — 143 → 193 total unit tests across 7 test suites
+
+---
+
 ## [0.7.4] - 2026-02-12
 
 ### Added
