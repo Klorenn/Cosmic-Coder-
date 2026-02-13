@@ -1544,9 +1544,8 @@ export default class TitleScene extends Phaser.Scene {
       );
     }
 
-    const boxTop = cy - boxH / 2;
-    const startY = boxTop + 72;
-    const spacing = (isElectron ? 40 : 42) * uiScale;
+    const spacingBase = isElectron ? 40 : 42;
+    const spacing = spacingBase * uiScale;
     const settingTexts = [];
 
     // Cache for async values
@@ -1567,6 +1566,12 @@ export default class TitleScene extends Phaser.Scene {
       }
       return setting.getValue?.();
     };
+
+    // Calcula la zona vertical donde va la lista de settings,
+    // centrada dentro del cuadro, dejando hueco para el título y los hints.
+    const contentCount = settingsData.length;
+    const contentHeight = contentCount * spacing;
+    const listTop = cy - contentHeight / 2 + 20 * uiScale;
 
     const renderSettings = () => {
       settingsData.forEach((setting, index) => {
@@ -1589,7 +1594,7 @@ export default class TitleScene extends Phaser.Scene {
 
         const isDivider = setting.type === 'divider';
         const label = setting.labelKey ? t(setting.labelKey) : setting.label;
-        const text = this.add.text(cx, startY + index * spacing,
+        const text = this.add.text(cx, listTop + index * spacing,
           isDivider ? label : `${label}\n${valueStr}`, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: isDivider ? `${12 * uiScale}px` : `${14 * uiScale}px`,
@@ -1606,15 +1611,15 @@ export default class TitleScene extends Phaser.Scene {
     initAsyncValues().then(() => renderSettings());
 
     // Selector (dentro del recuadro)
-    const selector = this.add.text(cx - 260, startY, '>', {
+    const selector = this.add.text(cx - 220 * uiScale, listTop, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${18 * uiScale}px`,
       color: '#ffff00'
     }).setOrigin(0.5).setDepth(1002);
 
     // Instrucciones y cerrar (dentro del recuadro, con margen al borde)
-    const helpY = cy + boxH / 2 - 52;
-    const closeY = cy + boxH / 2 - 26;
+    const helpY = listTop + contentHeight + 18 * uiScale;
+    const closeY = helpY + 20 * uiScale;
     const helpText = this.add.text(cx, helpY, t('prompt.up_down_adjust'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${11 * uiScale}px`,
@@ -1660,7 +1665,7 @@ export default class TitleScene extends Phaser.Scene {
         item.text.setText(isDivider ? lbl : `${lbl}\n${valueStr}`);
         item.text.setColor(isDivider ? '#666666' : (index === this.settingsSelectedIndex ? '#00ffff' : '#888888'));
       });
-      selector.setY(startY + this.settingsSelectedIndex * spacing);
+      selector.setY(listTop + this.settingsSelectedIndex * spacing);
       // Hide selector on dividers
       const currentSetting = settingsData[this.settingsSelectedIndex];
       selector.setVisible(currentSetting?.type !== 'divider');
