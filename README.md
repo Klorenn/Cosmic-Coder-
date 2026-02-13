@@ -189,4 +189,15 @@ cosmic-coder/
 
 ---
 
+## 📤 Deploy / Despliegue (GitHub Pages)
+
+El juego se despliega automáticamente en **GitHub Pages** al hacer push a la rama `main`.  
+**The game deploys automatically to GitHub Pages on push to `main`.**
+
+- **Workflow**: [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) — build con `npm run build` y publicación en Pages.
+- **URL**: `https://<tu-usuario>.github.io/vibe-coder/` (o la configurada en el repo).
+- Asegúrate de tener **GitHub Pages** activado en el repo (Settings → Pages → Source: GitHub Actions).
+
+---
+
 **Code to Conquer! / ¡Programa para conquistar!** 🚀🪐

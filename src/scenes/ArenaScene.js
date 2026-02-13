@@ -33,12 +33,12 @@ export default class ArenaScene extends Phaser.Scene {
     this.cursors = null;
     this.wasd = null;
 
-    // Player stats (scale with level) - BUFFED for idle gameplay
+    // Player stats (scale with level) - daño moderado para que las olas altas cuesten más
     this.baseStats = {
       speed: 200,
-      attackRate: 300, // ms between attacks (faster!)
-      attackDamage: 25, // hits harder
-      maxHealth: 200   // chonky boi
+      attackRate: 300, // ms between attacks
+      attackDamage: 16, // un poco menos para alargar combate en olas altas
+      maxHealth: 200
     };
 
     // Invincibility after hit
@@ -792,7 +792,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     const baseSpeed = this.baseStats.speed + (level * 8);
     const baseAttackRate = Math.max(100, this.baseStats.attackRate - (level * 15));
-    const baseDamage = this.baseStats.attackDamage + (level * 5);
+    const baseDamage = this.baseStats.attackDamage + (level * 3); // menos escalado para no one-shot en olas altas
     const baseHealth = this.baseStats.maxHealth + (level * 20);
 
     return {
@@ -1412,6 +1412,14 @@ export default class ArenaScene extends Phaser.Scene {
       // Auto-save at wave completion
       this.autoSaveRun();
 
+      // Save progress to leaderboard (so wave 13 etc. shows even if player hasn't died yet)
+      const state = window.VIBE_CODER;
+      const settings = window.VIBE_SETTINGS || {};
+      LeaderboardManager.addEntry(settings.playerName, this.waveNumber, state.totalXP);
+      stellarWallet.getAddress().then((addr) => {
+        if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP).catch(() => {});
+      });
+
       // Check for rebirth milestone
       const rebirthMilestone = RebirthManager.canRebirth(this.waveNumber);
       if (rebirthMilestone && !this.rebirthPromptShown) {
@@ -1560,7 +1568,9 @@ export default class ArenaScene extends Phaser.Scene {
     const textureName = typeData.texture || type;
 
     const enemy = this.enemies.create(x, y, textureName);
-    enemy.health = Math.floor(typeData.health * healthScale);
+    // Vida base por nivel + extra por oleada para que en olas altas tarden más en morir
+    const waveHealthMult = 1 + (this.waveNumber - 1) * 0.05; // wave 10 ≈ 1.45x, wave 20 ≈ 1.95x
+    enemy.health = Math.floor(typeData.health * healthScale * waveHealthMult);
     enemy.maxHealth = enemy.health;
     // Apply event speed modifier (e.g., CURSE event)
     const speedMod = this.eventEnemySpeedMod || 1;
@@ -1571,8 +1581,9 @@ export default class ArenaScene extends Phaser.Scene {
     enemy.xpValue = typeData.xpValue;
     enemy.enemyType = type;
     enemy.behavior = typeData.behavior;
-    // Werewolf (bug) sprite 128px → más grande en pantalla (~58px)
-    if (type === 'bug') enemy.setScale(0.45);
+    // Tamaño enemigos: un poco más grandes (bug 128px; resto escala base 1.15)
+    const enemyScale = type === 'bug' ? 0.58 : 1.15;
+    enemy.setScale(enemyScale);
 
     // Play enemy animation based on type
     const animKey = this.getEnemyAnimKey(type);
@@ -2437,13 +2448,18 @@ export default class ArenaScene extends Phaser.Scene {
     this.rebirthPromptShown = true;
     this.isPaused = true;
 
-    // Create overlay
-    const overlay = this.add.rectangle(400, 300, 800, 600, 0x000000, 0.8)
+    // Centrado en pantalla (cualquier resolución)
+    const cx = this.scale.width / 2;
+    const cy = this.scale.height / 2;
+
+    // Overlay a pantalla completa centrado
+    const overlay = this.add.rectangle(cx, cy, this.scale.width, this.scale.height, 0x000000, 0.8)
+      .setOrigin(0.5)
       .setScrollFactor(0)
       .setDepth(1000);
 
     // Title
-    const title = this.add.text(400, 150, t('game.rebirth_available'), {
+    const title = this.add.text(cx, cy - 150, t('game.rebirth_available'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#ffd700',
@@ -2451,7 +2467,7 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     // Milestone info
-    const milestoneText = this.add.text(400, 200, `${t('game.rebirth_wave')} ${milestone.wave}!`, {
+    const milestoneText = this.add.text(cx, cy - 100, `${t('game.rebirth_wave')} ${milestone.wave}!`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '18px',
       color: '#ffffff'
@@ -2459,7 +2475,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Rank name
     const rankName = milestone.name ? t('rebirth.' + milestone.name.replace(/ /g, '_')) : milestone.name;
-    const rankText = this.add.text(400, 235, `${t('game.rebirth_unlock')}: ${rankName}`, {
+    const rankText = this.add.text(cx, cy - 65, `${t('game.rebirth_unlock')}: ${rankName}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#00ff00',
@@ -2467,7 +2483,6 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     // Current rebirth info
-    const currentInfo = RebirthManager.getRebirthInfo();
     const newBonus = (milestone.rebirth * 5); // 5% per rebirth level
 
     // Bonuses explanation
@@ -2480,7 +2495,7 @@ export default class ArenaScene extends Phaser.Scene {
       'Warning: Rebirthing resets your current run!'
     ];
 
-    const bonusText = this.add.text(400, 320, bonusLines.join('\n'), {
+    const bonusText = this.add.text(cx, cy + 20, bonusLines.join('\n'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: '#cccccc',
@@ -2488,14 +2503,14 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     // Buttons
-    const rebirthBtn = this.add.text(300, 450, t('game.rebirth_btn'), {
+    const rebirthBtn = this.add.text(cx - 100, cy + 150, t('game.rebirth_btn'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#00ff00',
       fontStyle: 'bold'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001).setInteractive();
 
-    const continueBtn = this.add.text(500, 450, t('game.continue_btn'), {
+    const continueBtn = this.add.text(cx + 100, cy + 150, t('game.continue_btn'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#ffff00',
@@ -2514,9 +2529,11 @@ export default class ArenaScene extends Phaser.Scene {
       elements.forEach(el => el.destroy());
       this.isPaused = false;
 
-      // Show rebirth complete message and return to title
+      // Show rebirth complete message and return to title (centrado)
       const rebornRankName = milestone.name ? t('rebirth.' + milestone.name.replace(/ /g, '_')) : milestone.name;
-      const completeText = this.add.text(400, 300, `${t('game.reborn_as')}: ${rebornRankName}`, {
+      const cex = this.scale.width / 2;
+      const cey = this.scale.height / 2;
+      const completeText = this.add.text(cex, cey, `${t('game.reborn_as')}: ${rebornRankName}`, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '24px',
         color: '#ffd700',
@@ -3462,7 +3479,7 @@ export default class ArenaScene extends Phaser.Scene {
           splitEnemy.enemyType = 'git-conflict';
           splitEnemy.behavior = 'split';
           splitEnemy.canSplit = false; // Can't split again
-          splitEnemy.setScale(0.7);
+          splitEnemy.setScale(0.85);
           splitEnemy.setTint(i === 0 ? 0xff6600 : 0x0066ff);
           // Flash effect
           const splitText = this.add.text(splitEnemy.x, splitEnemy.y - 15, 'MERGE CONFLICT!', {
@@ -4083,7 +4100,7 @@ export default class ArenaScene extends Phaser.Scene {
             minion.xpValue = 3;
             minion.enemyType = 'bug';
             minion.behavior = 'chase';
-            minion.setScale(0.45); // Werewolf minion mismo tamaño que los demás
+            minion.setScale(0.58); // Werewolf minion mismo tamaño que los bug normales
             minion.setTint(0x6622aa); // Tinted to match parent
             minion.play('bug-walk');
             // Spawn effect

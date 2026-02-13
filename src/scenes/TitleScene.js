@@ -1269,8 +1269,8 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   updateMenuVisuals() {
-    const startY = 228;
-    const spacing = 38;
+    const startY = this.menuStartY ?? this.scale.height * 0.42;
+    const spacing = this.menuSpacing ?? 40 * getUIScale(this);
 
     this.menuTexts.forEach((text, index) => {
       if (index === this.selectedOption) {
@@ -1282,7 +1282,7 @@ export default class TitleScene extends Phaser.Scene {
       }
     });
 
-    // Move selector
+    // Move selector to match selected menu item
     this.selector.setY(startY + this.selectedOption * spacing);
   }
 
