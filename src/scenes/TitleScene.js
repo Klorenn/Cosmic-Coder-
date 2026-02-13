@@ -1476,6 +1476,7 @@ export default class TitleScene extends Phaser.Scene {
     const isElectron = window.electronAPI?.isElectron;
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
+    const uiScale = getUIScale(this);
 
     // Fondo a pantalla completa para que solo se vea el recuadro (sin título/menú detrás)
     const backdrop = this.add.rectangle(cx, cy, 800, 600, 0x0a0a12, 0.97);
@@ -1489,7 +1490,7 @@ export default class TitleScene extends Phaser.Scene {
     const titleY = cy - boxH / 2 + 38;
     const title = this.add.text(cx, titleY, t('settings.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
+      fontSize: `${28 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
@@ -1543,9 +1544,9 @@ export default class TitleScene extends Phaser.Scene {
       );
     }
 
-    const boxTop = 300 - boxH / 2;
+    const boxTop = cy - boxH / 2;
     const startY = boxTop + 72;
-    const spacing = isElectron ? 40 : 42;
+    const spacing = (isElectron ? 40 : 42) * uiScale;
     const settingTexts = [];
 
     // Cache for async values
@@ -1588,10 +1589,10 @@ export default class TitleScene extends Phaser.Scene {
 
         const isDivider = setting.type === 'divider';
         const label = setting.labelKey ? t(setting.labelKey) : setting.label;
-        const text = this.add.text(400, startY + index * spacing,
+        const text = this.add.text(cx, startY + index * spacing,
           isDivider ? label : `${label}\n${valueStr}`, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: isDivider ? '12px' : '14px',
+          fontSize: isDivider ? `${12 * uiScale}px` : `${14 * uiScale}px`,
           color: isDivider ? '#666666' : (index === 0 ? '#00ffff' : '#888888'),
           align: 'center',
           lineSpacing: 4
@@ -1605,24 +1606,24 @@ export default class TitleScene extends Phaser.Scene {
     initAsyncValues().then(() => renderSettings());
 
     // Selector (dentro del recuadro)
-    const selector = this.add.text(400 - 260, startY, '>', {
+    const selector = this.add.text(cx - 260, startY, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '18px',
+      fontSize: `${18 * uiScale}px`,
       color: '#ffff00'
     }).setOrigin(0.5).setDepth(1002);
 
     // Instrucciones y cerrar (dentro del recuadro, con margen al borde)
-    const helpY = 300 + boxH / 2 - 52;
-    const closeY = 300 + boxH / 2 - 26;
-    const helpText = this.add.text(400, helpY, t('prompt.up_down_adjust'), {
+    const helpY = cy + boxH / 2 - 52;
+    const closeY = cy + boxH / 2 - 26;
+    const helpText = this.add.text(cx, helpY, t('prompt.up_down_adjust'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '11px',
+      fontSize: `${11 * uiScale}px`,
       color: '#888888'
     }).setOrigin(0.5).setDepth(1002);
 
-    const closeHint = this.add.text(400, closeY, t('prompt.esc_close'), {
+    const closeHint = this.add.text(cx, closeY, t('prompt.esc_close'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
+      fontSize: `${12 * uiScale}px`,
       color: '#aaaaaa'
     }).setOrigin(0.5).setDepth(1002);
 
