@@ -18,6 +18,8 @@ export default class TitleScene extends Phaser.Scene {
     this.isMusicOn = false;
     this.settingsMenuOpen = false;
     this.hasSavedGame = false;
+    this.menuStartY = 0;
+    this.menuSpacing = 0;
     this.gitQuoteTimer = null;
   }
 
@@ -197,6 +199,8 @@ export default class TitleScene extends Phaser.Scene {
     // Menú centrado bajo el título, con spacing proporcional
     const startY = h * 0.42;              // ~252px en 600
     const spacing = 40 * uiScale;         // un poco más grande en pantallas grandes
+    this.menuStartY = startY;
+    this.menuSpacing = spacing;
 
     this.menuOptions.forEach((option, index) => {
       const text = this.add.text(cx, startY + index * spacing, t('menu.' + option), {
@@ -444,7 +448,13 @@ export default class TitleScene extends Phaser.Scene {
     const w = this.scale.width || 800;
     const h = this.scale.height || 600;
     const playerX = w * 0.12;
-    const playerY = h * 0.82;
+
+    // Alinear verticalmente al botón de CONTROLES (última opción del menú)
+    const controlsIndex = this.menuOptions.indexOf('CONTROLS');
+    const baseY = this.menuStartY || (h * 0.42);
+    const spacing = this.menuSpacing || (40 * uiScale);
+    const controlsY = controlsIndex >= 0 ? baseY + controlsIndex * spacing : h * 0.8;
+    const playerY = controlsY;
 
     // Player character (CraftPix robot - 128px sprites), anclado abajo-izquierda
     this.idlePlayer = this.add.sprite(playerX, playerY, 'player');
@@ -458,7 +468,7 @@ export default class TitleScene extends Phaser.Scene {
       fontSize: `${11 * uiScale}px`,
       color: '#000000',
       align: 'center',
-      wordWrap: { width: 140 }
+      wordWrap: { width: 170 * uiScale }
     }).setOrigin(0.5);
     this.speechBubble.setVisible(false);
     this.speechText.setVisible(false);
@@ -865,18 +875,20 @@ export default class TitleScene extends Phaser.Scene {
       this.speechTimer.remove();
     }
 
+    const uiScale = getUIScale(this);
+
     // Position bubble above player
     const bubbleX = this.idlePlayer.x;
-    const bubbleY = this.idlePlayer.y - 50;
+    const bubbleY = this.idlePlayer.y - 80 * uiScale;
 
     // Draw speech bubble
     this.speechBubble.clear();
     this.speechBubble.fillStyle(0xffffff, 0.95);
     this.speechBubble.lineStyle(2, 0x00ffff, 1);
 
-    // Bubble shape
-    const bubbleWidth = 150;
-    const bubbleHeight = 45;
+    // Bubble shape (más alto/ancho para 2 líneas de texto)
+    const bubbleWidth = 190 * uiScale;
+    const bubbleHeight = 65 * uiScale;
     this.speechBubble.fillRoundedRect(
       bubbleX - bubbleWidth/2,
       bubbleY - bubbleHeight/2,
@@ -894,12 +906,12 @@ export default class TitleScene extends Phaser.Scene {
 
     // Little triangle pointer
     this.speechBubble.fillTriangle(
-      bubbleX - 8, bubbleY + bubbleHeight/2,
-      bubbleX + 8, bubbleY + bubbleHeight/2,
-      bubbleX, bubbleY + bubbleHeight/2 + 10
+      bubbleX - 8 * uiScale, bubbleY + bubbleHeight/2,
+      bubbleX + 8 * uiScale, bubbleY + bubbleHeight/2,
+      bubbleX, bubbleY + bubbleHeight/2 + 10 * uiScale
     );
     this.speechBubble.lineStyle(2, 0x00ffff, 1);
-    this.speechBubble.lineBetween(bubbleX - 8, bubbleY + bubbleHeight/2, bubbleX, bubbleY + bubbleHeight/2 + 10);
+    this.speechBubble.lineBetween(bubbleX - 8 * uiScale, bubbleY + bubbleHeight/2, bubbleX, bubbleY + bubbleHeight/2 + 10 * uiScale);
     this.speechBubble.lineBetween(bubbleX + 8, bubbleY + bubbleHeight/2, bubbleX, bubbleY + bubbleHeight/2 + 10);
 
     // Set text
