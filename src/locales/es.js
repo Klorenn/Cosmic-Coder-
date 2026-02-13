@@ -4,7 +4,7 @@
 export default {
   title: 'CODIFICADOR CÓSMICO',
   subtitle: 'PROGRAMA PARA CONQUISTAR',
-  version: 'v1.0',
+  version: 'V1 ZKGaming',
   menu: {
     CONTINUE: 'CONTINUAR',
     START_GAME: 'EMPEZAR PARTIDA',

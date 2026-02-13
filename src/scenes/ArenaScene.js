@@ -6,7 +6,7 @@ import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import MapManager from '../systems/MapManager.js';
 import TouchControls from '../systems/TouchControls.js';
-import { getUIScale } from '../utils/layout.js';
+import { getUIScale, getCameraZoom } from '../utils/layout.js';
 import RunModifiers from '../systems/RunModifiers.js';
 import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
@@ -290,6 +290,9 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, this.worldWidth, this.worldHeight);
     this.cameras.main.startFollow(this.player, true, 0.08, 0.08);
     this.cameras.main.setDeadzone(100, 100);
+    // Zoom dinámico: en ventanas "bajas" acercamos la cámara para que
+    // personaje, enemigos y HUD no se vean diminutos.
+    this.cameras.main.setZoom(getCameraZoom(this));
 
     // Create enemy group
     this.enemies = this.physics.add.group();
@@ -1952,6 +1955,10 @@ export default class ArenaScene extends Phaser.Scene {
     this.isPaused = true;
     this.pauseSelectedOption = 0;
 
+    const cx = this.scale.width / 2;
+    const cy = this.scale.height / 2;
+    const uiScale = this.uiScale || 1;
+
     // Pause physics
     this.physics.pause();
 
@@ -1963,18 +1970,18 @@ export default class ArenaScene extends Phaser.Scene {
     if (this.waveTimer) this.waveTimer.paused = true;
 
     // Create pause menu container (fixed to camera)
-    this.pauseMenu = this.add.container(400, 300);
+    this.pauseMenu = this.add.container(cx, cy);
     this.pauseMenu.setDepth(1000);
     this.pauseMenu.setScrollFactor(0);
 
-    // Dim overlay
-    const overlay = this.add.rectangle(0, 0, 800, 600, 0x000000, 0.8);
+    // Dim overlay (cubre toda la pantalla actual)
+    const overlay = this.add.rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.8);
     this.pauseMenu.add(overlay);
 
     // Pause title
     const pauseTitle = this.add.text(0, -150, t('hud.paused'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '48px',
+      fontSize: `${48 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold',
       stroke: '#003333',
@@ -1985,7 +1992,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Wave info
     const waveInfo = this.add.text(0, -90, `WAVE ${this.waveNumber} // KILLS: ${window.VIBE_CODER.kills}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '14px',
+      fontSize: `${14 * uiScale}px`,
       color: '#888888'
     }).setOrigin(0.5);
     this.pauseMenu.add(waveInfo);
@@ -1995,9 +2002,9 @@ export default class ArenaScene extends Phaser.Scene {
     this.pauseMenuTexts = [];
 
     this.pauseMenuOptions.forEach((option, index) => {
-      const text = this.add.text(0, -30 + index * 40, option, {
+      const text = this.add.text(0, -30 + index * 40 * uiScale, option, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '20px',
+        fontSize: `${20 * uiScale}px`,
         color: index === 0 ? '#00ffff' : '#666666',
         fontStyle: index === 0 ? 'bold' : 'normal'
       }).setOrigin(0.5);
@@ -2006,9 +2013,9 @@ export default class ArenaScene extends Phaser.Scene {
     });
 
     // Selector
-    this.pauseSelector = this.add.text(-100, -30, '>', {
+    this.pauseSelector = this.add.text(-140 * uiScale, -30, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '20px',
+      fontSize: `${20 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
@@ -2024,9 +2031,9 @@ export default class ArenaScene extends Phaser.Scene {
     });
 
     // Control hint
-    const hint = this.add.text(0, 150, t('hud.select_confirm'), {
+    const hint = this.add.text(0, 150 * uiScale, t('hud.select_confirm'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
+      fontSize: `${10 * uiScale}px`,
       color: '#666666'
     }).setOrigin(0.5);
     this.pauseMenu.add(hint);
@@ -2059,7 +2066,8 @@ export default class ArenaScene extends Phaser.Scene {
     });
 
     // Move selector
-    this.pauseSelector.setY(-30 + this.pauseSelectedOption * 40);
+    const uiScale = this.uiScale || 1;
+    this.pauseSelector.setY(-30 + this.pauseSelectedOption * 40 * uiScale);
 
     // Sound - respect SFX setting
     if (window.VIBE_SETTINGS?.sfxEnabled) {

@@ -7,7 +7,7 @@ import { isConnected } from '../utils/socket.js';
 import { t, setLanguage } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
 import * as gameClient from '../contracts/gameClient.js';
-import { getUIScale, anchorTopLeft, anchorTopRight, anchorBottomLeft, anchorBottomRight, anchorBottomCenter } from '../utils/layout.js';
+import { getUIScale, getCameraZoom, anchorTopLeft, anchorTopRight, anchorBottomLeft, anchorBottomRight, anchorBottomCenter } from '../utils/layout.js';
 
 export default class TitleScene extends Phaser.Scene {
   constructor() {
@@ -40,6 +40,10 @@ export default class TitleScene extends Phaser.Scene {
 
     // Create animated background
     this.createBackground();
+
+    // Zoom de cámara: en ventanas con poca altura acercamos ligeramente
+    // todo el título para que texto y personaje no se vean tan pequeños.
+    this.cameras.main.setZoom(getCameraZoom(this));
 
     // Create title
     this.createTitle();
@@ -437,9 +441,13 @@ export default class TitleScene extends Phaser.Scene {
     });
 
     const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const playerX = w * 0.12;
+    const playerY = h * 0.82;
 
-    // Player character (CraftPix robot - 128px sprites)
-    this.idlePlayer = this.add.sprite(150, 500, 'player');
+    // Player character (CraftPix robot - 128px sprites), anclado abajo-izquierda
+    this.idlePlayer = this.add.sprite(playerX, playerY, 'player');
     this.idlePlayer.setScale(1.4 * uiScale); // Más grande en pantallas grandes
     this.idlePlayer.play('player-idle');
 
@@ -592,7 +600,7 @@ export default class TitleScene extends Phaser.Scene {
 
     // Git / build phrases (EN + ES)
     this.gitQuotesEn = [
-      "Build on Stellar.",
+      "BuildOnStellar",
       "git commit -m \"gg ez\"",
       "Push successful.\nVictory pushed to main.",
       "Merge conflict? Nah.\nSkill issue.",
@@ -606,7 +614,7 @@ export default class TitleScene extends Phaser.Scene {
     ];
 
     this.gitQuotesEs = [
-      "Construye sobre Stellar.",
+      "BuildOnStellar",
       "git commit -m \"gg ez\"",
       "Push exitoso.\nLa victoria llegó a main.",
       "¿Conflicto de merge? Nah.\nFalta de skill.",
@@ -1026,13 +1034,17 @@ export default class TitleScene extends Phaser.Scene {
     // Don't spawn if menus are open
     if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen) return;
 
-    // Spawn from right side of screen
-    const x = 850;
-    const y = Phaser.Math.Between(420, 550);
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+
+    // Spawn from right side of screen, cruzando la banda del menú
+    const x = w + 80;
+    const y = Phaser.Math.Between(h * 0.45, h * 0.75);
 
     // Create enemy sprite (use bug texture)
     const enemy = this.add.sprite(x, y, 'bug');
-    enemy.setScale(0.5); // Werewolf 128px → ~64px on title demo
+    enemy.setScale(0.85 * uiScale); // Werewolf más grande y visible en el menú
     enemy.play('bug-walk');
     enemy.setAlpha(0.8);
     enemy.health = 1;

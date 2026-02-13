@@ -5,7 +5,7 @@ export default {
   // Title & menu
   title: 'COSMIC CODER',
   subtitle: 'CODE TO CONQUER',
-  version: 'v1.0',
+  version: 'V1 ZKGaming',
   menu: {
     CONTINUE: 'CONTINUE',
     START_GAME: 'START GAME',
