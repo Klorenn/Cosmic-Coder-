@@ -2,13 +2,17 @@ import Phaser from 'phaser';
 import * as Audio from '../utils/audio.js';
 import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
+import LeaderboardManager from '../systems/LeaderboardManager.js';
 import { isConnected } from '../utils/socket.js';
+import { t, setLanguage } from '../utils/i18n.js';
+import * as stellarWallet from '../utils/stellarWallet.js';
+import * as gameClient from '../contracts/gameClient.js';
 
 export default class TitleScene extends Phaser.Scene {
   constructor() {
     super({ key: 'TitleScene' });
     this.selectedOption = 0;
-    this.baseMenuOptions = ['START GAME', 'UPGRADES', 'WEAPONS', 'SETTINGS', 'CONTROLS'];
+    this.baseMenuOptions = ['START_GAME', 'UPGRADES', 'WEAPONS', 'LEADERBOARD', 'SETTINGS', 'CONTROLS'];
     this.menuOptions = [...this.baseMenuOptions];
     this.isMusicOn = false;
     this.settingsMenuOpen = false;
@@ -16,20 +20,18 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   create() {
-    // Initialize audio on first interaction
-    this.input.once('pointerdown', () => {
+    // Initialize audio on first interaction (no auto fullscreen)
+    const onFirstInteraction = () => {
       Audio.initAudio();
       Audio.resumeAudio();
-    });
-    this.input.keyboard.once('keydown', () => {
-      Audio.initAudio();
-      Audio.resumeAudio();
-    });
+    };
+    this.input.once('pointerdown', onFirstInteraction);
+    this.input.keyboard.once('keydown', onFirstInteraction);
 
     // Check for saved game and update menu options
     this.hasSavedGame = SaveManager.hasSave();
     if (this.hasSavedGame) {
-      this.menuOptions = ['CONTINUE', ...this.baseMenuOptions];
+      this.menuOptions = ['CONTINUE', ...this.baseMenuOptions]; // keys for i18n
     } else {
       this.menuOptions = [...this.baseMenuOptions];
     }
@@ -101,14 +103,14 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   createTitle() {
-    // Main title with glitch effect
-    this.titleText = this.add.text(400, 120, 'VIBE CODER', {
-      fontFamily: 'monospace',
-      fontSize: '72px',
+    // Título principal: tamaño moderado para que se lea bien y no se vea pixelado
+    this.titleText = this.add.text(400, 100, t('title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '48px',
       color: '#00ffff',
       fontStyle: 'bold',
       stroke: '#003333',
-      strokeThickness: 8
+      strokeThickness: 6
     }).setOrigin(0.5);
 
     // Glitch effect on title
@@ -119,16 +121,16 @@ export default class TitleScene extends Phaser.Scene {
     });
 
     // Subtitle
-    this.add.text(400, 180, 'CODE TO CONQUER', {
-      fontFamily: 'monospace',
-      fontSize: '18px',
+    this.add.text(400, 155, t('subtitle'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '16px',
       color: '#ff00ff'
     }).setOrigin(0.5);
 
     // Animated underline
     const underline = this.add.graphics();
     underline.lineStyle(2, 0x00ffff, 0.8);
-    underline.lineBetween(200, 200, 600, 200);
+    underline.lineBetween(200, 178, 600, 178);
 
     this.tweens.add({
       targets: underline,
@@ -139,8 +141,8 @@ export default class TitleScene extends Phaser.Scene {
     });
 
     // Version
-    this.add.text(400, 215, 'v1.0 // POWERED BY CLAUDE CODE', {
-      fontFamily: 'monospace',
+    this.add.text(400, 198, t('version'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#666666'
     }).setOrigin(0.5);
@@ -167,13 +169,13 @@ export default class TitleScene extends Phaser.Scene {
 
   createMenu() {
     this.menuTexts = [];
-    const startY = 300;
-    const spacing = 50;
+    const startY = 228;
+    const spacing = 38;
 
     this.menuOptions.forEach((option, index) => {
-      const text = this.add.text(400, startY + index * spacing, option, {
-        fontFamily: 'monospace',
-        fontSize: '24px',
+      const text = this.add.text(400, startY + index * spacing, t('menu.' + option), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: '22px',
         color: index === 0 ? '#00ffff' : '#666666',
         fontStyle: index === 0 ? 'bold' : 'normal'
       }).setOrigin(0.5);
@@ -182,9 +184,9 @@ export default class TitleScene extends Phaser.Scene {
     });
 
     // Selection indicator
-    this.selector = this.add.text(280, startY, '>', {
-      fontFamily: 'monospace',
-      fontSize: '24px',
+    this.selector = this.add.text(260, startY, '>', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '22px',
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
@@ -198,10 +200,11 @@ export default class TitleScene extends Phaser.Scene {
       repeat: -1
     });
 
-    // Prompt text
-    this.promptText = this.add.text(400, 480, '[ PRESS ENTER TO SELECT // ARROWS TO NAVIGATE ]', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
+    // Instrucciones bien debajo del último ítem del menú, sin solapar
+    const lastOptionY = startY + (this.menuOptions.length - 1) * spacing;
+    this.promptText = this.add.text(400, lastOptionY + 42, t('prompt.enter_select'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '11px',
       color: '#888888'
     }).setOrigin(0.5);
 
@@ -215,26 +218,38 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   createFooter() {
-    // High score display
+    // Ola máxima y BITS en esquinas inferiores, separados para que no se solapen
     const highWave = localStorage.getItem('vibeCoderHighWave') || '0';
-    this.add.text(300, 540, `HIGH WAVE: ${highWave}`, {
-      fontFamily: 'monospace',
-      fontSize: '14px',
+    this.add.text(140, 558, `${t('footer.high_wave')}: ${highWave}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '13px',
       color: '#ffd700'
-    }).setOrigin(0.5);
+    }).setOrigin(0, 0.5);
 
-    // Currency display
     const currency = window.VIBE_UPGRADES?.currency || 0;
-    this.add.text(500, 540, `BITS: ${currency}`, {
-      fontFamily: 'monospace',
-      fontSize: '14px',
+    this.add.text(660, 558, `${t('footer.bits')}: ${currency}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '13px',
       color: '#00ffff'
-    }).setOrigin(0.5);
+    }).setOrigin(1, 0.5);
+
+    // Fullscreen button (top left)
+    this.fullscreenBtn = this.add.text(20, 20, this.isFullscreen() ? t('footer.fullscreen_exit') : t('footer.fullscreen'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '12px',
+      color: '#00aaff'
+    }).setOrigin(0, 0).setInteractive({ useHandCursor: true });
+    this.fullscreenBtn.on('pointerdown', () => this.toggleFullscreen());
+    this.fullscreenBtn.on('pointerover', () => this.fullscreenBtn.setColor('#00ffff'));
+    this.fullscreenBtn.on('pointerout', () => this.fullscreenBtn.setColor('#00aaff'));
+    document.addEventListener('fullscreenchange', this.onFullscreenChange = () => this.updateFullscreenButton());
+
+    // Wallet: botón oficial del kit en #buttonWrapper (creado en main.js con createKitButton)
 
     // Connection status badge (top right corner)
     const connected = isConnected();
-    this.connectionBadge = this.add.text(780, 20, connected ? '● LIVE' : '○ OFFLINE', {
-      fontFamily: 'monospace',
+    this.connectionBadge = this.add.text(780, 20, connected ? t('footer.live') : t('footer.offline'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: connected ? '#00ff00' : '#ff6666'
     }).setOrigin(1, 0);
@@ -251,12 +266,38 @@ export default class TitleScene extends Phaser.Scene {
       });
     }
 
-    // Credits
-    this.add.text(400, 570, 'A VAMPIRE SURVIVORS-STYLE IDLE GAME', {
-      fontFamily: 'monospace',
+    // Credits (centrado, debajo de high wave / bits)
+    this.add.text(400, 582, t('footer.tagline'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#444444'
     }).setOrigin(0.5);
+  }
+
+  isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement);
+  }
+
+  toggleFullscreen() {
+    if (this.isFullscreen()) {
+      if (document.exitFullscreen) document.exitFullscreen();
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    } else {
+      const el = document.documentElement;
+      if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    }
+  }
+
+  updateFullscreenButton() {
+    if (this.fullscreenBtn && !this.fullscreenBtn.scene) return;
+    if (this.fullscreenBtn) {
+      this.fullscreenBtn.setText(this.isFullscreen() ? t('footer.fullscreen_exit') : t('footer.fullscreen'));
+    }
+  }
+
+  shutdown() {
+    document.removeEventListener('fullscreenchange', this.onFullscreenChange);
   }
 
   createCodeParticles() {
@@ -269,7 +310,7 @@ export default class TitleScene extends Phaser.Scene {
       const y = Phaser.Math.Between(250, 550);
 
       const particle = this.add.text(x, y, symbol, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: Phaser.Math.Between(10, 16) + 'px',
         color: '#00ffff'
       }).setAlpha(Phaser.Math.FloatBetween(0.1, 0.3));
@@ -298,14 +339,14 @@ export default class TitleScene extends Phaser.Scene {
 
   createIdleCharacter() {
     // Floating Warglaive decoration in bottom right
-    this.warglaiveDecor = this.add.sprite(680, 480, 'legendary-huntersWarglaive');
-    this.warglaiveDecor.setScale(3); // Scaled up since sprite is now 32x32
+    this.warglaiveDecor = this.add.sprite(720, 510, 'legendary-huntersWarglaive');
+    this.warglaiveDecor.setScale(2);
     this.warglaiveDecor.setAlpha(0.95);
 
     // Gentle floating animation - no rotation, just hovering
     this.tweens.add({
       targets: this.warglaiveDecor,
-      y: 470,
+      y: 500,
       duration: 2500,
       yoyo: true,
       repeat: -1,
@@ -322,15 +363,15 @@ export default class TitleScene extends Phaser.Scene {
       ease: 'Sine.easeInOut'
     });
 
-    // Player character
+    // Player character (CraftPix robot - 128px sprites)
     this.idlePlayer = this.add.sprite(150, 500, 'player');
-    this.idlePlayer.setScale(2);
+    this.idlePlayer.setScale(1); // Robot 128px a tamaño completo en título
     this.idlePlayer.play('player-idle');
 
     // Speech bubble (hidden initially)
     this.speechBubble = this.add.graphics();
     this.speechText = this.add.text(0, 0, '', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '11px',
       color: '#000000',
       align: 'center',
@@ -342,7 +383,7 @@ export default class TitleScene extends Phaser.Scene {
     // Thinking bubble (shows coding activity)
     this.thinkingBubble = this.add.graphics();
     this.thinkingDots = this.add.text(0, 0, '...', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: '#00ffff',
       fontStyle: 'bold'
@@ -528,7 +569,7 @@ export default class TitleScene extends Phaser.Scene {
     this.xpConnectedHandler = () => {
       // Update connection badge
       if (this.connectionBadge) {
-        this.connectionBadge.setText('● LIVE');
+        this.connectionBadge.setText(t('footer.live'));
         this.connectionBadge.setColor('#00ff00');
         // Add pulsing animation
         this.tweens.add({
@@ -550,7 +591,7 @@ export default class TitleScene extends Phaser.Scene {
       // Update connection badge
       if (this.connectionBadge) {
         this.tweens.killTweensOf(this.connectionBadge);
-        this.connectionBadge.setText('○ OFFLINE');
+        this.connectionBadge.setText(t('footer.offline'));
         this.connectionBadge.setColor('#ff6666');
         this.connectionBadge.setAlpha(1);
       }
@@ -886,7 +927,7 @@ export default class TitleScene extends Phaser.Scene {
 
     // Create enemy sprite (use bug texture)
     const enemy = this.add.sprite(x, y, 'bug');
-    enemy.setScale(1.5);
+    enemy.setScale(0.5); // Werewolf 128px → ~64px on title demo
     enemy.play('bug-walk');
     enemy.setAlpha(0.8);
     enemy.health = 1;
@@ -1032,7 +1073,7 @@ export default class TitleScene extends Phaser.Scene {
 
     // XP text
     const xpText = this.add.text(x, y - 10, '+5 XP', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#00ff00'
     }).setOrigin(0.5);
@@ -1103,8 +1144,8 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   updateMenuVisuals() {
-    const startY = 300;
-    const spacing = 50;
+    const startY = 228;
+    const spacing = 38;
 
     this.menuTexts.forEach((text, index) => {
       if (index === this.selectedOption) {
@@ -1135,15 +1176,26 @@ export default class TitleScene extends Phaser.Scene {
         });
         break;
 
-      case 'START GAME':
+      case 'START_GAME': {
         Audio.playLevelUp();
-        this.cameras.main.fade(500, 0, 0, 0);
-        this.time.delayedCall(500, () => {
-          window.VIBE_CODER.reset();
-          SaveManager.clearSave(); // Clear any existing save for fresh start
-          this.scene.start('ArenaScene', { continueGame: false });
-        });
+        window.VIBE_CODER.reset();
+        SaveManager.clearSave();
+        (async () => {
+          if (stellarWallet.isConnected() && gameClient.isContractConfigured()) {
+            try {
+              const addr = await stellarWallet.getAddress();
+              await gameClient.startMatch(addr, (xdr) => stellarWallet.signTransaction(xdr));
+            } catch (e) {
+              console.warn('On-chain start_match failed:', e);
+            }
+          }
+          this.cameras.main.fade(500, 0, 0, 0);
+          this.time.delayedCall(500, () => {
+            this.scene.start('ArenaScene', { continueGame: false });
+          });
+        })();
         break;
+      }
 
       case 'UPGRADES':
         this.showUpgrades();
@@ -1157,10 +1209,86 @@ export default class TitleScene extends Phaser.Scene {
         this.showSettings();
         break;
 
+      case 'LEADERBOARD':
+        this.showLeaderboard();
+        break;
+
       case 'CONTROLS':
         this.showControls();
         break;
     }
+  }
+
+  async showLeaderboard() {
+    const container = this.add.container(0, 0);
+    const overlay = this.add.rectangle(400, 300, 620, 480, 0x000000, 0.95);
+    overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setInteractive({ useHandCursor: true });
+    container.add(overlay);
+
+    const title = this.add.text(400, 50, t('leaderboard.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '28px',
+      color: '#ffd700',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(title);
+
+    const headerY = 100;
+    container.add(this.add.text(80, headerY, '#', { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
+    container.add(this.add.text(200, headerY, t('leaderboard.name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
+    container.add(this.add.text(420, headerY, t('leaderboard.wave'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
+    container.add(this.add.text(520, headerY, t('leaderboard.score'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
+
+    const walletConnected = stellarWallet.isConnected();
+    const top = walletConnected
+      ? await LeaderboardManager.fetchOnChain()
+      : LeaderboardManager.getTop(10);
+    const lineHeight = 36;
+    const startY = 140;
+
+    if (top.length === 0) {
+      const msg = walletConnected ? t('leaderboard.empty') : t('leaderboard.connect_hint');
+      container.add(this.add.text(400, 260, msg, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: walletConnected ? 16 : 12,
+        color: '#888888',
+        align: 'center'
+      }).setOrigin(0.5));
+    } else {
+      top.forEach((entry, i) => {
+        const y = startY + i * lineHeight;
+        const medalColor = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#aaaaaa';
+        container.add(this.add.text(80, y, `${entry.rank}.`, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: medalColor }));
+        container.add(this.add.text(200, y, (entry.name || '').slice(0, 18), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#ffffff' }));
+        container.add(this.add.text(420, y, String(entry.wave), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ff88' }));
+        container.add(this.add.text(520, y, String(entry.score), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#ffff00' }));
+      });
+      if (!walletConnected) {
+        container.add(this.add.text(400, 400, t('leaderboard.connect_hint'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: '11px',
+          color: '#666666',
+          align: 'center'
+        }).setOrigin(0.5));
+      }
+    }
+
+    const closeText = this.add.text(400, 450, t('leaderboard.back'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '12px',
+      color: '#888888'
+    }).setOrigin(0.5);
+    container.add(closeText);
+
+    const close = () => {
+      container.destroy();
+      this.input.keyboard.off('keydown', close);
+      this.input.off('pointerdown', close);
+    };
+
+    overlay.on('pointerdown', close);
+    this.input.keyboard.once('keydown', close);
   }
 
   showControls() {
@@ -1168,23 +1296,23 @@ export default class TitleScene extends Phaser.Scene {
     const overlay = this.add.rectangle(400, 300, 600, 400, 0x000000, 0.9);
     overlay.setStrokeStyle(2, 0x00ffff);
 
-    const controlsTitle = this.add.text(400, 150, 'CONTROLS', {
-      fontFamily: 'monospace',
+    const controlsTitle = this.add.text(400, 150, t('controls.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
 
     const controls = [
-      'WASD / ARROWS - Move',
-      'SPACE - Manual XP (when offline)',
-      'M - Toggle Music',
-      'ESC / P - Pause Game',
+      t('controls.wasd'),
+      t('controls.space'),
+      t('controls.m'),
+      t('controls.esc_p'),
       '',
-      'AUTO-ATTACK is always active!',
-      'Collect weapons to power up!',
+      t('controls.auto_attack'),
+      t('controls.collect'),
       '',
-      'Connect XP server for LIVE mode:',
+      t('controls.connect'),
       'npm run server'
     ];
 
@@ -1192,15 +1320,15 @@ export default class TitleScene extends Phaser.Scene {
     const controlTexts = [];
     controls.forEach((line, index) => {
       const text = this.add.text(400, 200 + index * 25, line, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '14px',
         color: line.includes('npm') ? '#ffff00' : '#ffffff'
       }).setOrigin(0.5);
       controlTexts.push(text);
     });
 
-    const closeText = this.add.text(400, 480, '[ PRESS ANY KEY OR CLICK TO CLOSE ]', {
-      fontFamily: 'monospace',
+    const closeText = this.add.text(400, 480, t('prompt.any_key_close'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#888888'
     }).setOrigin(0.5);
@@ -1225,42 +1353,62 @@ export default class TitleScene extends Phaser.Scene {
     const settings = window.VIBE_SETTINGS;
     const isElectron = window.electronAPI?.isElectron;
 
-    const overlay = this.add.rectangle(400, 300, 600, isElectron ? 520 : 450, 0x000000, 0.95);
-    overlay.setStrokeStyle(2, 0x00ffff);
+    // Fondo a pantalla completa para que solo se vea el recuadro (sin título/menú detrás)
+    const backdrop = this.add.rectangle(400, 300, 800, 600, 0x0a0a12, 0.97);
+    backdrop.setDepth(1000);
 
-    const title = this.add.text(400, isElectron ? 50 : 80, 'SETTINGS', {
-      fontFamily: 'monospace',
+    const boxH = isElectron ? 500 : 420;
+    const overlay = this.add.rectangle(400, 300, 560, boxH, 0x0a0a14, 0.98);
+    overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setDepth(1001);
+
+    const titleY = 300 - boxH / 2 + 38;
+    const title = this.add.text(400, titleY, t('settings.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Settings options
+    // Settings options (labels translated via t() at render time via labelKey)
     const settingsData = [
-      { key: 'music', label: 'MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); }},
-      { key: 'sfx', label: 'SOUND FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },
-      { key: 'autoMove', label: 'AUTO-MOVE', type: 'toggle', getValue: () => settings.autoMove, toggle: () => settings.toggle('autoMove') },
-      { key: 'immortalMode', label: 'IMMORTAL MODE', type: 'toggle', getValue: () => settings.immortalMode, toggle: () => settings.toggle('immortalMode') },
-      { key: 'masterVol', label: 'MASTER VOL', type: 'slider', getValue: () => settings.masterVolume, setValue: (v) => settings.setVolume('master', v) },
-      { key: 'playerName', label: 'NAME', type: 'input', getValue: () => settings.playerName || '[NOT SET]', setValue: (v) => settings.setPlayerName(v) }
+      { key: 'music', labelKey: 'settings.MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); }},
+      { key: 'sfx', labelKey: 'settings.SOUND_FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },
+      { key: 'autoMove', labelKey: 'settings.AUTO_MOVE', type: 'toggle', getValue: () => settings.autoMove, toggle: () => settings.toggle('autoMove') },
+      { key: 'immortalMode', labelKey: 'settings.IMMORTAL_MODE', type: 'toggle', getValue: () => settings.immortalMode, toggle: () => settings.toggle('immortalMode') },
+      { key: 'masterVol', labelKey: 'settings.MASTER_VOL', type: 'slider', getValue: () => settings.masterVolume, setValue: (v) => settings.setVolume('master', v) },
+      { key: 'playerName', labelKey: 'settings.NAME', type: 'input', getValue: () => settings.playerName || t('settings.NOT_SET'), setValue: (v) => settings.setPlayerName(v) },
+      {
+        key: 'language',
+        labelKey: 'settings.LANGUAGE',
+        type: 'select',
+        options: ['en', 'es'],
+        optionLabels: [t('settings.lang_en'), t('settings.lang_es')],
+        getValue: () => settings.language || 'en',
+        setValue: (v) => {
+          if (!setLanguage(v)) return;
+          this.settingsMenuOpen = false;
+          this.scene.start('TitleScene');
+        }
+      }
     ];
 
     // Add Electron-specific settings when running in desktop app
     if (isElectron) {
       settingsData.push(
-        { key: 'divider1', label: '── DESKTOP APP ──', type: 'divider' },
+        { key: 'divider1', labelKey: 'settings.DESKTOP_APP', type: 'divider' },
         {
           key: 'windowMode',
-          label: 'WINDOW MODE',
+          labelKey: 'settings.WINDOW_MODE',
           type: 'select',
           options: ['floating', 'cornerSnap', 'desktopWidget', 'miniHud'],
-          optionLabels: ['Floating', 'Corner Snap', 'Desktop Widget', 'Mini HUD'],
+          optionLabels: [t('settings.windowMode_floating'), t('settings.windowMode_cornerSnap'), t('settings.windowMode_desktopWidget'), t('settings.windowMode_miniHud')],
           getValue: async () => await window.electronAPI.getSetting('windowMode') || 'floating',
           setValue: (v) => window.electronAPI.setSetting('windowMode', v)
         },
         {
           key: 'alwaysOnTop',
-          label: 'ALWAYS ON TOP',
+          labelKey: 'settings.ALWAYS_ON_TOP',
           type: 'toggle',
           getValue: async () => await window.electronAPI.getSetting('alwaysOnTop') || false,
           toggle: async () => {
@@ -1271,8 +1419,9 @@ export default class TitleScene extends Phaser.Scene {
       );
     }
 
-    const startY = isElectron ? 100 : 140;
-    const spacing = isElectron ? 48 : 55;
+    const boxTop = 300 - boxH / 2;
+    const startY = boxTop + 72;
+    const spacing = isElectron ? 40 : 42;
     const settingTexts = [];
 
     // Cache for async values
@@ -1300,7 +1449,7 @@ export default class TitleScene extends Phaser.Scene {
         if (setting.type === 'divider') {
           valueStr = '';
         } else if (setting.type === 'toggle') {
-          valueStr = getSettingValue(setting) ? '[ON]' : '[OFF]';
+          valueStr = getSettingValue(setting) ? t('settings.on') : t('settings.off');
         } else if (setting.type === 'slider') {
           const val = Math.round(getSettingValue(setting) * 100);
           const bars = Math.round(val / 10);
@@ -1314,14 +1463,15 @@ export default class TitleScene extends Phaser.Scene {
         }
 
         const isDivider = setting.type === 'divider';
+        const label = setting.labelKey ? t(setting.labelKey) : setting.label;
         const text = this.add.text(400, startY + index * spacing,
-          isDivider ? setting.label : `${setting.label}\n${valueStr}`, {
-          fontFamily: 'monospace',
+          isDivider ? label : `${label}\n${valueStr}`, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: isDivider ? '12px' : '14px',
           color: isDivider ? '#666666' : (index === 0 ? '#00ffff' : '#888888'),
           align: 'center',
           lineSpacing: 4
-        }).setOrigin(0.5);
+        }).setOrigin(0.5).setDepth(1002);
 
         settingTexts.push({ text, setting, index });
       });
@@ -1330,25 +1480,27 @@ export default class TitleScene extends Phaser.Scene {
     // Initialize and render
     initAsyncValues().then(() => renderSettings());
 
-    // Selector
-    const selector = this.add.text(200, startY, '>', {
-      fontFamily: 'monospace',
+    // Selector (dentro del recuadro)
+    const selector = this.add.text(400 - 260, startY, '>', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '18px',
       color: '#ffff00'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Help text
-    const helpText = this.add.text(400, 420, 'UP/DOWN: Select | LEFT/RIGHT: Adjust | ENTER: Toggle/Edit', {
-      fontFamily: 'monospace',
+    // Instrucciones y cerrar (dentro del recuadro, con margen al borde)
+    const helpY = 300 + boxH / 2 - 52;
+    const closeY = 300 + boxH / 2 - 26;
+    const helpText = this.add.text(400, helpY, t('prompt.up_down_adjust'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '11px',
-      color: '#666666'
-    }).setOrigin(0.5);
-
-    const closeHint = this.add.text(400, 450, '[ ESC TO CLOSE ]', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
       color: '#888888'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
+
+    const closeHint = this.add.text(400, closeY, t('prompt.esc_close'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '12px',
+      color: '#aaaaaa'
+    }).setOrigin(0.5).setDepth(1002);
 
     // Update visuals
     const updateVisuals = async () => {
@@ -1366,7 +1518,7 @@ export default class TitleScene extends Phaser.Scene {
         if (isDivider) {
           valueStr = '';
         } else if (item.setting.type === 'toggle') {
-          valueStr = getSettingValue(item.setting) ? '[ON]' : '[OFF]';
+          valueStr = getSettingValue(item.setting) ? t('settings.on') : t('settings.off');
         } else if (item.setting.type === 'slider') {
           const val = Math.round(getSettingValue(item.setting) * 100);
           const bars = Math.round(val / 10);
@@ -1379,7 +1531,8 @@ export default class TitleScene extends Phaser.Scene {
           valueStr = `< ${item.setting.optionLabels[optionIndex] || currentVal} >`;
         }
 
-        item.text.setText(isDivider ? item.setting.label : `${item.setting.label}\n${valueStr}`);
+        const lbl = item.setting.labelKey ? t(item.setting.labelKey) : item.setting.label;
+        item.text.setText(isDivider ? lbl : `${lbl}\n${valueStr}`);
         item.text.setColor(isDivider ? '#666666' : (index === this.settingsSelectedIndex ? '#00ffff' : '#888888'));
       });
       selector.setY(startY + this.settingsSelectedIndex * spacing);
@@ -1457,8 +1610,7 @@ export default class TitleScene extends Phaser.Scene {
           // Settings will be saved by showNameInput
         });
       } else if (item.type === 'select') {
-        // Cycle to next option on enter
-        adjustRight();
+        // No hacer nada en Enter: el valor ya se aplicó al usar flechas
       }
     };
 
@@ -1475,6 +1627,7 @@ export default class TitleScene extends Phaser.Scene {
       this.input.keyboard.off('keydown-SPACE', select);
       this.input.keyboard.off('keydown-ESC', close);
 
+      backdrop.destroy();
       overlay.destroy();
       title.destroy();
       selector.destroy();
@@ -1507,16 +1660,16 @@ export default class TitleScene extends Phaser.Scene {
     overlay.setStrokeStyle(2, 0x00ffff);
 
     // Title
-    const title = this.add.text(400, 190, isFirstTime ? 'ENTER YOUR NAME' : 'CHANGE NAME', {
-      fontFamily: 'monospace',
+    const title = this.add.text(400, 190, isFirstTime ? t('name_input.enter_name') : t('name_input.change_name'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
 
     // Subtitle for first time
-    const subtitle = isFirstTime ? this.add.text(400, 225, 'Welcome, coder!', {
-      fontFamily: 'monospace',
+    const subtitle = isFirstTime ? this.add.text(400, 225, t('name_input.welcome'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: '#888888'
     }).setOrigin(0.5) : null;
@@ -1527,7 +1680,7 @@ export default class TitleScene extends Phaser.Scene {
 
     // Name text
     const nameText = this.add.text(400, 290, '_', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#ffffff'
     }).setOrigin(0.5);
@@ -1545,20 +1698,20 @@ export default class TitleScene extends Phaser.Scene {
 
     // Character counter
     const counterText = this.add.text(580, 330, `0/${maxLength}`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#666666'
     }).setOrigin(1, 0);
 
     // Help text
-    const helpText = this.add.text(400, 380, 'TYPE YOUR NAME | BACKSPACE TO DELETE | ENTER TO CONFIRM', {
-      fontFamily: 'monospace',
+    const helpText = this.add.text(400, 380, t('prompt.name_help'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#666666'
     }).setOrigin(0.5);
 
-    const skipText = !isFirstTime ? this.add.text(400, 410, '[ ESC TO CANCEL ]', {
-      fontFamily: 'monospace',
+    const skipText = !isFirstTime ? this.add.text(400, 410, t('prompt.esc_cancel'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '11px',
       color: '#888888'
     }).setOrigin(0.5) : null;
@@ -1645,16 +1798,16 @@ export default class TitleScene extends Phaser.Scene {
     const overlay = this.add.rectangle(400, 300, 700, 500, 0x000000, 0.95);
     overlay.setStrokeStyle(2, 0x00ffff);
 
-    const title = this.add.text(400, 80, 'UPGRADES', {
-      fontFamily: 'monospace',
+    const title = this.add.text(400, 80, t('upgrades.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
 
     // Currency display
-    const currencyText = this.add.text(400, 115, `BITS: ${window.VIBE_UPGRADES.currency}`, {
-      fontFamily: 'monospace',
+    const currencyText = this.add.text(400, 115, `${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: '#ffd700'
     }).setOrigin(0.5);
@@ -1672,12 +1825,14 @@ export default class TitleScene extends Phaser.Scene {
       const maxed = level >= upgrade.maxLevel;
 
       const levelBar = '█'.repeat(level) + '░'.repeat(upgrade.maxLevel - level);
-      const costStr = maxed ? 'MAXED' : `${cost} BITS`;
+      const costStr = maxed ? t('upgrades.maxed') : `${cost} ${t('upgrades.bits')}`;
       const canAfford = window.VIBE_UPGRADES.currency >= cost && !maxed;
+      const name = t('upgrade_names.' + key);
+      const desc = t('upgrade_descs.' + key);
 
       const text = this.add.text(400, startY + index * spacing,
-        `${upgrade.name} [${levelBar}]\n${upgrade.desc}\nCost: ${costStr}`, {
-        fontFamily: 'monospace',
+        `${name} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '12px',
         color: index === 0 ? '#00ffff' : '#888888',
         align: 'center',
@@ -1693,15 +1848,15 @@ export default class TitleScene extends Phaser.Scene {
 
     // Selector
     const selector = this.add.text(120, startY, '>', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: '#00ffff',
       fontStyle: 'bold'
     });
 
     // Instructions
-    const instructions = this.add.text(400, 530, '[ UP/DOWN: Select | ENTER: Purchase | ESC: Close ]', {
-      fontFamily: 'monospace',
+    const instructions = this.add.text(400, 530, t('prompt.up_down_purchase'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '11px',
       color: '#666666'
     }).setOrigin(0.5);
@@ -1717,9 +1872,11 @@ export default class TitleScene extends Phaser.Scene {
         item.maxed = maxed;
 
         const levelBar = '█'.repeat(level) + '░'.repeat(upgrade.maxLevel - level);
-        const costStr = maxed ? 'MAXED' : `${cost} BITS`;
+        const costStr = maxed ? t('upgrades.maxed') : `${cost} ${t('upgrades.bits')}`;
+        const name = t('upgrade_names.' + item.key);
+        const desc = t('upgrade_descs.' + item.key);
 
-        item.text.setText(`${upgrade.name} [${levelBar}]\n${upgrade.desc}\nCost: ${costStr}`);
+        item.text.setText(`${name} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`);
 
         if (index === this.upgradeSelectedIndex) {
           item.text.setColor(item.canAfford || maxed ? '#00ffff' : '#ff6666');
@@ -1729,7 +1886,7 @@ export default class TitleScene extends Phaser.Scene {
       });
 
       selector.setY(startY + this.upgradeSelectedIndex * spacing);
-      currencyText.setText(`BITS: ${window.VIBE_UPGRADES.currency}`);
+      currencyText.setText(`${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`);
     };
 
     // Input handlers
@@ -1803,8 +1960,8 @@ export default class TitleScene extends Phaser.Scene {
     const overlay = this.add.rectangle(400, 300, 750, 550, 0x000000, 0.95);
     overlay.setStrokeStyle(2, 0x00ffff);
 
-    const title = this.add.text(400, 40, 'WEAPON GALLERY', {
-      fontFamily: 'monospace',
+    const title = this.add.text(400, 40, t('weapons.gallery'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#00ffff',
       fontStyle: 'bold'
@@ -1817,8 +1974,8 @@ export default class TitleScene extends Phaser.Scene {
     const tabSpacing = 180;
 
     tabs.forEach((tab, index) => {
-      const tabText = this.add.text(tabStartX + index * tabSpacing, 75, tab, {
-        fontFamily: 'monospace',
+      const tabText = this.add.text(tabStartX + index * tabSpacing, 75, t('weapons.' + tab), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '14px',
         color: index === 0 ? '#ffd700' : '#666666',
         fontStyle: index === 0 ? 'bold' : 'normal'
@@ -1888,7 +2045,7 @@ export default class TitleScene extends Phaser.Scene {
         } else {
           // Lock icon
           const lock = this.add.text(boxX, boxY, '?', {
-            fontFamily: 'monospace',
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '32px',
             color: '#333333'
           }).setOrigin(0.5);
@@ -1898,7 +2055,7 @@ export default class TitleScene extends Phaser.Scene {
         // Weapon name
         const nameColor = equipped ? '#ffd700' : (unlocked ? '#ffffff' : '#444444');
         const name = this.add.text(220, boxY - 20, unlocked ? weapon.name : '???', {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '16px',
           color: nameColor,
           fontStyle: equipped ? 'bold' : 'normal'
@@ -1906,8 +2063,8 @@ export default class TitleScene extends Phaser.Scene {
         contentElements.push(name);
 
         // Description
-        const desc = this.add.text(220, boxY, unlocked ? weapon.desc : 'Locked - Find in game (0.01% drop)', {
-          fontFamily: 'monospace',
+        const desc = this.add.text(220, boxY, unlocked ? weapon.desc : t('weapons.locked'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '11px',
           color: unlocked ? '#888888' : '#444444'
         });
@@ -1916,15 +2073,15 @@ export default class TitleScene extends Phaser.Scene {
         // Stats or status
         if (unlocked) {
           const stats = this.add.text(220, boxY + 18, `DMG: ${weapon.damage} | RADIUS: ${weapon.radius} | COUNT: ${weapon.orbitalCount}`, {
-            fontFamily: 'monospace',
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '10px',
             color: '#666666'
           });
           contentElements.push(stats);
 
           // Equip button
-          const equipBtn = this.add.text(620, boxY, equipped ? '[EQUIPPED]' : '[EQUIP]', {
-            fontFamily: 'monospace',
+          const equipBtn = this.add.text(620, boxY, equipped ? t('weapons.equipped') : t('weapons.equip'), {
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '12px',
             color: equipped ? '#ffd700' : '#00ffff',
             fontStyle: 'bold'
@@ -1943,8 +2100,8 @@ export default class TitleScene extends Phaser.Scene {
           });
           contentElements.push(equipBtn);
         } else {
-          const dropRate = this.add.text(620, boxY, `${(weapon.dropRate * 100).toFixed(2)}% DROP`, {
-            fontFamily: 'monospace',
+          const dropRate = this.add.text(620, boxY, `${(weapon.dropRate * 100).toFixed(2)}${t('weapons.drop')}`, {
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '10px',
             color: '#ff6666'
           }).setOrigin(0.5);
@@ -1953,8 +2110,8 @@ export default class TitleScene extends Phaser.Scene {
       });
 
       // Info text
-      const info = this.add.text(400, 520, 'Legendary weapons persist forever once unlocked!', {
-        fontFamily: 'monospace',
+      const info = this.add.text(400, 520, t('weapons.legendary_info'), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '11px',
         color: '#ffd700'
       }).setOrigin(0.5);
@@ -1986,7 +2143,7 @@ export default class TitleScene extends Phaser.Scene {
 
         // Weapon name
         const name = this.add.text(220, boxY - 15, weapon.name, {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '16px',
           color: '#ffffff'
         });
@@ -1994,7 +2151,7 @@ export default class TitleScene extends Phaser.Scene {
 
         // Stats
         const stats = this.add.text(220, boxY + 5, `DMG: ${weapon.damage} | RATE: ${weapon.attackRate} | RANGE: ${weapon.range}`, {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '11px',
           color: '#888888'
         });
@@ -2002,7 +2159,7 @@ export default class TitleScene extends Phaser.Scene {
 
         // Type
         const typeText = this.add.text(620, boxY, weapon.type.toUpperCase(), {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '12px',
           color: Phaser.Display.Color.IntegerToColor(weapon.color).rgba
         }).setOrigin(0.5);
@@ -2011,7 +2168,7 @@ export default class TitleScene extends Phaser.Scene {
 
       // Info text
       const info = this.add.text(400, 520, 'Melee weapons have 15% drop chance from enemies', {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '11px',
         color: '#00ffff'
       }).setOrigin(0.5);
@@ -2023,7 +2180,7 @@ export default class TitleScene extends Phaser.Scene {
 
       // Base weapons
       const baseTitle = this.add.text(100, 110, 'BASE WEAPONS', {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '14px',
         color: '#00ffff',
         fontStyle: 'bold'
@@ -2040,14 +2197,14 @@ export default class TitleScene extends Phaser.Scene {
         const itemY = y + row * 35;
 
         const text = this.add.text(x, itemY, `${weapon.name}`, {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '12px',
           color: weapon.color
         });
         contentElements.push(text);
 
         const desc = this.add.text(x + 120, itemY, weapon.desc.substring(0, 30), {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '10px',
           color: '#666666'
         });
@@ -2056,7 +2213,7 @@ export default class TitleScene extends Phaser.Scene {
 
       // Evolved weapons
       const evolvedTitle = this.add.text(100, 310, 'EVOLVED WEAPONS (Combine 2 weapons!)', {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '14px',
         color: '#ff00ff',
         fontStyle: 'bold'
@@ -2073,14 +2230,14 @@ export default class TitleScene extends Phaser.Scene {
         const itemY = y + row * 32;
 
         const text = this.add.text(x, itemY, `${weapon.name}`, {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '11px',
           color: weapon.color
         });
         contentElements.push(text);
 
         const desc = this.add.text(x + 130, itemY, weapon.desc.substring(0, 28), {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '9px',
           color: '#555555'
         });
@@ -2089,7 +2246,7 @@ export default class TitleScene extends Phaser.Scene {
 
       // Info text
       const info = this.add.text(400, 520, 'Ranged weapons drop from enemies during gameplay', {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '11px',
         color: '#00ffff'
       }).setOrigin(0.5);
@@ -2129,7 +2286,7 @@ export default class TitleScene extends Phaser.Scene {
 
     // Instructions
     const instructions = this.add.text(400, 555, '[ LEFT/RIGHT: Switch Tab | ESC: Close ]', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '11px',
       color: '#666666'
     }).setOrigin(0.5);

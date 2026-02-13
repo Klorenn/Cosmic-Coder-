@@ -4,6 +4,13 @@ import { createServer } from 'http';
 
 const app = express();
 app.use(express.json());
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
@@ -118,6 +125,47 @@ app.post('/cli/:source', (req, res) => {
   res.json({ success: true, xp: xpAmount, source });
 });
 
+// Leaderboard (on-chain style: identity = Stellar address)
+const leaderboardEntries = [];
+const LEADERBOARD_MAX = 50;
+
+function leaderboardSort(a, b) {
+  if (b.score !== a.score) return b.score - a.score;
+  if (b.wave !== a.wave) return b.wave - a.wave;
+  return (b.date || 0) - (a.date || 0);
+}
+
+app.get('/leaderboard', (req, res) => {
+  const top = [...leaderboardEntries].sort(leaderboardSort).slice(0, 10);
+  res.json({ entries: top });
+});
+
+app.post('/leaderboard', (req, res) => {
+  const { address, wave, score } = req.body || {};
+  if (!address || typeof wave !== 'number' || typeof score !== 'number') {
+    return res.status(400).json({ error: 'address, wave, score required' });
+  }
+  const entry = {
+    address: String(address).slice(0, 56),
+    wave: Math.max(0, Math.floor(wave)),
+    score: Math.max(0, Math.floor(score)),
+    date: Date.now()
+  };
+  const existing = leaderboardEntries.findIndex((e) => e.address === entry.address);
+  if (existing >= 0) {
+    const prev = leaderboardEntries[existing];
+    if (entry.score <= prev.score && entry.wave <= prev.wave) {
+      return res.json({ success: true, entries: leaderboardEntries.sort(leaderboardSort).slice(0, 10) });
+    }
+    leaderboardEntries[existing] = entry;
+  } else {
+    leaderboardEntries.push(entry);
+  }
+  leaderboardEntries.sort(leaderboardSort);
+  if (leaderboardEntries.length > LEADERBOARD_MAX) leaderboardEntries.length = LEADERBOARD_MAX;
+  res.json({ success: true, entries: leaderboardEntries.slice(0, 10) });
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({
@@ -131,7 +179,7 @@ const PORT = 3333;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════╗
-║           VIBE CODER XP SERVER                    ║
+║           COSMIC CODER XP SERVER                  ║
 ║═══════════════════════════════════════════════════║
 ║  HTTP API:    http://localhost:${PORT}              ║
 ║  WebSocket:   ws://localhost:${PORT}                ║

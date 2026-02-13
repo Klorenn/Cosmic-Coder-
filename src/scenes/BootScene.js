@@ -11,7 +11,7 @@ export default class BootScene extends Phaser.Scene {
     const height = this.cameras.main.height;
 
     const loadingText = this.add.text(width / 2, height / 2 - 50, 'LOADING...', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#00ffff'
     }).setOrigin(0.5);
@@ -19,17 +19,24 @@ export default class BootScene extends Phaser.Scene {
     // Load the actual Hunter's Warglaive image (relative path for GitHub Pages)
     this.load.image('legendary-huntersWarglaive', './assets/hunters-warglaive.png');
 
-    // We'll generate textures in create() instead of loading sprite sheets
+    // Robot character sprites (CraftPix) - main player
+    this.load.spritesheet('robot-idle', './assets/sprites/player/robot-idle.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-walk', './assets/sprites/player/robot-walk.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-hurt', './assets/sprites/player/robot-hurt.png', { frameWidth: 128, frameHeight: 128 });
+
+    // Werewolf enemy (CraftPix) - replaces "bug" enemy
+    this.load.spritesheet('werewolf-run', './assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
+
+    // We'll generate other textures in create()
     this.time.delayedCall(500, () => {
       loadingText.destroy();
     });
   }
 
   create() {
-    // Generate all game textures programmatically
-    // Now with animation frames!
-    this.generatePlayerSpriteSheet();
-    this.generateBugSpriteSheet();
+    // Build main player from robot sprites (Idle + Walk combined into one sheet)
+    this.buildRobotPlayerTexture();
+    this.buildWerewolfBugTexture(); // Werewolf replaces procedural bug
     this.generateGlitchSpriteSheet();
     this.generateMemoryLeakSpriteSheet();
     this.generateSlashTexture();
@@ -114,37 +121,43 @@ export default class BootScene extends Phaser.Scene {
   }
 
   registerAnimations() {
-    // Player animations
+    // Player (robot) animations - combined sheet: frames 0-5 idle, 6-11 walk
     this.anims.create({
       key: 'player-idle',
-      frames: this.anims.generateFrameNumbers('player', { start: 0, end: 3 }),
-      frameRate: 6,
+      frames: this.anims.generateFrameNumbers('player', { start: 0, end: 5 }),
+      frameRate: 8,
       repeat: -1
     });
     this.anims.create({
       key: 'player-walk-down',
-      frames: this.anims.generateFrameNumbers('player', { start: 4, end: 7 }),
+      frames: this.anims.generateFrameNumbers('player', { start: 6, end: 11 }),
       frameRate: 10,
       repeat: -1
     });
     this.anims.create({
       key: 'player-walk-up',
-      frames: this.anims.generateFrameNumbers('player', { start: 8, end: 11 }),
+      frames: this.anims.generateFrameNumbers('player', { start: 6, end: 11 }),
       frameRate: 10,
       repeat: -1
     });
     this.anims.create({
       key: 'player-walk-side',
-      frames: this.anims.generateFrameNumbers('player', { start: 12, end: 15 }),
+      frames: this.anims.generateFrameNumbers('player', { start: 6, end: 11 }),
       frameRate: 10,
       repeat: -1
     });
+    this.anims.create({
+      key: 'player-hurt',
+      frames: this.anims.generateFrameNumbers('robot-hurt', { start: 0, end: 3 }),
+      frameRate: 12,
+      repeat: 0
+    });
 
-    // Bug enemy animations
+    // Bug enemy (werewolf sprite) - Run has 9 frames
     this.anims.create({
       key: 'bug-walk',
-      frames: this.anims.generateFrameNumbers('bug', { start: 0, end: 3 }),
-      frameRate: 8,
+      frames: this.anims.generateFrameNumbers('bug', { start: 0, end: 8 }),
+      frameRate: 10,
       repeat: -1
     });
 
@@ -189,154 +202,44 @@ export default class BootScene extends Phaser.Scene {
     });
   }
 
-  generatePlayerSpriteSheet() {
-    const size = 48;
-    const frames = 16; // 4 idle + 4 walk down + 4 walk up + 4 walk side
-    const g = this.make.graphics({ x: 0, y: 0, add: false });
+  /**
+   * Build main player texture from CraftPix robot sprites.
+   * Combines Idle (6 frames) + Walk (6 frames) into one 'player' sheet (12 frames, 128x128 each).
+   */
+  buildRobotPlayerTexture() {
+    const frameSize = 128;
+    const idleFrames = 6;
+    const walkFrames = 6;
+    const totalWidth = frameSize * (idleFrames + walkFrames); // 1536
 
-    // Draw all frames in a horizontal strip
-    for (let f = 0; f < frames; f++) {
-      const offsetX = f * size;
-      const cx = offsetX + size/2;
-      const cy = size/2;
+    const idleTex = this.textures.get('robot-idle');
+    const walkTex = this.textures.get('robot-walk');
+    const idleImg = idleTex.getSourceImage();
+    const walkImg = walkTex.getSourceImage();
 
-      // Animation variables
-      const isIdle = f < 4;
-      const isWalkDown = f >= 4 && f < 8;
-      const isWalkUp = f >= 8 && f < 12;
-      const isWalkSide = f >= 12;
-      const frameInAnim = f % 4;
+    const canvas = document.createElement('canvas');
+    canvas.width = totalWidth;
+    canvas.height = frameSize;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(idleImg, 0, 0);
+    ctx.drawImage(walkImg, frameSize * idleFrames, 0);
 
-      // Breathing/bobbing effect for idle
-      const breathOffset = isIdle ? Math.sin(frameInAnim * Math.PI / 2) * 2 : 0;
-      // Walking bob
-      const walkBob = !isIdle ? Math.sin(frameInAnim * Math.PI / 2) * 3 : 0;
-
-      // Outer glow (pulsing for idle)
-      const glowAlpha = isIdle ? 0.15 + Math.sin(frameInAnim * Math.PI / 2) * 0.1 : 0.2;
-      g.fillStyle(0x00ffff, glowAlpha);
-      g.fillCircle(cx, cy, size/2);
-
-      // Body (dark purple)
-      g.fillStyle(0x1a0a2e, 1);
-      g.fillRoundedRect(cx - 12, cy - 8 + breathOffset + walkBob, 24, 28, 4);
-
-      // Hood
-      g.fillStyle(0x2d1b4e, 1);
-      g.fillTriangle(
-        cx, cy - 16 + breathOffset + walkBob,
-        cx - 14, cy + breathOffset + walkBob,
-        cx + 14, cy + breathOffset + walkBob
-      );
-
-      // Legs (visible when walking)
-      if (!isIdle) {
-        g.fillStyle(0x1a0a2e, 1);
-        // Left leg
-        g.fillRect(cx - 8, cy + 16 + walkBob, 6, 8 + (frameInAnim % 2 === 0 ? 2 : -2));
-        // Right leg
-        g.fillRect(cx + 2, cy + 16 + walkBob, 6, 8 + (frameInAnim % 2 === 1 ? 2 : -2));
-      }
-
-      // Cyan tron lines
-      g.lineStyle(2, 0x00ffff, 1);
-      g.lineBetween(cx - 8, cy + 2 + breathOffset + walkBob, cx - 8, cy + 16 + breathOffset + walkBob);
-      g.lineBetween(cx + 8, cy + 2 + breathOffset + walkBob, cx + 8, cy + 16 + breathOffset + walkBob);
-      g.lineBetween(cx - 6, cy + 16 + breathOffset + walkBob, cx + 6, cy + 16 + breathOffset + walkBob);
-
-      // Eye position based on direction
-      let eyeOffsetX = 0;
-      let eyeOffsetY = 0;
-      if (isWalkUp) eyeOffsetY = -1;
-      if (isWalkDown) eyeOffsetY = 1;
-      if (isWalkSide) eyeOffsetX = 2;
-
-      // Glowing eyes
-      g.fillStyle(0x00ffff, 1);
-      g.fillCircle(cx - 5 + eyeOffsetX, cy - 4 + breathOffset + walkBob + eyeOffsetY, 3);
-      g.fillCircle(cx + 5 + eyeOffsetX, cy - 4 + breathOffset + walkBob + eyeOffsetY, 3);
-
-      // Inner eye glow
-      g.fillStyle(0xffffff, 1);
-      g.fillCircle(cx - 5 + eyeOffsetX, cy - 4 + breathOffset + walkBob + eyeOffsetY, 1);
-      g.fillCircle(cx + 5 + eyeOffsetX, cy - 4 + breathOffset + walkBob + eyeOffsetY, 1);
-    }
-
-    // Generate to a temporary texture first
-    g.generateTexture('player-temp', size * frames, size);
-    g.destroy();
-
-    // Get the canvas and add as a proper spritesheet
-    const tempTexture = this.textures.get('player-temp');
-    this.textures.addSpriteSheet('player', tempTexture.getSourceImage(), {
-      frameWidth: size,
-      frameHeight: size
+    this.textures.addSpriteSheet('player', canvas, {
+      frameWidth: frameSize,
+      frameHeight: frameSize
     });
-
-    // Remove the temp texture
-    this.textures.remove('player-temp');
   }
 
-  generateBugSpriteSheet() {
-    const size = 32;
-    const frames = 4;
-    const g = this.make.graphics({ x: 0, y: 0, add: false });
-
-    for (let f = 0; f < frames; f++) {
-      const offsetX = f * size;
-      const cx = offsetX + size/2;
-      const cy = size/2;
-
-      // Leg animation offsets
-      const legPhase = (f / frames) * Math.PI * 2;
-      const legWave1 = Math.sin(legPhase) * 3;
-      const legWave2 = Math.sin(legPhase + Math.PI * 0.66) * 3;
-      const legWave3 = Math.sin(legPhase + Math.PI * 1.33) * 3;
-
-      // Body segments
-      g.fillStyle(0x0a4a0a, 1);
-      g.fillEllipse(cx, cy, 20, 24);
-
-      // Shell
-      g.fillStyle(0x1a8a1a, 1);
-      g.fillEllipse(cx, cy - 2, 16, 18);
-
-      // Shell line
-      g.lineStyle(2, 0x0a4a0a, 1);
-      g.lineBetween(cx, cy - 10, cx, cy + 8);
-
-      // Glowing segments (pulsing)
-      const glowPulse = 0.6 + Math.sin(f * Math.PI / 2) * 0.4;
-      g.fillStyle(0x00ff00, glowPulse);
-      g.fillCircle(cx, cy - 4, 3);
-      g.fillCircle(cx, cy + 2, 2);
-      g.fillCircle(cx, cy + 6, 2);
-
-      // Animated legs
-      g.lineStyle(2, 0x0a3a0a, 1);
-      g.lineBetween(cx - 8, cy - 4, cx - 14, cy - 8 + legWave1);
-      g.lineBetween(cx + 8, cy - 4, cx + 14, cy - 8 - legWave1);
-      g.lineBetween(cx - 8, cy, cx - 14, cy + legWave2);
-      g.lineBetween(cx + 8, cy, cx + 14, cy - legWave2);
-      g.lineBetween(cx - 8, cy + 4, cx - 14, cy + 8 + legWave3);
-      g.lineBetween(cx + 8, cy + 4, cx + 14, cy + 8 - legWave3);
-
-      // Antennae (twitching)
-      const antennaTwitch = Math.sin(f * Math.PI) * 2;
-      g.lineStyle(1, 0x00ff00, 1);
-      g.lineBetween(cx - 4, cy - 10, cx - 6 + antennaTwitch, cy - 16);
-      g.lineBetween(cx + 4, cy - 10, cx + 6 - antennaTwitch, cy - 16);
-    }
-
-    g.generateTexture('bug-temp', size * frames, size);
-    g.destroy();
-
-    const tempTexture = this.textures.get('bug-temp');
-    this.textures.addSpriteSheet('bug', tempTexture.getSourceImage(), {
-      frameWidth: size,
-      frameHeight: size
+  /**
+   * Bug enemy = CraftPix werewolf (Run sprite, 128x128 per frame, 9 frames).
+   * Texture key 'bug' unchanged so spawn/anim code stays the same.
+   */
+  buildWerewolfBugTexture() {
+    const runTex = this.textures.get('werewolf-run');
+    this.textures.addSpriteSheet('bug', runTex.getSourceImage(), {
+      frameWidth: 128,
+      frameHeight: 128
     });
-    this.textures.remove('bug-temp');
   }
 
   generateGlitchSpriteSheet() {

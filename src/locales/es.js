@@ -1,0 +1,253 @@
+/**
+ * Spanish locale for Cosmic Coder / Español para Codificador Cósmico
+ */
+export default {
+  title: 'CODIFICADOR CÓSMICO',
+  subtitle: 'PROGRAMA PARA CONQUISTAR',
+  version: 'v1.0 // CON CLAUDE CODE',
+  menu: {
+    CONTINUE: 'CONTINUAR',
+    START_GAME: 'EMPEZAR PARTIDA',
+    UPGRADES: 'MEJORAS',
+    WEAPONS: 'ARMAS',
+    SETTINGS: 'AJUSTES',
+    CONTROLS: 'CONTROLES',
+    LEADERBOARD: 'RANKING'
+  },
+  leaderboard: {
+    title: 'MEJORES JUGADORES',
+    rank: 'PUESTO',
+    name: 'WALLET',
+    wave: 'OLA',
+    score: 'PUNTOS',
+    empty: 'Aún no hay partidas. ¡Juega para aparecer!',
+    connect_hint: 'Conecta tu wallet (Freighter) para aparecer en el ranking',
+    back: '[ PULSA CUALQUIER TECLA O CLIC PARA CERRAR ]'
+  },
+  prompt: {
+    enter_select: '[ ENTER PARA SELECCIONAR // FLECHAS PARA MOVER ]',
+    any_key_close: '[ PULSA CUALQUIER TECLA O CLIC PARA CERRAR ]',
+    esc_close: '[ ESC PARA CERRAR ]',
+    arrows_confirm: '[ FLECHAS/WASD SELECCIONAR // ENTER CONFIRMAR ]',
+    up_down_purchase: '[ ARRIBA/ABAJO: Seleccionar | ENTER: Comprar | ESC: Cerrar ]',
+    up_down_adjust: 'ARRIBA/ABAJO: Seleccionar | IZQ/DER: Ajustar | ENTER: Activar/Editar',
+    settings_select: 'ARRIBA/ABAJO: Seleccionar | ENTER: Activar | ESC: Volver',
+    name_help: 'ESCRIBE TU NOMBRE | RETROCESO: Borrar | ENTER: Confirmar',
+    esc_cancel: '[ ESC PARA CANCELAR ]'
+  },
+  footer: {
+    high_wave: 'OLA MÁX',
+    bits: 'BITS',
+    tagline: 'UN JUEGO IDLE ESTILO VAMPIRE SURVIVORS',
+    live: '● EN VIVO',
+    offline: '○ DESCONECTADO',
+    fullscreen: 'PANTALLA COMPLETA',
+    fullscreen_exit: 'SALIR PANTALLA COMPLETA',
+    wallet_connect: 'CONECTAR WALLET',
+    wallet_disconnect: 'DESCONECTAR',
+    wallet_error: 'No hay wallet conectada.\nElige una del menú o instala Freighter / xBull.'
+  },
+  controls: {
+    title: 'CONTROLES',
+    wasd: 'WASD / FLECHAS - Moverse',
+    space: 'ESPACIO - XP manual (sin conexión)',
+    m: 'M - Música on/off',
+    esc_p: 'ESC / P - Pausa',
+    auto_attack: '¡El AUTO-ATAQUE está siempre activo!',
+    collect: '¡Recoge armas para potenciarte!',
+    connect: 'Conectar servidor XP para modo EN VIVO:',
+    close: '[ PULSA CUALQUIER TECLA O CLIC PARA CERRAR ]'
+  },
+  settings: {
+    title: 'AJUSTES',
+    MUSIC: 'MÚSICA',
+    SOUND_FX: 'EFECTOS',
+    AUTO_MOVE: 'AUTO-MOVER',
+    IMMORTAL_MODE: 'MODO INMORTAL',
+    MASTER_VOL: 'VOLUMEN',
+    NAME: 'NOMBRE',
+    NOT_SET: '[SIN ESTABLECER]',
+    DESKTOP_APP: '── APP ESCRITORIO ──',
+    WINDOW_MODE: 'MODO VENTANA',
+    ALWAYS_ON_TOP: 'SIEMPRE VISIBLE',
+    windowMode_floating: 'Flotante',
+    windowMode_cornerSnap: 'Esquina',
+    windowMode_desktopWidget: 'Widget',
+    windowMode_miniHud: 'Mini HUD',
+    LANGUAGE: 'IDIOMA',
+    lang_en: 'English',
+    lang_es: 'Español',
+    on: '[SÍ]',
+    off: '[NO]'
+  },
+  name_input: {
+    enter_name: 'ESCRIBE TU NOMBRE',
+    change_name: 'CAMBIAR NOMBRE',
+    welcome: '¡Bienvenido, programador!',
+    confirm: 'ENTER PARA CONFIRMAR'
+  },
+  upgrades: {
+    title: 'MEJORAS',
+    bits: 'BITS',
+    maxed: 'MÁX',
+    cost: 'Coste'
+  },
+  upgrade_names: {
+    damage: 'DAÑO+',
+    health: 'VIDA+',
+    speed: 'VELOCIDAD+',
+    attackRate: 'ATAQUE+',
+    xpGain: 'XP+',
+    critChance: 'CRÍTICO+',
+    weaponDuration: 'DURACIÓN+'
+  },
+  upgrade_descs: {
+    damage: '+10% daño por nivel',
+    health: '+15% vida máx. por nivel',
+    speed: '+8% velocidad por nivel',
+    attackRate: '+12% velocidad ataque por nivel',
+    xpGain: '+15% XP por nivel',
+    critChance: '+5% probabilidad crítico por nivel',
+    weaponDuration: '+20% duración armas por nivel'
+  },
+  weapons: {
+    gallery: 'GALERÍA DE ARMAS',
+    LEGENDARY: 'LEGENDARIAS',
+    MELEE: 'MELEE',
+    RANGED: 'A DISTANCIA',
+    locked: 'Bloqueada - Encuéntrala en partida (0.01% drop)',
+    equipped: '[EQUIPADA]',
+    equip: '[EQUIPAR]',
+    drop: '% DROP',
+    legendary_info: '¡Las armas legendarias se desbloquean para siempre!'
+  },
+  pause: {
+    resume: 'REANUDAR',
+    settings: 'AJUSTES',
+    restart: 'REINICIAR',
+    quit: 'SALIR AL TÍTULO'
+  },
+  hud: {
+    lvl: 'NIV',
+    xp: 'XP',
+    wave: 'OLA',
+    kills: 'MUERTES',
+    weapon: 'ARMA',
+    stage: 'FASE',
+    hi_wave: 'OLA-MÁX',
+    collected: 'RECOGIDAS',
+    connecting: '⚡ CONECTANDO... | M = MÚSICA',
+    live: '🟢 EN VIVO - XP AL PROGRAMAR | M = MÚSICA',
+    offline: '🔴 DESCONECTADO - ESPACIO PARA XP | M = MÚSICA',
+    music_on: '🎵 MÚSICA ON',
+    music_off: '🔇 MÚSICA OFF',
+    paused: 'PAUSADO',
+    select_confirm: '[ FLECHAS/WASD SELECCIONAR // ENTER CONFIRMAR ]'
+  },
+  game: {
+    game_over: 'FIN DE PARTIDA',
+    level_up: 'NIVEL',
+    wave_cleared: 'OLA COMPLETADA',
+    restart: 'PARTIDA REINICIADA',
+    save_icon: '💾',
+    rebirth_available: '⭐ REBIRTH DISPONIBLE ⭐',
+    rebirth_wave: 'Has llegado a la ola',
+    rebirth_unlock: 'Desbloqueo',
+    rebirth_btn: '[ REBIRTH ]',
+    continue_btn: '[ CONTINUAR ]',
+    reborn_as: 'RENACIDO COMO',
+    bits_earned: '¡BITS GANADOS!',
+    xp_lost: 'XP PERDIDOS',
+    immortal_respawn: '♾️ REVIVIR INMORTAL',
+    defeated: '¡DERROTADO!',
+    has_appeared: '¡HA APARECIDO!',
+    weapon_evolved: '⚡ ¡ARMA EVOLUCIONADA! ⚔️',
+    xp_magnet: '🧲 ¡IMÁN DE XP! 🧲',
+    legendary_weapon: '⚔️ ARMA LEGENDARIA ⚔️',
+    permanently_unlocked: '¡DESBLOQUEADA PARA SIEMPRE!',
+    equipped: 'EQUIPADA',
+    weapon_expired: 'ARMA CADUCADA',
+    sudo_expired: 'SUDO CADUCADO',
+    merge_conflict: '¡CONFLICTO DE FUSIÓN!',
+    hijacked: '¡SECUESTRADO!',
+    processes_terminated: 'PROCESOS TERMINADOS',
+    rmrf_executed: '💀 rm -rf /* 💀\nEJECUTADO',
+    sudo_activated: '👑 MODO SUDO ACTIVADO 👑\nINVENCIBLE + 3X DAÑO'
+  },
+  shrines: {
+    power: 'SANTUARIO DEL PODER',
+    power_desc: '+50% daño 30s',
+    fortune: 'SANTUARIO DE LA FORTUNA',
+    fortune_desc: 'Resultado aleatorio...',
+    wisdom: 'SANTUARIO DE LA SABIDURÍA',
+    wisdom_desc: 'Subida de nivel al instante',
+    protection: 'SANTUARIO DE PROTECCIÓN',
+    protection_desc: '10s invencibilidad',
+    chaos: 'SANTUARIO DEL CAOS',
+    chaos_desc: 'Efecto aleatorio desconocido',
+    press_e: '[ E ]'
+  },
+  gamble: {
+    JACKPOT: 'JACKPOT',
+    WEAPON_DROP: 'ARMA',
+    FULL_HEAL: 'CURA TOTAL',
+    CURSE: 'MALDICIÓN',
+    NOTHING: 'NADA'
+  },
+  chaos_effects: {
+    DOUBLE_XP: 'DOBLE XP',
+    SPEED_BOOST: 'VELOCIDAD',
+    INVINCIBILITY: 'INVENCIBILIDAD',
+    ENEMY_FREEZE: 'CONGELAR ENEMIGOS',
+    RANDOM_CURSE: 'MALDICIÓN ALEATORIA',
+    SPAWN_BOSS: 'APARECE JEFE'
+  },
+  events: {
+    BOSS_INCOMING: 'JEFE EN CAMINO',
+    boss_desc: '¡Mini-jefe tras la cuenta atrás!',
+    DOUBLE_XP: 'DOBLE XP',
+    double_xp_desc: '¡2x XP de todas las fuentes!',
+    CURSE: 'MALDICIÓN',
+    curse_desc: '¡Todos los enemigos +50% velocidad!',
+    JACKPOT: 'JACKPOT',
+    jackpot_desc: '¡Solo drops de armas raras!',
+    SWARM: 'ENJAMBRE',
+    swarm_desc: '¡Oleada rápida de enemigos!'
+  },
+  rebirth: {
+    rebirth_bonuses: 'BONIFICACIONES REBIRTH:',
+    JUNIOR_DEV: 'JUNIOR',
+    MID_LEVEL: 'MID-LEVEL',
+    SENIOR_DEV: 'SENIOR',
+    TECH_LEAD: 'TECH LEAD',
+    ARCHITECT: 'ARQUITECTO'
+  },
+  run_modifiers: {
+    glass_cannon: 'Cañón de cristal',
+    glass_cannon_desc: '2x daño, 50% vida máx.',
+    vampiric: 'Enemigos vampíricos',
+    vampiric_desc: 'Enemigos curan 10% del daño',
+    weapon_frenzy: 'Frenesí de armas',
+    weapon_frenzy_desc: '-50% duración armas, +50% drops',
+    bullet_hell: 'Infierno de balas',
+    bullet_hell_desc: '+100% proyectiles, +50% enemigos',
+    marathon: 'Maratón',
+    marathon_desc: 'Olas 50% más largas, +25% XP'
+  },
+  stages: {
+    debug_zone: 'ZONA DEBUG',
+    memory_banks: 'BANCOS DE MEMORIA',
+    network_layer: 'CAPA DE RED',
+    kernel_space: 'ESPACIO KERNEL',
+    cloud_cluster: 'CLÚSTER NUBE',
+    singularity: 'SINGULARIDAD',
+    entering: 'ENTRANDO'
+  },
+  bosses: {
+    stack_overflow: 'STACK OVERFLOW',
+    null_pointer: 'NULL POINTER',
+    memory_leak_prime: 'MEMORY LEAK PRIME',
+    kernel_panic: 'KERNEL PANIC',
+    deadlock: 'DEADLOCK'
+  }
+};

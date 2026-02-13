@@ -120,7 +120,7 @@ export default class ShrineManager {
     bg.setStrokeStyle(2, 0xffffff);
 
     const text = this.scene.add.text(0, 0, '[E] INTERACT', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#ffffff',
       fontStyle: 'bold'
@@ -221,12 +221,13 @@ export default class ShrineManager {
 
     // Icon text
     const icon = this.scene.add.text(0, -12, shrineType.icon, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px'
     }).setOrigin(0.5);
 
     // Name label
     const label = this.scene.add.text(0, 45, shrineType.name, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#ffffff',
       fontStyle: 'bold'
@@ -601,7 +602,7 @@ export default class ShrineManager {
    */
   showMessage(text, x, y, color) {
     const message = this.scene.add.text(x, y - 30, text, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: color,
       fontStyle: 'bold',

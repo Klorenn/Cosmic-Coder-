@@ -4,14 +4,21 @@ import TitleScene from './scenes/TitleScene.js';
 import ArenaScene from './scenes/ArenaScene.js';
 import { connectToXPServer, isConnected } from './utils/socket.js';
 import RebirthManager from './systems/RebirthManager.js';
+import * as stellarWallet from './utils/stellarWallet.js';
 
 const config = {
   type: Phaser.AUTO,
-  width: 800,
-  height: 600,
   parent: 'game-container',
   backgroundColor: '#0a0a0f',
-  pixelArt: true, // Crisp pixel art rendering
+  pixelArt: true,
+  antialias: true,     // Letras y líneas suaves; roundPixels mantiene sprites alineados
+  roundPixels: true,
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH,
+    width: 800,
+    height: 600
+  },
   physics: {
     default: 'arcade',
     arcade: {
@@ -229,8 +236,9 @@ window.VIBE_SETTINGS = {
   sfxVolume: 0.8,         // SFX volume (0-1)
   musicVolume: 0.5,       // Music volume (0-1)
   playerName: '',         // Player name for personalization
-  immortalMode: false,    // Respawn instead of game over (accessibility)
+  immortalMode: false,   // Respawn instead of game over (accessibility)
   xpPenaltyOnDeath: 0.5,  // 50% XP penalty when respawning in immortal mode
+  language: 'en',        // 'en' | 'es' - UI language
 
   load() {
     const saved = localStorage.getItem('vibeCoderSettings');
@@ -245,6 +253,7 @@ window.VIBE_SETTINGS = {
       this.playerName = data.playerName || '';
       this.immortalMode = data.immortalMode !== undefined ? data.immortalMode : false;
       this.xpPenaltyOnDeath = data.xpPenaltyOnDeath !== undefined ? data.xpPenaltyOnDeath : 0.5;
+      this.language = data.language === 'es' ? 'es' : 'en';
     }
   },
 
@@ -258,7 +267,8 @@ window.VIBE_SETTINGS = {
       musicVolume: this.musicVolume,
       playerName: this.playerName,
       immortalMode: this.immortalMode,
-      xpPenaltyOnDeath: this.xpPenaltyOnDeath
+      xpPenaltyOnDeath: this.xpPenaltyOnDeath,
+      language: this.language
     }));
   },
 
@@ -356,6 +366,14 @@ window.VIBE_CODER = {
 
 const game = new Phaser.Game(config);
 
+// Stellar Wallets Kit: createButton(buttonWrapper) as in the docs – botón oficial del kit
+const buttonWrapper = document.querySelector('#buttonWrapper');
+if (buttonWrapper) {
+  setTimeout(() => {
+    stellarWallet.createKitButton(buttonWrapper).catch(() => {});
+  }, 800);
+}
+
 // Connect to XP server for real-time coding rewards
 connectToXPServer();
 
@@ -368,5 +386,5 @@ window.addEventListener('xpserver-disconnected', () => {
   console.log('⚠️ XP server disconnected. Press SPACE for manual XP.');
 });
 
-console.log('Vibe Coder initialized! Ready to code and conquer.');
+console.log('Cosmic Coder initialized! Ready to code and conquer.');
 console.log('Start the XP server with: npm run server');

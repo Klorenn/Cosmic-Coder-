@@ -25,6 +25,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@creit-tech/stellar-wallets-kit": "npm:@jsr/creit-tech__stellar-wallets-kit@^2.0.0-beta.9",
+    "@creit.tech/stellar-wallets-kit": "^1.9.5",
+    "@stellar/stellar-base": "^14.0.0",
+    "@stellar/stellar-sdk": "^14.5.0",
     "electron-store": "^10.0.0",
     "express": "^5.2.1",
     "phaser": "^3.90.0",
@@ -39,8 +43,8 @@
     "wait-on": "^8.0.3"
   },
   "build": {
-    "appId": "com.vibecoder.app",
-    "productName": "Vibe Coder",
+    "appId": "com.cosmiccoder.app",
+    "productName": "Cosmic Coder",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -79,7 +83,7 @@
       "gatekeeperAssess": false
     },
     "dmg": {
-      "title": "Vibe Coder",
+      "title": "Cosmic Coder",
       "backgroundColor": "#1a1a2e",
       "window": {
         "width": 540,

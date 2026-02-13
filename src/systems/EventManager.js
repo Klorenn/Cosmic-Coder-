@@ -198,7 +198,7 @@ export default class EventManager {
       this.scene.cameras.main.scrollY + 200,
       '💀 EVENT BOSS SPAWNED! 💀',
       {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '24px',
         color: '#ff0000',
         fontStyle: 'bold'
@@ -235,7 +235,7 @@ export default class EventManager {
 
     // Event icon and name
     const eventText = this.scene.add.text(400, 25, `${event.icon} ${event.name}`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: `#${event.color.toString(16).padStart(6, '0')}`,
       fontStyle: 'bold'
@@ -294,7 +294,7 @@ export default class EventManager {
       400, 80,
       `${this.activeEvent.icon} ${this.activeEvent.name} ENDED`,
       {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '14px',
         color: '#888888',
         fontStyle: 'bold'

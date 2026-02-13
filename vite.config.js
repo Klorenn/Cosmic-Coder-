@@ -10,5 +10,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets'
+  },
+  optimizeDeps: {
+    include: [
+      '@creit.tech/stellar-wallets-kit',
+      '@stellar/freighter-api',
+      'buffer'
+    ]
   }
 });

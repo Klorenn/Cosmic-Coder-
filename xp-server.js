@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Vibe Coder XP Server
+// Cosmic Coder XP Server
 // Receives XP events from CLI hooks via HTTP and broadcasts to game via WebSocket
 
 import http from 'http';
@@ -96,7 +96,7 @@ function getSourceColor(source) {
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════╗
-║     🎮 VIBE CODER XP SERVER               ║
+║     🎮 COSMIC CODER XP SERVER              ║
 ║                                           ║
 ║     WebSocket: ws://localhost:${PORT}       ║
 ║     HTTP POST: http://localhost:${PORT}     ║

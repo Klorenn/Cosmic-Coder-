@@ -8,6 +8,11 @@ import MapManager from '../systems/MapManager.js';
 import RunModifiers from '../systems/RunModifiers.js';
 import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
+import LeaderboardManager from '../systems/LeaderboardManager.js';
+import { t } from '../utils/i18n.js';
+import * as stellarWallet from '../utils/stellarWallet.js';
+import * as gameClient from '../contracts/gameClient.js';
+import { validateGameRules } from '../zk/gameProof.js';
 
 export default class ArenaScene extends Phaser.Scene {
   constructor() {
@@ -39,7 +44,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Wave system
     this.waveNumber = 1;
-    this.enemiesPerWave = 5;
+    this.enemiesPerWave = 14; // Base alto para que desde olas medias sea skill-based
     this.spawnTimer = null;
     this.waveTimer = null;
 
@@ -119,14 +124,14 @@ export default class ArenaScene extends Phaser.Scene {
       }
     };
 
-    // Stage definitions with enhanced visual properties
+    // Stage definitions with enhanced visual properties (stageKey for i18n)
     this.stages = [
-      { name: 'DEBUG ZONE', startWave: 1, bgColor: 0x0a0a1a, gridColor: 0x00ffff, nodeColor: 0x00ffff, particleColor: 0x00ffff, glowIntensity: 0.3 },
-      { name: 'MEMORY BANKS', startWave: 25, bgColor: 0x0a001a, gridColor: 0xaa00ff, nodeColor: 0xff00ff, particleColor: 0xaa00ff, glowIntensity: 0.4 },
-      { name: 'NETWORK LAYER', startWave: 50, bgColor: 0x001a0a, gridColor: 0x00ff00, nodeColor: 0x00ff88, particleColor: 0x00ff00, glowIntensity: 0.35 },
-      { name: 'KERNEL SPACE', startWave: 75, bgColor: 0x1a0a0a, gridColor: 0xff0000, nodeColor: 0xff4400, particleColor: 0xff4400, glowIntensity: 0.5 },
-      { name: 'CLOUD CLUSTER', startWave: 100, bgColor: 0x0a0a1a, gridColor: 0x4488ff, nodeColor: 0x88aaff, particleColor: 0x4488ff, glowIntensity: 0.4 },
-      { name: 'SINGULARITY', startWave: 150, bgColor: 0x050510, gridColor: 0xffffff, nodeColor: 0xffaa00, particleColor: 0xffd700, glowIntensity: 0.6 }
+      { name: 'DEBUG ZONE', stageKey: 'debug_zone', startWave: 1, bgColor: 0x0a0a1a, gridColor: 0x00ffff, nodeColor: 0x00ffff, particleColor: 0x00ffff, glowIntensity: 0.3 },
+      { name: 'MEMORY BANKS', stageKey: 'memory_banks', startWave: 25, bgColor: 0x0a001a, gridColor: 0xaa00ff, nodeColor: 0xff00ff, particleColor: 0xaa00ff, glowIntensity: 0.4 },
+      { name: 'NETWORK LAYER', stageKey: 'network_layer', startWave: 50, bgColor: 0x001a0a, gridColor: 0x00ff00, nodeColor: 0x00ff88, particleColor: 0x00ff00, glowIntensity: 0.35 },
+      { name: 'KERNEL SPACE', stageKey: 'kernel_space', startWave: 75, bgColor: 0x1a0a0a, gridColor: 0xff0000, nodeColor: 0xff4400, particleColor: 0xff4400, glowIntensity: 0.5 },
+      { name: 'CLOUD CLUSTER', stageKey: 'cloud_cluster', startWave: 100, bgColor: 0x0a0a1a, gridColor: 0x4488ff, nodeColor: 0x88aaff, particleColor: 0x4488ff, glowIntensity: 0.4 },
+      { name: 'SINGULARITY', stageKey: 'singularity', startWave: 150, bgColor: 0x050510, gridColor: 0xffffff, nodeColor: 0xffaa00, particleColor: 0xffd700, glowIntensity: 0.6 }
     ];
 
     // Current stage
@@ -158,7 +163,7 @@ export default class ArenaScene extends Phaser.Scene {
     // texture: Phaser texture key (defaults to enemy type name if omitted)
     this.enemyTypes = {
       // Original enemies
-      bug: { health: 15, speed: 40, damage: 3, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 3 },
+      bug: { health: 15, speed: 40, damage: 3, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 6 }, // Werewolf: más grande y más frecuente
       glitch: { health: 30, speed: 70, damage: 5, xpValue: 15, behavior: 'chase', waveMin: 3, spawnWeight: 2 },
       'memory-leak': { health: 60, speed: 25, damage: 10, xpValue: 30, behavior: 'chase', waveMin: 5 },
       'syntax-error': { health: 12, speed: 100, damage: 2, xpValue: 10, behavior: 'teleport', teleportCooldown: 3000, waveMin: 8, spawnWeight: 2 },
@@ -580,7 +585,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     for (let i = 0; i < charCount; i++) {
       const char = this.add.text(x, startY - (i * 20), chars[Phaser.Math.Between(0, chars.length - 1)], {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '14px',
         color: this.hexToColorStr(stage.nodeColor)
       }).setAlpha(0.1 + (i / charCount) * 0.4);
@@ -630,8 +635,9 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.flash(500, 255, 255, 255);
 
     // Big stage announcement
-    const stageText = this.add.text(400, 200, `ENTERING\n${stage.name}`, {
-      fontFamily: 'monospace',
+    const stageName = stage.stageKey ? t('stages.' + stage.stageKey) : stage.name;
+    const stageText = this.add.text(400, 200, `${t('stages.entering')}\n${stageName}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '36px',
       color: '#ffffff',
       fontStyle: 'bold',
@@ -654,6 +660,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Create player at center of the larger world
     this.player = this.physics.add.sprite(this.worldWidth / 2, this.worldHeight / 2, 'player');
     this.player.setCollideWorldBounds(true);
+    this.player.setScale(0.55); // Robot sprite 128px → ~70px for gameplay (más visible)
 
     // Player health
     this.player.health = this.getStats().maxHealth;
@@ -662,7 +669,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Speech bubble for in-game quotes
     this.speechBubble = this.add.graphics();
     this.speechText = this.add.text(0, 0, '', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#000000',
       align: 'center',
@@ -677,6 +684,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Auto-move indicator (shows current mode)
     this.autoMoveIndicator = this.add.text(0, 0, '⚔️', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px'
     }).setOrigin(0.5).setDepth(1001).setVisible(false);
     this.autoPlayMode = 'hunt';
@@ -986,56 +994,56 @@ export default class ArenaScene extends Phaser.Scene {
     this.healthBar.setScrollFactor(0);
 
     // Level text
-    this.levelText = this.add.text(10, 55, 'LVL 1', {
-      fontFamily: 'monospace',
+    this.levelText = this.add.text(10, 55, `${t('hud.lvl')} 1`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: '#00ffff',
       fontStyle: 'bold'
     }).setScrollFactor(0);
 
     // XP text
-    this.xpText = this.add.text(10, 75, 'XP: 0 / 100', {
-      fontFamily: 'monospace',
+    this.xpText = this.add.text(10, 75, `${t('hud.xp')}: 0 / 100`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#aaaaaa'
     }).setScrollFactor(0);
 
     // Wave text
-    this.waveText = this.add.text(700, 10, 'WAVE 1', {
-      fontFamily: 'monospace',
+    this.waveText = this.add.text(700, 10, `${t('hud.wave')} 1`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: '#ff00ff',
       fontStyle: 'bold'
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // Kills text
-    this.killsText = this.add.text(700, 30, 'KILLS: 0', {
-      fontFamily: 'monospace',
+    this.killsText = this.add.text(700, 30, `${t('hud.kills')}: 0`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#aaaaaa'
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // Current weapon indicator
-    this.weaponText = this.add.text(10, 95, 'WEAPON: BASIC', {
-      fontFamily: 'monospace',
+    this.weaponText = this.add.text(10, 95, `${t('hud.weapon')}: BASIC`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#00ffff'
     }).setScrollFactor(0);
 
     // Connection status
-    this.connectionText = this.add.text(400, 580, '⚡ CONNECTING... | M = MUSIC', {
-      fontFamily: 'monospace',
+    this.connectionText = this.add.text(400, 580, t('hud.connecting'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#ffff00'
     }).setOrigin(0.5).setScrollFactor(0);
 
     // Listen for connection events (store refs for cleanup)
     this.xpServerConnectedHandler = () => {
-      this.connectionText.setText('🟢 LIVE - XP FROM CODING | M = MUSIC');
+      this.connectionText.setText(t('hud.live'));
       this.connectionText.setColor('#00ff00');
     };
     this.xpServerDisconnectedHandler = () => {
-      this.connectionText.setText('🔴 OFFLINE - SPACE FOR XP | M = MUSIC');
+      this.connectionText.setText(t('hud.offline'));
       this.connectionText.setColor('#ff6666');
     };
     window.addEventListener('xpserver-connected', this.xpServerConnectedHandler);
@@ -1043,27 +1051,27 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Check if already connected (connection may have happened before scene started)
     if (isConnected()) {
-      this.connectionText.setText('🟢 LIVE - XP FROM CODING | M = MUSIC');
+      this.connectionText.setText(t('hud.live'));
       this.connectionText.setColor('#00ff00');
     }
 
     // Stage text
-    this.stageText = this.add.text(700, 50, 'STAGE: DEBUG ZONE', {
-      fontFamily: 'monospace',
+    this.stageText = this.add.text(700, 50, `${t('hud.stage')}: ${t('stages.debug_zone')}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#00ffff'
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // High score display
-    this.highScoreText = this.add.text(700, 70, `HI-WAVE: ${this.highWave}`, {
-      fontFamily: 'monospace',
+    this.highScoreText = this.add.text(700, 70, `${t('hud.hi_wave')}: ${this.highWave}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#ffd700'
     }).setOrigin(1, 0).setScrollFactor(0);
 
     // Collected weapons display (for evolution tracking)
-    this.weaponsCollectedText = this.add.text(10, 115, 'COLLECTED: basic', {
-      fontFamily: 'monospace',
+    this.weaponsCollectedText = this.add.text(10, 115, `${t('hud.collected')}: basic`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#888888'
     }).setScrollFactor(0);
@@ -1080,7 +1088,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.bossHealthBar.setScrollFactor(0);
 
     this.bossNameText = this.add.text(400, 545, '', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: '#ff0000',
       fontStyle: 'bold'
@@ -1107,29 +1115,30 @@ export default class ArenaScene extends Phaser.Scene {
     this.healthBar.fillRect(10, 35, 200 * healthPercent, 15);
 
     // Update text
-    this.levelText.setText(`LVL ${state.level}`);
-    this.xpText.setText(`XP: ${state.xp} / ${xpNeeded}`);
-    this.killsText.setText(`KILLS: ${state.kills}`);
-    this.waveText.setText(`WAVE ${this.waveNumber}`);
+    this.levelText.setText(`${t('hud.lvl')} ${state.level}`);
+    this.xpText.setText(`${t('hud.xp')}: ${state.xp} / ${xpNeeded}`);
+    this.killsText.setText(`${t('hud.kills')}: ${state.kills}`);
+    this.waveText.setText(`${t('hud.wave')} ${this.waveNumber}`);
 
     // Update weapon text — colors derived from weaponTypes/evolutionRecipes (single source of truth)
     const weaponLabel = this.currentWeapon.isEvolved ? `★${this.currentWeapon.type.toUpperCase()}★` : this.currentWeapon.type.toUpperCase();
-    this.weaponText.setText(`WEAPON: ${weaponLabel}`);
+    this.weaponText.setText(`${t('hud.weapon')}: ${weaponLabel}`);
     this.weaponText.setColor(this.getWeaponColorStr(this.currentWeapon.type));
 
     // Update stage text
     const stage = this.stages[this.currentStage];
-    this.stageText.setText(`STAGE: ${stage.name}`);
+    const stageName = stage.stageKey ? t('stages.' + stage.stageKey) : stage.name;
+    this.stageText.setText(`${t('hud.stage')}: ${stageName}`);
 
     // Update high score display
     if (this.highScoreText) {
-      this.highScoreText.setText(`HI-WAVE: ${this.highWave}`);
+      this.highScoreText.setText(`${t('hud.hi_wave')}: ${this.highWave}`);
     }
 
     // Update collected weapons
     if (this.weaponsCollectedText) {
       const weapons = Array.from(this.collectedWeapons).join(', ');
-      this.weaponsCollectedText.setText(`COLLECTED: ${weapons}`);
+      this.weaponsCollectedText.setText(`${t('hud.collected')}: ${weapons}`);
     }
 
     // Update boss health bar
@@ -1143,7 +1152,7 @@ export default class ArenaScene extends Phaser.Scene {
       this.bossHealthBar.fillStyle(this.currentBoss.bossColor, 1);
       this.bossHealthBar.fillRect(200, 560, 400 * bossHealthPercent, 25);
 
-      this.bossNameText.setText(`⚠ ${this.currentBoss.bossName} ⚠`);
+      this.bossNameText.setText(`⚠ ${this.currentBoss.bossName} ⚠`); // bossName may be translated elsewhere
       this.bossNameText.setColor(this.hexToColorStr(this.currentBoss.bossColor));
     } else {
       this.bossHealthBarBg.setVisible(false);
@@ -1181,7 +1190,7 @@ export default class ArenaScene extends Phaser.Scene {
       this.player.y - 40,
       text,
       {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: hasSource ? '16px' : '14px', // Slightly larger for CLI XP
         color: color,
         fontStyle: 'bold',
@@ -1217,7 +1226,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Big level up text (fixed to camera center)
     const levelUpText = this.add.text(400, 300, `LEVEL ${level}!`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '48px',
       color: '#00ffff',
       fontStyle: 'bold',
@@ -1263,7 +1272,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Modifier text
     const modText = this.add.text(0, -10, `${mod.icon} ${mod.name}`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: this.hexToColorStr(mod.color),
       fontStyle: 'bold'
@@ -1271,7 +1280,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Description
     const descText = this.add.text(0, 15, mod.desc, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#aaaaaa'
     }).setOrigin(0.5);
@@ -1330,12 +1339,14 @@ export default class ArenaScene extends Phaser.Scene {
       this.eventManager.tryTriggerEvent(this.waveNumber);
     }
 
-    // Spawn enemies over time (cap the scaling so it doesn't get insane)
+    // Spawn enemies over time — desde ola ~12 sube fuerte para que sea skill-based
     let spawned = 0;
-    const toSpawn = Math.min(this.enemiesPerWave + (this.waveNumber * 2), 25);
+    const waveScale = this.waveNumber >= 12 ? this.waveNumber * 3 : this.waveNumber * 2;
+    const toSpawn = Math.min(this.enemiesPerWave + Math.floor(waveScale), 75); // Cap 75 en olas altas
+    const spawnDelay = this.waveNumber >= 10 ? Math.max(400, 900 - this.waveNumber * 25) : 1000; // Más rápido desde ola 10
 
     this.spawnTimer = this.time.addEvent({
-      delay: 1000,
+      delay: spawnDelay,
       callback: () => {
         if (spawned < toSpawn) {
           this.spawnEnemy();
@@ -1395,7 +1406,7 @@ export default class ArenaScene extends Phaser.Scene {
       const waveText = isBossWave ? `⚠ BOSS WAVE ${this.waveNumber} ⚠` : `WAVE ${this.waveNumber}`;
 
       const waveAnnounce = this.add.text(400, 200, waveText, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: isBossWave ? '28px' : '32px',
         color: waveColor,
         fontStyle: 'bold'
@@ -1458,8 +1469,8 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.flash(300, 255, 0, 0);
 
     // Boss announcement
-    const bossAnnounce = this.add.text(400, 150, `${bossData.name}\nHAS APPEARED!`, {
-      fontFamily: 'monospace',
+    const bossAnnounce = this.add.text(400, 150, `${bossData.name}\n${t('game.has_appeared')}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: this.hexToColorStr(bossData.color),
       fontStyle: 'bold',
@@ -1532,10 +1543,14 @@ export default class ArenaScene extends Phaser.Scene {
     // Apply event speed modifier (e.g., CURSE event)
     const speedMod = this.eventEnemySpeedMod || 1;
     enemy.speed = Math.floor(typeData.speed * speedMod);
-    enemy.damage = typeData.damage;
+    // Daño escala con ola para que olas 12+ bajen vida rápido y sea skill-based
+    const damageScale = 1 + (this.waveNumber - 1) * 0.04; // wave 15 ≈ 1.56x, wave 25 ≈ 2x
+    enemy.damage = Math.max(1, Math.floor(typeData.damage * damageScale));
     enemy.xpValue = typeData.xpValue;
     enemy.enemyType = type;
     enemy.behavior = typeData.behavior;
+    // Werewolf (bug) sprite 128px → más grande en pantalla (~58px)
+    if (type === 'bug') enemy.setScale(0.45);
 
     // Play enemy animation based on type
     const animKey = this.getEnemyAnimKey(type);
@@ -1679,7 +1694,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.shake(300, 0.01);
 
     const miniBossAnnounce = this.add.text(400, 150, `⚡ ${miniBossData.name} ⚡`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: this.hexToColorStr(miniBossData.color),
       fontStyle: 'bold',
@@ -1891,7 +1906,7 @@ export default class ArenaScene extends Phaser.Scene {
 
   showMusicStatus(isPlaying) {
     const statusText = this.add.text(400, 500, isPlaying ? '🎵 MUSIC ON' : '🔇 MUSIC OFF', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: isPlaying ? '#00ff00' : '#ff6666',
       fontStyle: 'bold'
@@ -1938,8 +1953,8 @@ export default class ArenaScene extends Phaser.Scene {
     this.pauseMenu.add(overlay);
 
     // Pause title
-    const pauseTitle = this.add.text(0, -150, 'PAUSED', {
-      fontFamily: 'monospace',
+    const pauseTitle = this.add.text(0, -150, t('hud.paused'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '48px',
       color: '#00ffff',
       fontStyle: 'bold',
@@ -1950,19 +1965,19 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Wave info
     const waveInfo = this.add.text(0, -90, `WAVE ${this.waveNumber} // KILLS: ${window.VIBE_CODER.kills}`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: '#888888'
     }).setOrigin(0.5);
     this.pauseMenu.add(waveInfo);
 
     // Menu options
-    this.pauseMenuOptions = ['RESUME', 'SETTINGS', 'RESTART', 'QUIT TO TITLE'];
+    this.pauseMenuOptions = [t('pause.resume'), t('pause.settings'), t('pause.restart'), t('pause.quit')];
     this.pauseMenuTexts = [];
 
     this.pauseMenuOptions.forEach((option, index) => {
       const text = this.add.text(0, -30 + index * 40, option, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '20px',
         color: index === 0 ? '#00ffff' : '#666666',
         fontStyle: index === 0 ? 'bold' : 'normal'
@@ -1973,7 +1988,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Selector
     this.pauseSelector = this.add.text(-100, -30, '>', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#00ffff',
       fontStyle: 'bold'
@@ -1990,8 +2005,8 @@ export default class ArenaScene extends Phaser.Scene {
     });
 
     // Control hint
-    const hint = this.add.text(0, 150, '[ ARROWS/WASD TO SELECT // ENTER TO CONFIRM ]', {
-      fontFamily: 'monospace',
+    const hint = this.add.text(0, 150, t('hud.select_confirm'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#666666'
     }).setOrigin(0.5);
@@ -2074,8 +2089,8 @@ export default class ArenaScene extends Phaser.Scene {
     bg.setStrokeStyle(2, 0x00ffff);
     settingsOverlay.add(bg);
 
-    const title = this.add.text(0, -100, 'SETTINGS', {
-      fontFamily: 'monospace',
+    const title = this.add.text(0, -100, t('settings.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#00ffff',
       fontStyle: 'bold'
@@ -2095,7 +2110,7 @@ export default class ArenaScene extends Phaser.Scene {
     settingsItems.forEach((item, index) => {
       const value = settings[item.key] ? 'ON' : 'OFF';
       const text = this.add.text(0, -50 + index * 35, `${item.label}: [${value}]`, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '14px',
         color: index === 0 ? '#00ffff' : '#888888'
       }).setOrigin(0.5);
@@ -2103,8 +2118,8 @@ export default class ArenaScene extends Phaser.Scene {
       settingTexts.push({ text, item });
     });
 
-    const hint = this.add.text(0, 80, 'UP/DOWN: Select | ENTER: Toggle | ESC: Back', {
-      fontFamily: 'monospace',
+    const hint = this.add.text(0, 80, t('prompt.settings_select'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '10px',
       color: '#666666'
     }).setOrigin(0.5);
@@ -2261,8 +2276,8 @@ export default class ArenaScene extends Phaser.Scene {
     this.updateHUD();
 
     // Show restart text
-    const restartText = this.add.text(400, 300, 'GAME RESTARTED', {
-      fontFamily: 'monospace',
+    const restartText = this.add.text(400, 300, t('game.restart'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#00ffff',
       fontStyle: 'bold'
@@ -2373,6 +2388,7 @@ export default class ArenaScene extends Phaser.Scene {
     if (success) {
       // Show subtle save indicator
       const saveIcon = this.add.text(760, 10, '💾', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '16px'
       }).setScrollFactor(0);
 
@@ -2400,23 +2416,24 @@ export default class ArenaScene extends Phaser.Scene {
       .setDepth(1000);
 
     // Title
-    const title = this.add.text(400, 150, '⭐ REBIRTH AVAILABLE ⭐', {
-      fontFamily: 'monospace',
+    const title = this.add.text(400, 150, t('game.rebirth_available'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#ffd700',
       fontStyle: 'bold'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     // Milestone info
-    const milestoneText = this.add.text(400, 200, `You've reached Wave ${milestone.wave}!`, {
-      fontFamily: 'monospace',
+    const milestoneText = this.add.text(400, 200, `${t('game.rebirth_wave')} ${milestone.wave}!`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '18px',
       color: '#ffffff'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     // Rank name
-    const rankText = this.add.text(400, 235, `Unlock: ${milestone.name}`, {
-      fontFamily: 'monospace',
+    const rankName = milestone.name ? t('rebirth.' + milestone.name.replace(/ /g, '_')) : milestone.name;
+    const rankText = this.add.text(400, 235, `${t('game.rebirth_unlock')}: ${rankName}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#00ff00',
       fontStyle: 'bold'
@@ -2428,7 +2445,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Bonuses explanation
     const bonusLines = [
-      'REBIRTH BONUSES:',
+      t('rebirth.rebirth_bonuses'),
       `• +${newBonus}% All Stats (permanent)`,
       `• +${milestone.rebirth * 10}% XP Gain (permanent)`,
       `• ${Math.min(3, milestone.rebirth)} Starting Weapon(s)`,
@@ -2437,22 +2454,22 @@ export default class ArenaScene extends Phaser.Scene {
     ];
 
     const bonusText = this.add.text(400, 320, bonusLines.join('\n'), {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: '#cccccc',
       align: 'center'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     // Buttons
-    const rebirthBtn = this.add.text(300, 450, '[ REBIRTH ]', {
-      fontFamily: 'monospace',
+    const rebirthBtn = this.add.text(300, 450, t('game.rebirth_btn'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#00ff00',
       fontStyle: 'bold'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001).setInteractive();
 
-    const continueBtn = this.add.text(500, 450, '[ CONTINUE ]', {
-      fontFamily: 'monospace',
+    const continueBtn = this.add.text(500, 450, t('game.continue_btn'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#ffff00',
       fontStyle: 'bold'
@@ -2471,8 +2488,9 @@ export default class ArenaScene extends Phaser.Scene {
       this.isPaused = false;
 
       // Show rebirth complete message and return to title
-      const completeText = this.add.text(400, 300, `REBORN AS: ${milestone.name}`, {
-        fontFamily: 'monospace',
+      const rebornRankName = milestone.name ? t('rebirth.' + milestone.name.replace(/ /g, '_')) : milestone.name;
+      const completeText = this.add.text(400, 300, `${t('game.reborn_as')}: ${rebornRankName}`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '24px',
         color: '#ffd700',
         fontStyle: 'bold'
@@ -2627,7 +2645,7 @@ export default class ArenaScene extends Phaser.Scene {
         forkbomb: '💣 FORK BOMB'
       };
       const dropText = this.add.text(x, y - 40, `${rareNames[weaponType]} DROPPED!`, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '12px',
         color: '#ffd700',
         fontStyle: 'bold'
@@ -2704,7 +2722,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     const textColor = isRare ? '#ffd700' : '#ffffff';
     const pickupText = this.add.text(player.x, player.y - 50, (weaponNames[weaponType] || weaponType.toUpperCase()) + ` [${Math.floor(duration/1000)}s]`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: isRare ? '20px' : '16px',
       color: textColor,
       fontStyle: 'bold',
@@ -2739,7 +2757,7 @@ export default class ArenaScene extends Phaser.Scene {
         this.weaponExpiryTimer = null;
 
         const revertText = this.add.text(this.player.x, this.player.y - 30, 'WEAPON EXPIRED', {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '12px',
           color: '#ff6666'
         }).setOrigin(0.5);
@@ -2765,7 +2783,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Big announcement
     const rmrfText = this.add.text(400, 300, '💀 rm -rf /* 💀\nEXECUTED', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '36px',
       color: '#ff0000',
       fontStyle: 'bold',
@@ -2821,7 +2839,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Show kill count
     if (killCount > 0) {
       const killText = this.add.text(400, 400, `${killCount} PROCESSES TERMINATED`, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '18px',
         color: '#ff6666'
       }).setOrigin(0.5).setScrollFactor(0);
@@ -2842,7 +2860,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.flash(300, 255, 215, 0);
 
     const sudoText = this.add.text(400, 300, '👑 SUDO MODE ACTIVATED 👑\nINVINCIBLE + 3X DAMAGE', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#ffd700',
       fontStyle: 'bold',
@@ -2879,7 +2897,7 @@ export default class ArenaScene extends Phaser.Scene {
         this.player.clearTint();
 
         const endText = this.add.text(this.player.x, this.player.y - 30, 'SUDO EXPIRED', {
-          fontFamily: 'monospace',
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '14px',
           color: '#ff6666'
         }).setOrigin(0.5);
@@ -2966,7 +2984,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.shake(300, 0.02);
 
     const evoText = this.add.text(400, 250, `⚡ WEAPON EVOLVED! ⚡\n${evolved.name}`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: this.hexToColorStr(evolved.color),
       fontStyle: 'bold',
@@ -3009,7 +3027,7 @@ export default class ArenaScene extends Phaser.Scene {
     Audio.playMagnet();
 
     const magnetText = this.add.text(400, 350, '🧲 XP MAGNET! 🧲', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: '#00ffff',
       fontStyle: 'bold',
@@ -3130,7 +3148,7 @@ export default class ArenaScene extends Phaser.Scene {
       y - 10,
       text,
       {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: size,
         color: color,
         fontStyle: 'bold',
@@ -3178,7 +3196,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Show equipped notification
     const equipText = this.add.text(400, 150, `⚔️ ${equipped.name} EQUIPPED ⚔️`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '18px',
       color: '#00ff66',
       fontStyle: 'bold',
@@ -3273,7 +3291,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Legendary announcement
     const announceText = this.add.text(400, 200, '⚔️ LEGENDARY WEAPON ⚔️', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '32px',
       color: '#ffd700',
       fontStyle: 'bold',
@@ -3282,7 +3300,7 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0);
 
     const nameText = this.add.text(400, 250, weapon.name, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#00ff66',
       fontStyle: 'bold',
@@ -3291,7 +3309,7 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0);
 
     const descText = this.add.text(400, 290, weapon.desc, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: '#ffffff',
       stroke: '#000000',
@@ -3299,7 +3317,7 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0);
 
     const equipText = this.add.text(400, 330, 'PERMANENTLY UNLOCKED!', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '16px',
       color: '#ffff00',
       fontStyle: 'bold'
@@ -3421,7 +3439,7 @@ export default class ArenaScene extends Phaser.Scene {
           splitEnemy.setTint(i === 0 ? 0xff6600 : 0x0066ff);
           // Flash effect
           const splitText = this.add.text(splitEnemy.x, splitEnemy.y - 15, 'MERGE CONFLICT!', {
-            fontFamily: 'monospace',
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '8px',
             color: '#ffff00'
           }).setOrigin(0.5);
@@ -3456,8 +3474,8 @@ export default class ArenaScene extends Phaser.Scene {
         this.cameras.main.flash(300, 255, 255, 255);
 
         // Boss death announcement (fixed to camera center)
-        const deathText = this.add.text(400, 300, `${enemy.bossName}\nDEFEATED!`, {
-          fontFamily: 'monospace',
+        const deathText = this.add.text(400, 300, `${enemy.bossName}\n${t('game.defeated')}`, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '32px',
           color: '#ffd700',
           fontStyle: 'bold',
@@ -3553,7 +3571,7 @@ export default class ArenaScene extends Phaser.Scene {
       enemy.health = Math.min(enemy.health + healAmount, enemy.maxHealth || enemy.health);
       // Show heal effect
       const healText = this.add.text(enemy.x, enemy.y - 20, `+${healAmount}`, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '10px',
         color: '#00ff00'
       }).setOrigin(0.5);
@@ -3629,6 +3647,25 @@ export default class ArenaScene extends Phaser.Scene {
       localStorage.setItem('vibeCoderHighScore', this.highScore.toString());
     }
 
+    // Add run to leaderboard (local + on-chain if wallet connected)
+    LeaderboardManager.addEntry(settings.playerName, this.waveNumber, state.totalXP);
+    stellarWallet.getAddress().then((addr) => {
+      if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP).catch(() => {});
+    });
+    // Provably Fair: submit to Soroban contract (Game Hub) if configured and rules valid
+    if (gameClient.isContractConfigured()) {
+      const { valid } = validateGameRules(this.waveNumber, state.totalXP);
+      if (valid) {
+        stellarWallet.getAddress().then((addr) => {
+          if (addr) {
+            gameClient
+              .submitResult(addr, (xdr) => stellarWallet.signTransaction(xdr), this.waveNumber, state.totalXP)
+              .catch(() => {});
+          }
+        });
+      }
+    }
+
     // Award currency (BITS) based on performance
     const waveBits = this.waveNumber * 5; // 5 bits per wave
     const killBits = Math.floor(state.kills * 0.5); // 0.5 bits per kill
@@ -3638,8 +3675,8 @@ export default class ArenaScene extends Phaser.Scene {
     window.VIBE_UPGRADES.addCurrency(totalBits);
 
     // Show bits earned (fixed to camera center)
-    const bitsText = this.add.text(400, 200, `+${totalBits} BITS EARNED!`, {
-      fontFamily: 'monospace',
+    const bitsText = this.add.text(400, 200, `+${totalBits} ${t('game.bits_earned')}`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#00ffff',
       fontStyle: 'bold',
@@ -3690,7 +3727,7 @@ export default class ArenaScene extends Phaser.Scene {
       }
 
       const respawnText = this.add.text(400, 300, respawnMessage, {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: isNewHighWave ? '28px' : '32px',
         color: isNewHighWave ? '#ffd700' : '#00ffff',
         fontStyle: 'bold',
@@ -3723,7 +3760,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Show XP penalty
     const penaltyText = this.add.text(400, 200, `-${xpLost} XP LOST`, {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#ff6666',
       fontStyle: 'bold',
@@ -3781,7 +3818,7 @@ export default class ArenaScene extends Phaser.Scene {
 
       // Show immortal respawn message
       const respawnText = this.add.text(400, 300, '♾️ IMMORTAL RESPAWN', {
-        fontFamily: 'monospace',
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '24px',
         color: '#88ff88',
         fontStyle: 'bold',
@@ -3909,6 +3946,7 @@ export default class ArenaScene extends Phaser.Scene {
           Math.cos(angle) * enemy.speed * 0.5,
           Math.sin(angle) * enemy.speed * 0.5
         );
+        if (enemy.enemyType === 'bug' && enemy.body) enemy.setFlipX(enemy.body.velocity.x < 0);
         return; // Skip complex AI behaviors
       }
 
@@ -4002,6 +4040,7 @@ export default class ArenaScene extends Phaser.Scene {
             minion.xpValue = 3;
             minion.enemyType = 'bug';
             minion.behavior = 'chase';
+            minion.setScale(0.45); // Werewolf minion mismo tamaño que los demás
             minion.setTint(0x6622aa); // Tinted to match parent
             minion.play('bug-walk');
             // Spawn effect
@@ -4119,7 +4158,7 @@ export default class ArenaScene extends Phaser.Scene {
             if (hijackedCount > 0) {
               // Hijack announcement
               const hijackText = this.add.text(enemy.x, enemy.y - 30, 'HIJACKED!', {
-                fontFamily: 'monospace',
+                fontFamily: '"Segoe UI", system-ui, sans-serif',
                 fontSize: '12px',
                 color: '#ff00ff',
                 fontStyle: 'bold'
@@ -4219,7 +4258,7 @@ export default class ArenaScene extends Phaser.Scene {
                 otherEnemy.cloneRadius = 80;
                 // Show effect
                 const cloneText = this.add.text(otherEnemy.x, otherEnemy.y - 20, 'COLLAPSED!', {
-                  fontFamily: 'monospace',
+                  fontFamily: '"Segoe UI", system-ui, sans-serif',
                   fontSize: '10px',
                   color: '#aa00ff'
                 }).setOrigin(0.5);
@@ -4285,6 +4324,11 @@ export default class ArenaScene extends Phaser.Scene {
             }
           }
         }
+      }
+
+      // Werewolf (bug): flip run animation so it faces left when moving left
+      if (enemy.enemyType === 'bug' && enemy.body) {
+        enemy.setFlipX(enemy.body.velocity.x < 0);
       }
     });
 

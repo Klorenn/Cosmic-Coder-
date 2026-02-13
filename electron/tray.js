@@ -72,7 +72,7 @@ export function createTray(settings, toggleWindowFn, quitFn, setWindowModeFn, to
 
   try {
     trayInstance = new Tray(trayIcon);
-    trayInstance.setToolTip('Vibe Coder');
+    trayInstance.setToolTip('Cosmic Coder');
     console.log('[Tray] Created successfully');
 
     // Set up click handlers
@@ -140,7 +140,7 @@ export function updateTrayMenu(tray, mainWindow, settings, quitFn) {
         mainWindow?.focus();
       }},
       { type: 'separator' },
-      { label: 'Quit Vibe Coder', click: quitFn || callbacks.quitFn }
+      { label: 'Quit Cosmic Coder', click: quitFn || callbacks.quitFn }
     ];
   } else {
     // Minimal mode: just show/hide and quit

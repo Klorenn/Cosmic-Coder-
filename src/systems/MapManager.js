@@ -329,7 +329,7 @@ export default class MapManager {
 
     // Center icon
     const icon = this.scene.add.text(x, y, '⟲', {
-      fontFamily: 'monospace',
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: Phaser.Display.Color.IntegerToColor(color).rgba
     }).setOrigin(0.5);
