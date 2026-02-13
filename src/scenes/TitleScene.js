@@ -1044,9 +1044,10 @@ export default class TitleScene extends Phaser.Scene {
 
     // Create enemy sprite (use bug texture)
     const enemy = this.add.sprite(x, y, 'bug');
-    enemy.setScale(0.85 * uiScale); // Werewolf más grande y visible en el menú
+    enemy.setScale(0.85 * uiScale); // Werewolf más grande y visible
     enemy.play('bug-walk');
-    enemy.setAlpha(0.8);
+    enemy.setAlpha(0.6);            // Más sutil, efecto background
+    enemy.setDepth(-3);             // Detrás del texto del menú
     enemy.health = 1;
     enemy.speed = Phaser.Math.Between(15, 30);
 
@@ -1065,20 +1066,15 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   updateTitleDefense() {
-    // Move enemies toward player
+    // Move enemies in a gentle run across the screen (background effect)
     this.titleEnemies = this.titleEnemies.filter(enemy => {
       if (!enemy.active) return false;
 
-      // Move toward player
-      const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, this.idlePlayer.x, this.idlePlayer.y);
-      enemy.x += Math.cos(angle) * enemy.speed * 0.05;
-      enemy.y += Math.sin(angle) * enemy.speed * 0.05;
-
-      // Face movement direction
-      enemy.setFlipX(Math.cos(angle) < 0);
+      enemy.x -= enemy.speed * 0.06;
+      enemy.setFlipX(true);
 
       // Remove if off screen left
-      if (enemy.x < -50) {
+      if (enemy.x < -80) {
         enemy.destroy();
         return false;
       }
