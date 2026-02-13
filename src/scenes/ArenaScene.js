@@ -6,6 +6,7 @@ import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import MapManager from '../systems/MapManager.js';
 import TouchControls from '../systems/TouchControls.js';
+import { getUIScale } from '../utils/layout.js';
 import RunModifiers from '../systems/RunModifiers.js';
 import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
@@ -254,6 +255,9 @@ export default class ArenaScene extends Phaser.Scene {
     // Touch controls (móvil / táctil)
     this.touchControls = null;
 
+    // UI scale cache
+    this.uiScale = 1;
+
     // Track if this is a continued game
     this.isContinuedGame = false;
 
@@ -275,6 +279,9 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Create tiled background
     this.createBackground();
+
+    // UI scale based on current resolution
+    this.uiScale = getUIScale(this);
 
     // Create player
     this.createPlayer();
@@ -662,7 +669,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Create player at center of the larger world
     this.player = this.physics.add.sprite(this.worldWidth / 2, this.worldHeight / 2, 'player');
     this.player.setCollideWorldBounds(true);
-    this.player.setScale(0.55); // Robot sprite 128px → ~70px for gameplay (más visible)
+    this.player.setScale(0.7 * this.uiScale); // Más grande en resoluciones altas
 
     // Player health
     this.player.health = this.getStats().maxHealth;

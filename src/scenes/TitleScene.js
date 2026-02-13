@@ -111,11 +111,19 @@ export default class TitleScene extends Phaser.Scene {
 
   createTitle() {
     const cx = this.scale.width / 2;
+    const h = this.scale.height || 600;
+    const uiScale = getUIScale(this);
+
+    // Alturas relativas para armonía en cualquier resolución
+    const titleY = h * 0.18;      // ~108px en 600
+    const subtitleY = h * 0.26;   // ~156px en 600
+    const underlineY = h * 0.30;  // ~180px en 600
+    const versionY = h * 0.335;   // ~201px en 600
 
     // Título principal: tamaño moderado para que se lea bien y no se vea pixelado
-    this.titleText = this.add.text(cx, 100, t('title'), {
+    this.titleText = this.add.text(cx, titleY, t('title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '48px',
+      fontSize: `${48 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold',
       stroke: '#003333',
@@ -130,16 +138,16 @@ export default class TitleScene extends Phaser.Scene {
     });
 
     // Subtitle
-    this.add.text(cx, 155, t('subtitle'), {
+    this.add.text(cx, subtitleY, t('subtitle'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
+      fontSize: `${16 * uiScale}px`,
       color: '#ff00ff'
     }).setOrigin(0.5);
 
     // Animated underline
     const underline = this.add.graphics();
     underline.lineStyle(2, 0x00ffff, 0.8);
-    underline.lineBetween(cx - 200, 178, cx + 200, 178);
+    underline.lineBetween(cx - 200, underlineY, cx + 200, underlineY);
 
     this.tweens.add({
       targets: underline,
@@ -150,9 +158,9 @@ export default class TitleScene extends Phaser.Scene {
     });
 
     // Version
-    this.add.text(cx, 198, t('version'), {
+    this.add.text(cx, versionY, t('version'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
+      fontSize: `${10 * uiScale}px`,
       color: '#666666'
     }).setOrigin(0.5);
   }
@@ -179,13 +187,17 @@ export default class TitleScene extends Phaser.Scene {
   createMenu() {
     this.menuTexts = [];
     const cx = this.scale.width / 2;
-    const startY = 228;
-    const spacing = 38;
+    const h = this.scale.height || 600;
+    const uiScale = getUIScale(this);
+
+    // Menú centrado bajo el título, con spacing proporcional
+    const startY = h * 0.42;              // ~252px en 600
+    const spacing = 40 * uiScale;         // un poco más grande en pantallas grandes
 
     this.menuOptions.forEach((option, index) => {
       const text = this.add.text(cx, startY + index * spacing, t('menu.' + option), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '22px',
+        fontSize: `${22 * uiScale}px`,
         color: index === 0 ? '#00ffff' : '#666666',
         fontStyle: index === 0 ? 'bold' : 'normal'
       }).setOrigin(0.5);
@@ -196,7 +208,7 @@ export default class TitleScene extends Phaser.Scene {
     // Selection indicator
     this.selector = this.add.text(cx - 140, startY, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '22px',
+      fontSize: `${22 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
@@ -212,9 +224,9 @@ export default class TitleScene extends Phaser.Scene {
 
     // Instrucciones bien debajo del último ítem del menú, sin solapar
     const lastOptionY = startY + (this.menuOptions.length - 1) * spacing;
-    this.promptText = this.add.text(cx, lastOptionY + 42, t('prompt.enter_select'), {
+    this.promptText = this.add.text(cx, lastOptionY + 32 * uiScale, t('prompt.enter_select'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '11px',
+      fontSize: `${11 * uiScale}px`,
       color: '#888888'
     }).setOrigin(0.5);
 
@@ -424,16 +436,18 @@ export default class TitleScene extends Phaser.Scene {
       ease: 'Sine.easeInOut'
     });
 
+    const uiScale = getUIScale(this);
+
     // Player character (CraftPix robot - 128px sprites)
     this.idlePlayer = this.add.sprite(150, 500, 'player');
-    this.idlePlayer.setScale(1); // Robot 128px a tamaño completo en título
+    this.idlePlayer.setScale(1.4 * uiScale); // Más grande en pantallas grandes
     this.idlePlayer.play('player-idle');
 
     // Speech bubble (hidden initially)
     this.speechBubble = this.add.graphics();
     this.speechText = this.add.text(0, 0, '', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '11px',
+      fontSize: `${11 * uiScale}px`,
       color: '#000000',
       align: 'center',
       wordWrap: { width: 140 }
@@ -445,7 +459,7 @@ export default class TitleScene extends Phaser.Scene {
     this.thinkingBubble = this.add.graphics();
     this.thinkingDots = this.add.text(0, 0, '...', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
+      fontSize: `${16 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
@@ -1398,6 +1412,7 @@ export default class TitleScene extends Phaser.Scene {
   showControls() {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
+    const uiScale = getUIScale(this);
 
     // Create overlay
     const overlay = this.add.rectangle(cx, cy, 600, 400, 0x000000, 0.9);
@@ -1405,7 +1420,7 @@ export default class TitleScene extends Phaser.Scene {
 
     const controlsTitle = this.add.text(cx, 150, t('controls.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
+      fontSize: `${28 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
@@ -1428,7 +1443,7 @@ export default class TitleScene extends Phaser.Scene {
     controls.forEach((line, index) => {
       const text = this.add.text(cx, 200 + index * 25, line, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
+        fontSize: `${14 * uiScale}px`,
         color: line.includes('npm') ? '#ffff00' : '#ffffff'
       }).setOrigin(0.5);
       controlTexts.push(text);
@@ -1436,7 +1451,7 @@ export default class TitleScene extends Phaser.Scene {
 
     const closeText = this.add.text(cx, 480, t('prompt.any_key_close'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
+      fontSize: `${12 * uiScale}px`,
       color: '#888888'
     }).setOrigin(0.5);
 

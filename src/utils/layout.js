@@ -2,11 +2,14 @@ import Phaser from 'phaser';
 
 /**
  * Devuelve un factor de escala UI basado en la altura actual.
- * 1080p = 1.0, 4K ≈ 2.0 (clamp para no romper en móviles pequeños).
+ * Pensado para que en pantallas grandes (1080p, 1440p, 4K)
+ * todo se vea más GRANDE que en el diseño original de 800x600.
+ *
+ * 720p ≈ 1.0, 1080p ≈ 1.5, 1440p ≈ 2.0, 4K ≈ 2.4 (clamp).
  */
 export function getUIScale(scene) {
-  const h = scene.scale?.height || 1080;
-  return Phaser.Math.Clamp(h / 1080, 0.85, 2.1);
+  const h = scene.scale?.height || 720;
+  return Phaser.Math.Clamp(h / 720, 1, 2.4);
 }
 
 export function anchorTopLeft(scene, offsetX, offsetY) {
