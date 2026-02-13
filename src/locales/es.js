@@ -4,7 +4,7 @@
 export default {
   title: 'CODIFICADOR CÓSMICO',
   subtitle: 'PROGRAMA PARA CONQUISTAR',
-  version: 'v1.0 // CON CLAUDE CODE',
+  version: 'v1.0',
   menu: {
     CONTINUE: 'CONTINUAR',
     START_GAME: 'EMPEZAR PARTIDA',
@@ -45,7 +45,7 @@ export default {
     fullscreen_exit: 'SALIR PANTALLA COMPLETA',
     wallet_connect: 'CONECTAR WALLET',
     wallet_disconnect: 'DESCONECTAR',
-    wallet_error: 'No hay wallet conectada.\nElige una del menú o instala Freighter / xBull.'
+    wallet_error: 'No se pudo conectar.\nInstala la extensión Freighter en tu navegador.'
   },
   controls: {
     title: 'CONTROLES',

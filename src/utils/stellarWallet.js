@@ -1,177 +1,77 @@
 /**
- * Stellar Wallets Kit integration for Cosmic Coder.
- * Uses the kit's createButton() so the official wallet selector modal always works.
- * @see https://github.com/Creit-Tech/Stellar-Wallets-Kit
+ * Freighter only – connect and sign with the Freighter extension.
+ * @see https://docs.freighter.app/docs/
+ * Install: npm install @stellar/freighter-api
  */
 
-let kit = null;
+import Freighter from '@stellar/freighter-api';
+
 let cachedAddress = null;
 
 const STORAGE_KEY = 'cosmicCoderWalletAddress';
+const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 
-/** Button theme to match game (dark + green) */
-const GAME_BUTTON_THEME = {
-  bgColor: '#0a0a0f',
-  textColor: '#00cc88',
-  solidTextColor: '#00ffaa',
-  dividerColor: 'rgba(0, 204, 136, 0.3)',
-  buttonPadding: '8px 14px',
-  buttonBorderRadius: '4px'
-};
-
-/**
- * Initialize the kit (call once). Safe to call multiple times.
- * @returns {Promise<object|null>} kit instance or null if load failed
- */
-export async function init() {
-  if (kit) return kit;
+function loadCached() {
   try {
-    const {
-      StellarWalletsKit,
-      WalletNetwork,
-      FreighterModule,
-      xBullModule,
-      AlbedoModule,
-      FREIGHTER_ID
-    } = await import('@creit.tech/stellar-wallets-kit');
-
-    kit = new StellarWalletsKit({
-      network: WalletNetwork.TESTNET,
-      selectedWalletId: FREIGHTER_ID,
-      modules: [
-        new FreighterModule(),
-        new xBullModule(),
-        new AlbedoModule()
-      ],
-      buttonTheme: GAME_BUTTON_THEME
-    });
-
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) cachedAddress = saved;
-    } catch (_) {}
-    return kit;
-  } catch (e) {
-    console.warn('Stellar Wallets Kit init failed:', e);
-    return null;
-  }
-}
-
-/**
- * Give extensions (e.g. Freighter) time to inject before the kit checks isAvailable().
- */
-async function waitForWallets() {
-  try {
-    const { isConnected } = await import('@stellar/freighter-api');
-    await isConnected().catch(() => {});
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) cachedAddress = saved;
   } catch (_) {}
-  await new Promise((r) => setTimeout(r, 1200));
 }
+loadCached();
 
 /**
- * Create the Stellar Wallets Kit button in the given container (doc flow).
- * Call once at startup, e.g. from main.js: createKitButton(document.querySelector('#buttonWrapper')).
- * The kit injects its button; click opens the modal. Sign with getAddress() + signTransaction().
- * @param {HTMLElement} container - e.g. document.querySelector('#buttonWrapper')
- * @param {() => void} [onStateChange] - optional, called when user connects or disconnects
- * @returns {Promise<boolean>} true if button was created
+ * Check if Freighter extension is available.
+ * @returns {Promise<boolean>}
  */
-export async function createKitButton(container, onStateChange) {
-  await waitForWallets();
-  const k = await init();
-  if (!k || !container) return false;
-  if (k.isButtonCreated()) return true;
+export async function isFreighterAvailable() {
   try {
-    await k.createButton({
-      container,
-      buttonText: 'CONNECT WALLET',
-      onConnect: (response) => {
-        cachedAddress = response.address;
-        try {
-          localStorage.setItem(STORAGE_KEY, response.address);
-        } catch (_) {}
-        if (typeof onStateChange === 'function') onStateChange();
-      },
-      onClosed: (err) => {
-        if (err) console.warn('Wallet modal closed:', err);
-      },
-      onError: (err) => {
-        console.warn('Wallet error:', err);
-      },
-      onDisconnect: () => {
-        cachedAddress = null;
-        try {
-          localStorage.removeItem(STORAGE_KEY);
-        } catch (_) {}
-        if (typeof onStateChange === 'function') onStateChange();
-      }
-    });
-    return true;
-  } catch (e) {
-    console.warn('Stellar Wallets Kit createButton failed:', e);
+    const { isConnected: connected, error } = await Freighter.isConnected();
+    return !error && !!connected;
+  } catch (_) {
     return false;
   }
 }
 
 /**
- * Open the wallet modal manually (e.g. if you use your own button). Waits for extensions first.
- * @returns {Promise<string|null>} address if user connected, null otherwise
+ * Connect wallet: asks Freighter for access and returns the address.
+ * @returns {Promise<string|null>} address or null if user denied / not installed
  */
 export async function connect() {
-  const k = await init();
-  if (!k) return null;
-  await waitForWallets();
-  return new Promise((resolve) => {
-    let resolved = false;
-    const done = (value) => {
-      if (!resolved) {
-        resolved = true;
-        resolve(value);
-      }
-    };
-    k.openModal({
-      modalTitle: 'Connect wallet',
-      notAvailableText: 'Not installed — click to open install page',
-      onWalletSelected: async (option) => {
-        try {
-          k.setWallet(option.id);
-          const { address } = await k.getAddress();
-          cachedAddress = address;
-          try {
-            localStorage.setItem(STORAGE_KEY, address);
-          } catch (_) {}
-          done(address);
-        } catch (err) {
-          console.warn('getAddress failed:', err);
-          done(null);
-        }
-      },
-      onClosed: () => done(cachedAddress)
-    }).catch((err) => {
-      console.warn('openModal failed:', err);
-      done(null);
-    });
-  });
-}
-
-/**
- * Get current wallet address (from cache or kit). Returns null if not connected.
- */
-export async function getAddress() {
-  if (cachedAddress) return cachedAddress;
-  const k = kit || await init();
-  if (!k) return null;
   try {
-    const { address } = await k.getAddress();
+    const res = await Freighter.requestAccess();
+    const address = res?.address || res?.publicKey;
+    if (res?.error || !address) return null;
     cachedAddress = address;
+    try {
+      localStorage.setItem(STORAGE_KEY, address);
+    } catch (_) {}
     return address;
-  } catch (_) {
+  } catch (e) {
+    console.warn('Freighter requestAccess failed:', e);
     return null;
   }
 }
 
 /**
- * Disconnect: clear cache and storage. Kit state may still have wallet selected.
+ * Get current wallet address from app cache / localStorage only.
+ * NO auto-reconnect to Freighter here — connect() is the only place
+ * that is allowed to ask the extension for access.
+ * @returns {Promise<string|null>}
+ */
+export async function getAddress() {
+  if (cachedAddress) return cachedAddress;
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      cachedAddress = saved;
+      return cachedAddress;
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Disconnect: clear cache and storage.
  */
 export function disconnect() {
   cachedAddress = null;
@@ -195,18 +95,20 @@ export function shortAddress(address, chars = 6) {
   return `${address.slice(0, chars)}...${address.slice(-chars)}`;
 }
 
-const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
-
 /**
- * Sign a transaction XDR (for Soroban / Game Hub). Uses current wallet.
+ * Sign a transaction XDR (for Soroban / Game Hub).
  * @param {string} xdr - base64 transaction XDR
  * @param {string} [networkPassphrase] - default testnet
  * @returns {Promise<string>} signed XDR base64
  */
 export async function signTransaction(xdr, networkPassphrase = TESTNET_PASSPHRASE) {
-  const k = kit || await init();
   const addr = await getAddress();
-  if (!k || !addr) throw new Error('Wallet not connected');
-  const { signedTxXdr } = await k.signTransaction(xdr, { address: addr, networkPassphrase });
+  if (!addr) throw new Error('Wallet not connected');
+  const result = await Freighter.signTransaction(xdr, {
+    networkPassphrase,
+    address: addr
+  });
+  const signedTxXdr = result?.signedTxXdr ?? result?.signedTransaction;
+  if (result?.error || !signedTxXdr) throw new Error(result?.error?.message || 'Freighter sign failed');
   return signedTxXdr;
 }

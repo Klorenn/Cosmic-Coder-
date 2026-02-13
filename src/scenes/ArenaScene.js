@@ -5,6 +5,7 @@ import SpatialHash from '../utils/SpatialHash.js';
 import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import MapManager from '../systems/MapManager.js';
+import TouchControls from '../systems/TouchControls.js';
 import RunModifiers from '../systems/RunModifiers.js';
 import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
@@ -44,7 +45,8 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Wave system
     this.waveNumber = 1;
-    this.enemiesPerWave = 14; // Base alto para que desde olas medias sea skill-based
+    // Más enemigos base por ola para que escale más agresivo
+    this.enemiesPerWave = 22;
     this.spawnTimer = null;
     this.waveTimer = null;
 
@@ -162,32 +164,32 @@ export default class ArenaScene extends Phaser.Scene {
     // spawnWeight: how many copies added to spawn pool (higher = more common)
     // texture: Phaser texture key (defaults to enemy type name if omitted)
     this.enemyTypes = {
-      // Original enemies
-      bug: { health: 15, speed: 40, damage: 3, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 6 }, // Werewolf: más grande y más frecuente
-      glitch: { health: 30, speed: 70, damage: 5, xpValue: 15, behavior: 'chase', waveMin: 3, spawnWeight: 2 },
-      'memory-leak': { health: 60, speed: 25, damage: 10, xpValue: 30, behavior: 'chase', waveMin: 5 },
-      'syntax-error': { health: 12, speed: 100, damage: 2, xpValue: 10, behavior: 'teleport', teleportCooldown: 3000, waveMin: 8, spawnWeight: 2 },
-      'infinite-loop': { health: 40, speed: 50, damage: 4, xpValue: 20, behavior: 'orbit', orbitRadius: 120, waveMin: 12 },
-      'race-condition': { health: 25, speed: 60, damage: 6, xpValue: 25, behavior: 'erratic', speedVariance: 80, waveMin: 15 },
+      // Original enemies – buffeados para que peguen más duro
+      bug: { health: 24, speed: 45, damage: 4, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 6 }, // base trash mob
+      glitch: { health: 45, speed: 75, damage: 7, xpValue: 15, behavior: 'chase', waveMin: 3, spawnWeight: 2 },
+      'memory-leak': { health: 90, speed: 28, damage: 14, xpValue: 30, behavior: 'chase', waveMin: 5 },
+      'syntax-error': { health: 18, speed: 110, damage: 3, xpValue: 10, behavior: 'teleport', teleportCooldown: 2800, waveMin: 8, spawnWeight: 2 },
+      'infinite-loop': { health: 60, speed: 55, damage: 6, xpValue: 20, behavior: 'orbit', orbitRadius: 120, waveMin: 12 },
+      'race-condition': { health: 40, speed: 70, damage: 8, xpValue: 25, behavior: 'erratic', speedVariance: 90, waveMin: 15 },
 
       // Coding-themed enemies
-      'segfault': { health: 10, speed: 0, damage: 999, xpValue: 50, behavior: 'deathzone', lifespan: 8000, waveMin: 30, texture: 'enemy-segfault' },
-      'dependency-hell': { health: 80, speed: 30, damage: 6, xpValue: 80, behavior: 'spawner', spawnInterval: 3000, maxMinions: 4, waveMin: 35, texture: 'enemy-dependency-hell' },
-      'stack-overflow': { health: 100, speed: 35, damage: 8, xpValue: 100, behavior: 'grow', growRate: 0.001, waveMin: 25, texture: 'enemy-stack-overflow' },
+      'segfault': { health: 12, speed: 0, damage: 999, xpValue: 50, behavior: 'deathzone', lifespan: 8000, waveMin: 30, texture: 'enemy-segfault' },
+      'dependency-hell': { health: 120, speed: 32, damage: 8, xpValue: 80, behavior: 'spawner', spawnInterval: 2700, maxMinions: 5, waveMin: 35, texture: 'enemy-dependency-hell' },
+      'stack-overflow': { health: 150, speed: 38, damage: 10, xpValue: 100, behavior: 'grow', growRate: 0.0012, waveMin: 25, texture: 'enemy-stack-overflow' },
 
       // AI-themed enemies
-      'hallucination': { health: 1, speed: 50, damage: 0, xpValue: 1, behavior: 'fake', waveMin: 20, spawnWeight: 2, texture: 'enemy-hallucination' },
-      'token-overflow': { health: 40, speed: 45, damage: 5, xpValue: 40, behavior: 'growDamage', growRate: 0.0005, waveMin: 25, texture: 'enemy-token-overflow' },
-      'context-loss': { health: 50, speed: 60, damage: 7, xpValue: 60, behavior: 'contextLoss', teleportCooldown: 2500, wanderChance: 0.3, waveMin: 30, texture: 'enemy-context-loss' },
-      'prompt-injection': { health: 60, speed: 40, damage: 5, xpValue: 100, behavior: 'hijack', hijackDuration: 5000, hijackCooldown: 10000, waveMin: 40, texture: 'enemy-prompt-injection' },
+      'hallucination': { health: 1, speed: 55, damage: 0, xpValue: 1, behavior: 'fake', waveMin: 20, spawnWeight: 2, texture: 'enemy-hallucination' },
+      'token-overflow': { health: 60, speed: 50, damage: 7, xpValue: 40, behavior: 'growDamage', growRate: 0.0007, waveMin: 25, texture: 'enemy-token-overflow' },
+      'context-loss': { health: 70, speed: 65, damage: 9, xpValue: 60, behavior: 'contextLoss', teleportCooldown: 2400, wanderChance: 0.35, waveMin: 30, texture: 'enemy-context-loss' },
+      'prompt-injection': { health: 85, speed: 45, damage: 7, xpValue: 100, behavior: 'hijack', hijackDuration: 5500, hijackCooldown: 9000, waveMin: 40, texture: 'enemy-prompt-injection' },
 
       // v2 enemies (Mixed AI + Coding)
-      '404-not-found': { health: 25, speed: 55, damage: 4, xpValue: 20, behavior: 'invisible', waveMin: 18, texture: 'enemy-404-not-found' },
-      'cors-error': { health: 35, speed: 0, damage: 8, xpValue: 30, behavior: 'blocker', blockDuration: 5000, waveMin: 22, texture: 'enemy-cors-error' },
-      'type-error': { health: 30, speed: 50, damage: 5, xpValue: 25, behavior: 'morph', morphInterval: 3000, waveMin: 28, texture: 'enemy-type-error' },
-      'git-conflict': { health: 45, speed: 40, damage: 4, xpValue: 35, behavior: 'split', waveMin: 32, texture: 'enemy-git-conflict' },
-      'overfitting': { health: 50, speed: 65, damage: 6, xpValue: 45, behavior: 'predict', waveMin: 38, texture: 'enemy-overfitting' },
-      'mode-collapse': { health: 70, speed: 35, damage: 7, xpValue: 60, behavior: 'clone', cloneCooldown: 8000, cloneRadius: 120, waveMin: 45, texture: 'enemy-mode-collapse' }
+      '404-not-found': { health: 35, speed: 60, damage: 5, xpValue: 20, behavior: 'invisible', waveMin: 18, texture: 'enemy-404-not-found' },
+      'cors-error': { health: 50, speed: 0, damage: 10, xpValue: 30, behavior: 'blocker', blockDuration: 6000, waveMin: 22, texture: 'enemy-cors-error' },
+      'type-error': { health: 45, speed: 55, damage: 7, xpValue: 25, behavior: 'morph', morphInterval: 2800, waveMin: 28, texture: 'enemy-type-error' },
+      'git-conflict': { health: 65, speed: 45, damage: 6, xpValue: 35, behavior: 'split', waveMin: 32, texture: 'enemy-git-conflict' },
+      'overfitting': { health: 75, speed: 70, damage: 8, xpValue: 45, behavior: 'predict', waveMin: 38, texture: 'enemy-overfitting' },
+      'mode-collapse': { health: 95, speed: 38, damage: 9, xpValue: 60, behavior: 'clone', cloneCooldown: 7500, cloneRadius: 130, waveMin: 45, texture: 'enemy-mode-collapse' }
     };
 
     // Mini-boss definitions (appear at waves 10, 30, 50...)
@@ -248,6 +250,9 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Map manager for obstacles and biomes
     this.mapManager = null;
+
+    // Touch controls (móvil / táctil)
+    this.touchControls = null;
 
     // Track if this is a continued game
     this.isContinuedGame = false;
@@ -373,6 +378,10 @@ export default class ArenaScene extends Phaser.Scene {
     this.mapManager.generateMap(this.currentStage);
     this.mapManager.setupCollisions(this.player, this.enemies, this.projectiles);
 
+    // Initialize touch controls (solo en dispositivos táctiles)
+    this.touchControls = new TouchControls(this);
+    this.touchControls.create();
+
     // Initialize EventManager
     this.eventManager = new EventManager(this);
 
@@ -398,13 +407,6 @@ export default class ArenaScene extends Phaser.Scene {
       this.modifierEffects = RunModifiers.getCombinedEffects(this.activeModifiers);
     }
 
-    // For testing - press SPACE to simulate XP gain (only when not paused)
-    this.input.keyboard.on('keydown-SPACE', () => {
-      if (!this.isPaused) {
-        window.VIBE_CODER.addXP(10);
-      }
-    });
-
     // Initialize audio on first interaction
     this.input.on('pointerdown', () => {
       Audio.initAudio();
@@ -426,7 +428,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-ESC', () => this.togglePause());
     this.input.keyboard.on('keydown-P', () => this.togglePause());
 
-    console.log('Arena ready! WASD to move, auto-attack enabled. Press SPACE for XP. M for music. ESC/P to pause.');
+    console.log('Arena ready! WASD to move, auto-attack enabled. M for music. ESC/P to pause.');
   }
 
   createBackground() {
@@ -1339,11 +1341,21 @@ export default class ArenaScene extends Phaser.Scene {
       this.eventManager.tryTriggerEvent(this.waveNumber);
     }
 
-    // Spawn enemies over time — desde ola ~12 sube fuerte para que sea skill-based
+    // Spawn enemies over time — olas altas se convierten en bullet hell
     let spawned = 0;
-    const waveScale = this.waveNumber >= 12 ? this.waveNumber * 3 : this.waveNumber * 2;
-    const toSpawn = Math.min(this.enemiesPerWave + Math.floor(waveScale), 75); // Cap 75 en olas altas
-    const spawnDelay = this.waveNumber >= 10 ? Math.max(400, 900 - this.waveNumber * 25) : 1000; // Más rápido desde ola 10
+    let waveScale;
+    if (this.waveNumber < 10) {
+      waveScale = this.waveNumber * 2.5;
+    } else if (this.waveNumber < 25) {
+      waveScale = this.waveNumber * 4;
+    } else {
+      waveScale = this.waveNumber * 6;
+    }
+    // MUCHOS enemigos en olas altas, pero con un cap razonable
+    const toSpawn = Math.min(this.enemiesPerWave + Math.floor(waveScale), 150);
+    const spawnDelay = this.waveNumber >= 8
+      ? Math.max(220, 900 - this.waveNumber * 30) // spawnea muy rápido en olas altas
+      : 900;
 
     this.spawnTimer = this.time.addEvent({
       delay: spawnDelay,
@@ -3849,15 +3861,31 @@ export default class ArenaScene extends Phaser.Scene {
     const manualRight = this.cursors.right.isDown || this.wasd.right.isDown;
     const manualUp = this.cursors.up.isDown || this.wasd.up.isDown;
     const manualDown = this.cursors.down.isDown || this.wasd.down.isDown;
-    const hasManualInput = manualLeft || manualRight || manualUp || manualDown;
+    const hasKeyboardInput = manualLeft || manualRight || manualUp || manualDown;
 
-    if (hasManualInput) {
+    // Controles táctiles (si existen) tienen prioridad sobre auto-move, pero no sobre teclado
+    let hasTouchInput = false;
+    if (!hasKeyboardInput && this.touchControls) {
+      const mv = this.touchControls.getMoveVector();
+      if (Math.abs(mv.x) > 0.1 || Math.abs(mv.y) > 0.1) {
+        vx = mv.x;
+        vy = mv.y;
+        hasTouchInput = true;
+      }
+
+      // Botón de pausa táctil
+      if (this.touchControls.consumePauseAction()) {
+        this.togglePause();
+      }
+    }
+
+    if (hasKeyboardInput) {
       // Manual input takes priority
       if (manualLeft) vx = -1;
       if (manualRight) vx = 1;
       if (manualUp) vy = -1;
       if (manualDown) vy = 1;
-    } else if (window.VIBE_SETTINGS.autoMove && window.VIBE_CODER.isCodingActive()) {
+    } else if (!hasTouchInput && window.VIBE_SETTINGS.autoMove && window.VIBE_CODER.isCodingActive()) {
       // Auto-move: find safest direction (away from enemies)
       const autoMove = this.calculateAutoMove();
       vx = autoMove.x;
@@ -3887,7 +3915,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Update auto-move indicator position and mode emoji
     if (this.autoMoveIndicator) {
       this.autoMoveIndicator.setPosition(this.player.x + 20, this.player.y - 30);
-      const isAutoMoving = !hasManualInput && window.VIBE_SETTINGS?.autoMove && window.VIBE_CODER?.isCodingActive();
+      const isAutoMoving = !hasKeyboardInput && !hasTouchInput && window.VIBE_SETTINGS?.autoMove && window.VIBE_CODER?.isCodingActive();
       this.autoMoveIndicator.setVisible(isAutoMoving);
       // Update emoji based on mode
       if (isAutoMoving) {

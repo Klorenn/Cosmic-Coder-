@@ -5,7 +5,7 @@ export default {
   // Title & menu
   title: 'COSMIC CODER',
   subtitle: 'CODE TO CONQUER',
-  version: 'v1.0 // POWERED BY CLAUDE CODE',
+  version: 'v1.0',
   menu: {
     CONTINUE: 'CONTINUE',
     START_GAME: 'START GAME',
@@ -46,12 +46,12 @@ export default {
     fullscreen_exit: 'EXIT FULLSCREEN',
     wallet_connect: 'CONNECT WALLET',
     wallet_disconnect: 'DISCONNECT',
-    wallet_error: 'No wallet connected.\nPick one from the list or install Freighter / xBull.'
+    wallet_error: 'Could not connect.\nInstall the Freighter extension in your browser.'
   },
   controls: {
     title: 'CONTROLS',
     wasd: 'WASD / ARROWS - Move',
-    space: 'SPACE - Manual XP (when offline)',
+    space: '',
     m: 'M - Toggle Music',
     esc_p: 'ESC / P - Pause Game',
     auto_attack: 'AUTO-ATTACK is always active!',

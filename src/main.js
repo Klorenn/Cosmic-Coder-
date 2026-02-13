@@ -4,7 +4,6 @@ import TitleScene from './scenes/TitleScene.js';
 import ArenaScene from './scenes/ArenaScene.js';
 import { connectToXPServer, isConnected } from './utils/socket.js';
 import RebirthManager from './systems/RebirthManager.js';
-import * as stellarWallet from './utils/stellarWallet.js';
 
 const config = {
   type: Phaser.AUTO,
@@ -16,8 +15,9 @@ const config = {
   scale: {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH,
-    width: 800,
-    height: 600
+    // Resolución lógica base en 16:9 para que se vea nítido en HD/4K
+    width: 1920,
+    height: 1080
   },
   physics: {
     default: 'arcade',
@@ -366,14 +366,6 @@ window.VIBE_CODER = {
 
 const game = new Phaser.Game(config);
 
-// Stellar Wallets Kit: createButton(buttonWrapper) as in the docs – botón oficial del kit
-const buttonWrapper = document.querySelector('#buttonWrapper');
-if (buttonWrapper) {
-  setTimeout(() => {
-    stellarWallet.createKitButton(buttonWrapper).catch(() => {});
-  }, 800);
-}
-
 // Connect to XP server for real-time coding rewards
 connectToXPServer();
 
@@ -383,7 +375,7 @@ window.addEventListener('xpserver-connected', () => {
 });
 
 window.addEventListener('xpserver-disconnected', () => {
-  console.log('⚠️ XP server disconnected. Press SPACE for manual XP.');
+  console.log('⚠️ XP server disconnected. XP will pause until the server is back.');
 });
 
 console.log('Cosmic Coder initialized! Ready to code and conquer.');

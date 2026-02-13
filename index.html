@@ -38,45 +38,10 @@
       image-rendering: auto;
       image-rendering: -webkit-optimize-contrast;
     }
-    /* Stellar Wallets Kit – contenedor del botón (doc: createButton(buttonWrapper)) */
-    #buttonWrapper {
-      position: fixed;
-      left: 20px;
-      top: 44px;
-      z-index: 9999;
-      pointer-events: auto;
-      min-width: 180px;
-      min-height: 40px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: rgba(10, 10, 15, 0.95);
-      border: 2px solid #00cc88;
-      border-radius: 8px;
-      padding: 8px 14px;
-      box-shadow: 0 0 14px rgba(0, 204, 136, 0.35);
-    }
-    #buttonWrapper stellar-wallets-button {
-      width: 100%;
-      --button-bg-color: #0a0a0f;
-      --button-text-color: #00cc88;
-      font-family: "Segoe UI", system-ui, sans-serif;
-      font-size: 13px;
-      font-weight: 600;
-    }
-    /* Stellar Wallets Kit modal above everything */
-    stellar-wallets-modal,
-    stellar-selector-modal {
-      position: fixed !important;
-      inset: 0 !important;
-      z-index: 2147483647 !important;
-      pointer-events: auto !important;
-    }
   </style>
 </head>
 <body>
   <div id="game-container"></div>
-  <div id="buttonWrapper"></div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

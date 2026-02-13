@@ -19,7 +19,7 @@ export default class MapManager {
       0: { // DEBUG ZONE
         name: 'DEBUG ZONE',
         wallTint: 0x00ffff,
-        hazardDamage: 5,
+        hazardDamage: 8,
         obstacles: ['codeBlock', 'terminal'],
         hazardTypes: ['bugSwarm'],
         interactives: ['crate', 'monitor'],
@@ -28,7 +28,7 @@ export default class MapManager {
       1: { // MEMORY BANKS
         name: 'MEMORY BANKS',
         wallTint: 0xaa00ff,
-        hazardDamage: 8,
+        hazardDamage: 12,
         obstacles: ['serverRack', 'memoryStick'],
         hazardTypes: ['memoryLeak'],
         interactives: ['crate', 'dataCore'],
@@ -37,7 +37,7 @@ export default class MapManager {
       2: { // NETWORK LAYER
         name: 'NETWORK LAYER',
         wallTint: 0x00ff00,
-        hazardDamage: 10,
+        hazardDamage: 15,
         obstacles: ['routerBox', 'cableBundle'],
         hazardTypes: ['packetStorm'],
         interactives: ['crate', 'signalBoost'],
@@ -46,7 +46,7 @@ export default class MapManager {
       3: { // KERNEL SPACE
         name: 'KERNEL SPACE',
         wallTint: 0xff4400,
-        hazardDamage: 15,
+        hazardDamage: 22,
         obstacles: ['cpuCore', 'registerBlock'],
         hazardTypes: ['kernelPanic', 'thermal'],
         interactives: ['crate', 'processNode'],
@@ -55,7 +55,7 @@ export default class MapManager {
       4: { // CLOUD CLUSTER
         name: 'CLOUD CLUSTER',
         wallTint: 0x4488ff,
-        hazardDamage: 12,
+        hazardDamage: 18,
         obstacles: ['cloudServer', 'apiPortal'],
         hazardTypes: ['latencySpike'],
         interactives: ['crate', 'containerPod'],
@@ -64,7 +64,7 @@ export default class MapManager {
       5: { // SINGULARITY
         name: 'SINGULARITY',
         wallTint: 0xffd700,
-        hazardDamage: 20,
+        hazardDamage: 28,
         obstacles: ['voidFragment', 'eventHorizon'],
         hazardTypes: ['blackHole', 'entropyField'],
         interactives: ['crate', 'quantumCache'],
