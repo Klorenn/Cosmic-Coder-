@@ -128,19 +128,52 @@ So **ZK / provably fair** = the contract only accepts scores that satisfy the pu
 2. **Proof**: Client checks `score >= wave * 10` (and optional `game_hash = H(player, wave, score, seed, ts)` for binding).
 3. **On-chain**: You submit `(wave, score)`; the contract re-checks the rule, then calls `end_game()` and updates the leaderboard.
 
-### Contract (Soroban)
+### ZK Ranked Mode (Groth16 BN254)
 
-- **Location**: `contracts/shadow_ascension/`
-- **Functions**: `init(game_hub)`, `start_match()`, `submit_result(wave, score)`, `get_leaderboard(limit)`
-- **Build** (requires [Stellar CLI](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup)):
+**The ZK proof is the central mechanic for ranked mode:** only runs that pass on-chain Groth16 verification enter the ranked leaderboard. It is not decorative; ranked progression is gated by the verifier.
+
+- **Groth16 over BN254**: Conceptually aligned with [CAP-0074](https://github.com/stellar/stellar-protocol/blob/master/core/cap-0074.md). The contract verifies pairing-based proofs; only cryptographically valid runs are accepted.
+- **Separation of concerns**:
+  - **zk_types** (`contracts/zk_types/`): Shared types only (`Groth16Error`, `ZkProof`, `ZkVerificationKey`). No duplicated definitions.
+  - **Verifier** (`contracts/groth16_verifier/`): BN254 pairing only. `verify_proof(vk, proof, pub_signals)` → `Result<bool, Groth16Error>`. No game logic, no leaderboard, no replay.
+  - **Policy** (`contracts/shadow_ascension/`): `set_verifier(verifier)`, `submit_zk(player, proof, vk, pub_signals, nonce, run_hash, season_id, score, wave)` → `Result<(), ShadowAscensionError>`. Validates `ic.len() == pub_signals.len() + 1`, score/wave > 0, then calls verifier; on success: anti-replay (player, nonce, season_id), per-season leaderboard update, event `zk_run_submitted`.
+- **Anti-replay**: (player, nonce, season_id) must be unique; replay attempts return `Err(Replay)`.
+- **On-chain leaderboard**: Per-season `LeaderboardKey(season_id)` storing `Vec<ScoreEntry>` (player, score), sorted by score desc; update only if new score is higher.
+- **Circuit (off-chain)**: Generated with [Circom](https://github.com/iden3/circom) (or snarkjs/Noir). Public inputs bound to run_hash, score, wave; proof + VK submitted via frontend to `submit_zk`.
+
+**CAP & protocol (verify before deploy):**
+
+| CAP | Purpose |
+|-----|---------|
+| [CAP-0074](https://github.com/stellar/stellar-protocol/blob/master/core/cap-0074.md) | BN254 (Groth16) |
+| [CAP-0059](https://github.com/stellar/stellar-protocol/blob/master/core/cap-0059.md) | BLS12-381 (optional) |
+| [Protocol version](https://developers.stellar.org/docs/networks/software-versions) | Confirm BN254 primitives on target network |
+| [SDK crypto](https://docs.rs/soroban-sdk/latest/soroban_sdk/crypto/) | `bn254` module |
+
+**Resource simulation:**
 
 ```bash
-cd contracts/shadow_ascension
-cargo build --target wasm32-unknown-unknown --release
-# Or: stellar contract build
+stellar contract invoke --id <VERIFIER_ID> --source <SIGNER> --network testnet --sim-only -- verify_proof --vk "..." --proof "..." --pub_signals "..."
 ```
 
-Deploy and init with the Game Hub address, then set `VITE_SHADOW_ASCENSION_CONTRACT_ID` in your env so the frontend uses your contract.
+Document the cost envelope from simulation in your runbook.
+
+**Circuit (off-chain):** [circom](https://github.com/iden3/circom) + [snarkjs](https://github.com/iden3/snarkjs) or [Noir](https://noir-lang.org/docs/). Constraints: e.g. kills ≤ time×MAX_KILLS_PER_SECOND, damage = kills×BASE_DAMAGE, time ≤ MAX_ALLOWED_TIME. Public inputs: player_address, run_hash, final_score, nonce.
+
+**Demo narrative:** *"Shadow Ascension is a competitive survival game where every ranked run is validated on-chain using Groth16 zero-knowledge proofs over BN254. The Stellar Testnet contract verifies mathematical consistency of run stats without revealing internal gameplay state. Only cryptographically valid runs enter the official leaderboard."*
+
+### Contract (Soroban)
+
+- **Layout**: `contracts/zk_types/` (shared types), `contracts/groth16_verifier/`, `contracts/shadow_ascension/`
+- **Build** ([Stellar CLI](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup), `rustup target add wasm32-unknown-unknown`):
+
+```bash
+cd contracts
+cargo build -p groth16_verifier --target wasm32-unknown-unknown --release
+cargo build -p shadow_ascension --target wasm32-unknown-unknown --release
+```
+
+Deploy verifier and game policy; init policy with Game Hub, then `set_verifier(verifier_id)`. Set `VITE_SHADOW_ASCENSION_CONTRACT_ID` for the frontend.
 
 ### Frontend
 
@@ -155,6 +188,17 @@ Deploy and init with the Game Hub address, then set `VITE_SHADOW_ASCENSION_CONTR
 - ✅ **Contract on Testnet**: Deploy the WASM and set the contract ID in the app.
 - ✅ **Frontend**: Connect wallet, start game, play, submit on death, leaderboard.
 - ✅ **Open source**: This repo.
+
+### Hackathon Compliance Checklist
+
+- [x] **Mecánica central impulsada por ZK** — Ranked leaderboard depends exclusively on Groth16 verification; only valid proofs enter.
+- [x] **Componente on-chain en Stellar Testnet** — Verifier and policy contracts deployed on Testnet.
+- [x] **Verifier Groth16 en contrato separado** — `groth16_verifier` (BN254 pairing only); policy calls it via `invoke_contract`.
+- [x] **Anti-replay implementado** — (player, nonce, season_id) unique; replay returns `Err(Replay)`.
+- [x] **Leaderboard en cadena** — Per-season `get_leaderboard_by_season(season_id, limit)`; legacy `get_leaderboard(limit)` for casual.
+- [x] **Frontend integrado** — `submit_zk` with player, proof, vk, pub_signals, nonce, run_hash, season_id, score, wave.
+- [x] **Simulación reproducible** — `stellar contract invoke --sim-only --id <POLICY_ID> --network testnet -- submit_zk ...` (see `contracts/README.md`).
+- [x] **Tests automatizados** — `cargo test -p groth16_verifier` and `cargo test -p shadow_ascension`.
 
 ---
 

@@ -1,0 +1,12 @@
+[package]
+name = "zk_types"
+version = "0.1.0"
+description = "Shared ZK types for Groth16 verifier and game policy (BN254)"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+soroban-sdk = "25.1"

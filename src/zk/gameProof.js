@@ -1,8 +1,12 @@
 /**
  * Provably Fair Survival - ZK-style game proof.
  *
- * We prove that (wave, score) are consistent with game rules without revealing
- * every action. Proof = game_hash binding (player, wave, score, run_seed, timestamp).
+ * Current: game_hash binding (player, wave, score, run_seed, timestamp) and rule check.
+ *
+ * For full Groth16 on-chain verification (contracts/groth16_verifier + submit_zk):
+ * - Circuit public inputs: player_address, run_hash, final_score, nonce (and optionally season_id).
+ * - Constraints: kills <= time * MAX_KILLS_PER_SECOND, damage == kills * BASE_DAMAGE, time <= MAX_ALLOWED_TIME, score >= wave * MIN_SCORE_PER_WAVE.
+ * - Use computeGameHash() for run_hash; generateRunSeed() for run binding; nonce must be unique per submit.
  *
  * Validation rules (must hold for valid proof):
  * - score >= wave * MIN_SCORE_PER_WAVE (base progression)

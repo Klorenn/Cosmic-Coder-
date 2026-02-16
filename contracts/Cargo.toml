@@ -1,0 +1,3 @@
+[workspace]
+members = ["zk_types", "groth16_verifier", "shadow_ascension"]
+resolver = "2"

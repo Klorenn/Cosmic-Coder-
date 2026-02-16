@@ -14,7 +14,10 @@
     "electron:build": "vite build && electron-builder",
     "electron:pack": "electron-builder --dir",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "zk:build": "bash scripts/zk/build_circuit.sh",
+    "zk:proof": "node scripts/zk/generate_proof.js",
+    "zk:args": "node scripts/zk/contract_args_from_proof.js circuits/build"
   },
   "keywords": [
     "game",

@@ -1,14 +1,12 @@
 [package]
-name = "shadow_ascension"
+name = "groth16_verifier"
 version = "0.1.0"
-description = "Provably Fair Survival - ZK wave/score proof + Game Hub integration"
+description = "Groth16 proof verifier (BN254) - cryptography only, no game logic"
 edition = "2021"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "rlib"]
-
-[features]
-default = []
 
 [dependencies]
 soroban-sdk = "25.1"
@@ -16,14 +14,8 @@ zk_types = { path = "../zk_types" }
 
 [dev-dependencies]
 soroban-sdk = { version = "25.1", features = ["testutils"] }
-groth16_verifier = { path = "../groth16_verifier" }
-serde_json = "1.0"
 
 [profile.release]
 lto = true
 opt-level = 3
 strip = "symbols"
-
-[profile.release-with-log]
-inherits = "release"
-strip = "debuginfo"
