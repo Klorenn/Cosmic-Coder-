@@ -64,8 +64,9 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('swordsman-walk', './assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-hurt', './assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('werewolf-run', './assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
-    // Blue Version background pack — absolute path from site root so it works in dev and production (Vercel, etc.)
-    const bgBase = '/assets/backgrounds/blue';
+    // Blue Version background pack — use Vite base so it works on GitHub Pages (/Cosmic-Coder-/) and Vercel (/)
+    const base = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) ? import.meta.env.BASE_URL : '/';
+    const bgBase = (base.endsWith('/') ? base.slice(0, -1) : base) + '/assets/backgrounds/blue';
     this.load.image('bg-blue-back', `${bgBase}/blue-back.png`);
     this.load.image('bg-blue-stars', `${bgBase}/blue-stars.png`);
     this.load.image('bg-blue-with-stars', `${bgBase}/blue-with-stars.png`);
