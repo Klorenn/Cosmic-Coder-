@@ -1,5 +1,18 @@
 import Phaser from 'phaser';
 
+/** Resolve base path for background assets at runtime (GitHub Pages /Cosmic-Coder-/, Vercel /, or local). */
+function getBackgroundBase() {
+  if (typeof window !== 'undefined' && window.location && window.location.pathname) {
+    const path = window.location.pathname;
+    const dir = path.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '/';
+    const prefix = dir === '/' ? '' : dir;
+    return `${prefix}/assets/backgrounds/blue`;
+  }
+  const base = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) ? import.meta.env.BASE_URL : '/';
+  const trimmed = base.endsWith('/') ? base.slice(0, -1) : base;
+  return (trimmed === '.' ? '' : trimmed) + '/assets/backgrounds/blue';
+}
+
 export default class BootScene extends Phaser.Scene {
   constructor() {
     super({ key: 'BootScene' });
@@ -64,9 +77,8 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('swordsman-walk', './assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-hurt', './assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('werewolf-run', './assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
-    // Blue Version background pack — use Vite base so it works on GitHub Pages (/Cosmic-Coder-/) and Vercel (/)
-    const base = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) ? import.meta.env.BASE_URL : '/';
-    const bgBase = (base.endsWith('/') ? base.slice(0, -1) : base) + '/assets/backgrounds/blue';
+    // Blue Version background pack — resolve base at runtime so it works on GitHub Pages, Vercel, and local
+    const bgBase = getBackgroundBase();
     this.load.image('bg-blue-back', `${bgBase}/blue-back.png`);
     this.load.image('bg-blue-stars', `${bgBase}/blue-stars.png`);
     this.load.image('bg-blue-with-stars', `${bgBase}/blue-with-stars.png`);
