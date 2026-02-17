@@ -203,6 +203,7 @@ export default {
     bits_earned: 'BITS EARNED!',
     submitting: 'Submitting to chain...',
     submit_zk_ranked: '✓ ZK RANKED — Submitted to on-chain leaderboard',
+    submit_zk_fallback: '✓ CASUAL — ZK prover unavailable, submitted to leaderboard',
     submit_casual: '✓ CASUAL — Submitted to leaderboard',
     submit_failed: '✗ Could not submit to chain',
     leaderboard_hint: 'To appear on chain leaderboard: connect wallet and set VITE_SHADOW_ASCENSION_CONTRACT_ID in .env',

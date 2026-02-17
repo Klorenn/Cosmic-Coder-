@@ -201,6 +201,7 @@ export default {
     bits_earned: '¡BITS GANADOS!',
     submitting: 'Enviando a la cadena...',
     submit_zk_ranked: '✓ ZK RANKED — Enviado al ranking on-chain',
+    submit_zk_fallback: '✓ CASUAL — Prover ZK no disponible, enviado al ranking',
     submit_casual: '✓ CASUAL — Enviado al ranking',
     submit_failed: '✗ No se pudo enviar a la cadena',
     leaderboard_hint: 'Para salir en el ranking on-chain: conecta wallet y pon VITE_SHADOW_ASCENSION_CONTRACT_ID en .env',

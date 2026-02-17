@@ -26,8 +26,8 @@ export default class SaveManager {
         current: data.weapons.current,
         collected: Array.from(data.weapons.collected)
       },
-      // Save active modifiers (if any)
       modifiers: data.modifiers || [],
+      runSeed: data.runSeed || null,
       timestamp: Date.now(),
       version: 2
     };
@@ -176,8 +176,10 @@ export default class SaveManager {
       };
     }
 
-    // Note: Modifiers are restored in ArenaScene.create() via RunModifiers.load()
-    // The save.modifiers array is just for data persistence
+    if (save.runSeed && typeof save.runSeed === 'string') {
+      scene.runSeed = save.runSeed;
+      scene.runSeedRestoredFromSave = true;
+    }
 
     return true;
   }

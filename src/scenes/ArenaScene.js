@@ -356,16 +356,20 @@ export default class ArenaScene extends Phaser.Scene {
     // Create HUD
     this.createHUD();
 
-    // Handle continued game - restore saved state before starting wave
+    this.runSeed = null;
+    this.runSeedRestoredFromSave = false;
     if (this.isContinuedGame) {
       const savedRun = SaveManager.loadRun();
       if (savedRun) {
         SaveManager.applySaveToScene(savedRun, this);
-        // Update HUD to reflect restored state
         this.updateHUD();
         console.log(`Continuing from Wave ${this.waveNumber}, Stage ${this.currentStage}`);
       }
-    } else {
+    }
+    if (!this.runSeed) {
+      this.runSeed = generateRunSeed();
+    }
+    if (!this.isContinuedGame) {
       // New game - apply rebirth starting weapons
       const startingWeapons = RebirthManager.getStartingWeapons();
       if (startingWeapons.length > 0) {
@@ -405,11 +409,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.touchControls = new TouchControls(this);
     this.touchControls.create();
 
-    // Initialize EventManager
     this.eventManager = new EventManager(this);
-
-    // Run seed for ranked (ZK) submit: bind run_hash to this run (siempre para que submit ZK funcione al morir)
-    this.runSeed = generateRunSeed();
 
     // Initialize ShrineManager
     this.shrineManager = new ShrineManager(this);
@@ -2568,7 +2568,8 @@ export default class ArenaScene extends Phaser.Scene {
         collected: Array.from(this.collectedWeapons || [])
       },
       // Save active modifier IDs
-      modifiers: (this.activeModifiers || []).map(m => m.id)
+      modifiers: (this.activeModifiers || []).map(m => m.id),
+      runSeed: this.runSeed || null
     };
 
     const success = SaveManager.saveRun(saveData);
@@ -3972,7 +3973,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     let submitStatusText = null;
     const showSubmitStatus = (status) => {
-      const msg = status === 'zk' ? t('game.submit_zk_ranked') : status === 'casual' ? t('game.submit_casual') : t('game.submit_failed');
+      const msg = status === 'zk' ? t('game.submit_zk_ranked') : status === 'zk_failed' ? t('game.submit_zk_fallback') : status === 'casual' ? t('game.submit_casual') : t('game.submit_failed');
       const color = status === 'failed' ? '#ff6666' : status === 'zk' ? '#ffd700' : '#88ff88';
       submitStatusText = this.add.text(cx, cy + 10, msg, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
@@ -4016,8 +4017,9 @@ export default class ArenaScene extends Phaser.Scene {
         const sign = (xdr) => stellarWallet.signTransaction(xdr);
         const score = Math.floor(state.totalXP);
         const wave = this.waveNumber;
+        const triedZk = gameClient.isZkProverConfigured() && this.runSeed && (!this.isContinuedGame || this.runSeedRestoredFromSave);
         try {
-          if (gameClient.isZkProverConfigured() && this.runSeed) {
+          if (triedZk) {
             const run_hash_hex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
             const nonce = Date.now();
             const season_id = 1;
@@ -4030,11 +4032,11 @@ export default class ArenaScene extends Phaser.Scene {
             resolve('casual');
           }
         } catch (e) {
-          console.warn('Submit failed:', e.message);
+          console.warn('Submit failed:', e.message, e);
           try {
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
             timeout.destroy();
-            resolve('casual');
+            resolve(triedZk ? 'zk_failed' : 'casual');
           } catch (_) {
             timeout.destroy();
             resolve('failed');
