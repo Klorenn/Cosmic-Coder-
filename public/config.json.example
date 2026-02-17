@@ -1,0 +1,5 @@
+{
+  "VITE_SHADOW_ASCENSION_CONTRACT_ID": "YOUR_SHADOW_ASCENSION_CONTRACT_ID_ON_TESTNET",
+  "VITE_ZK_PROVER_URL": "https://your-prover.onrender.com",
+  "VITE_PROGRESS_API_URL": "https://your-prover.onrender.com"
+}

@@ -8,12 +8,16 @@
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 
-const CONTRACT_ID =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SHADOW_ASCENSION_CONTRACT_ID) || '';
+function getContractId() {
+  return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SHADOW_ASCENSION_CONTRACT_ID) || '';
+}
 
 /** Base URL for ZK prover backend (option B: backend generates proof). */
-const ZK_PROVER_URL =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || 'http://localhost:3333';
+function getZkProverUrl() {
+  return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_ZK_PROVER_URL) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || 'http://localhost:3333';
+}
 
 /**
  * Get Soroban RPC server (SDK 14: rpc.Server).
@@ -69,22 +73,24 @@ async function playerScVal(signerPublicKey) {
  * Start a match (calls start_match(player)). Requires wallet sign.
  */
 export async function startMatch(signerPublicKey, signTransaction) {
-  if (!CONTRACT_ID) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
-  return invoke(CONTRACT_ID, 'start_match', [await playerScVal(signerPublicKey)], signerPublicKey, signTransaction);
+  const contractId = getContractId();
+  if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
+  return invoke(contractId, 'start_match', [await playerScVal(signerPublicKey)], signerPublicKey, signTransaction);
 }
 
 /**
  * Submit result (submit_result(player, wave, score)). Requires wallet sign.
  */
 export async function submitResult(signerPublicKey, signTransaction, wave, score) {
-  if (!CONTRACT_ID) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
+  const contractId = getContractId();
+  if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
   const { xdr, ScInt } = await import('@stellar/stellar-sdk');
   const args = [
     await playerScVal(signerPublicKey),
     xdr.ScVal.scvU32(wave),
     new ScInt(BigInt(Math.floor(score)), { type: 'i128' }).toI128(),
   ];
-  return invoke(CONTRACT_ID, 'submit_result', args, signerPublicKey, signTransaction);
+  return invoke(contractId, 'submit_result', args, signerPublicKey, signTransaction);
 }
 
 /**
@@ -94,7 +100,7 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
  * @returns {Promise<{ proof: { a, b, c }, vk: object, pub_signals: string[] }>} hex strings
  */
 export async function requestZkProof(baseUrl, payload) {
-  const url = (baseUrl || ZK_PROVER_URL).replace(/\/$/, '') + '/zk/prove';
+  const url = (baseUrl || getZkProverUrl()).replace(/\/$/, '') + '/zk/prove';
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -162,7 +168,8 @@ export async function submitZk(
   score,
   wave
 ) {
-  if (!CONTRACT_ID) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
+  const contractId = getContractId();
+  if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
   if (!zk?.proof || !zk?.vk || !zk?.pubSignals) {
     throw new Error('submitZk requires zk.proof, zk.vk, zk.pubSignals (BN254 Groth16)');
   }
@@ -185,7 +192,7 @@ export async function submitZk(
     xdr.ScVal.scvU32(Math.max(0, Math.floor(score))),
     xdr.ScVal.scvU32(wave),
   ];
-  return invoke(CONTRACT_ID, 'submit_zk', args, signerPublicKey, signTransaction);
+  return invoke(contractId, 'submit_zk', args, signerPublicKey, signTransaction);
 }
 
 /**
@@ -216,7 +223,7 @@ export async function submitZkFromProver(signerPublicKey, signTransaction, prove
  * Get leaderboard (read-only). Returns [] if contract not configured or on error.
  */
 export async function getLeaderboard(limit = 10) {
-  if (!CONTRACT_ID) return [];
+  if (!getContractId()) return [];
   try {
     const {
       Contract,
@@ -226,7 +233,7 @@ export async function getLeaderboard(limit = 10) {
       xdr,
     } = await import('@stellar/stellar-sdk');
     const server = await getServer();
-    const contract = new Contract(CONTRACT_ID);
+    const contract = new Contract(getContractId());
     const dummyAccount = new Account(
       'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       '0'
@@ -267,10 +274,11 @@ export async function getLeaderboard(limit = 10) {
 }
 
 export function isContractConfigured() {
-  return !!CONTRACT_ID;
+  return !!getContractId();
 }
 
 /** True if ranked (ZK) submit is available: contract + prover URL. */
 export function isZkProverConfigured() {
-  return !!CONTRACT_ID && !!(ZK_PROVER_URL && ZK_PROVER_URL.startsWith('http'));
+  const url = getZkProverUrl();
+  return !!getContractId() && !!(url && url.startsWith('http'));
 }

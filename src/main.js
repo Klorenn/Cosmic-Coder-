@@ -378,7 +378,32 @@ window.VIBE_CODER = {
   }
 };
 
-const game = new Phaser.Game(config);
+/** Load config.json from same origin (works on GitHub Pages). Sets window.__VITE_CONFIG__. */
+function getConfigBase() {
+  if (typeof window === 'undefined' || !window.location?.pathname) return '';
+  const path = window.location.pathname.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '';
+  return path ? path : '';
+}
+
+function loadRuntimeConfig() {
+  const base = getConfigBase();
+  const url = (base ? base + '/' : '/') + 'config.json';
+  return fetch(url)
+    .then((r) => (r.ok ? r.json() : {}))
+    .then((data) => {
+      window.__VITE_CONFIG__ = data || {};
+      return window.__VITE_CONFIG__;
+    })
+    .catch(() => {
+      window.__VITE_CONFIG__ = {};
+      return window.__VITE_CONFIG__;
+    });
+}
+
+loadRuntimeConfig().then(() => {
+  const game = new Phaser.Game(config);
+  window.__VIBE_GAME__ = game;
+});
 
 // Connect to XP server for real-time coding rewards
 connectToXPServer();

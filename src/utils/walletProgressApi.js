@@ -4,14 +4,17 @@
  * Progress is keyed by wallet address — no cookies/localStorage.
  */
 
-const PROGRESS_API_URL =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PROGRESS_API_URL) ||
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) ||
-  'http://localhost:3333';
+function getProgressApiUrl() {
+  return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_PROGRESS_API_URL) ||
+    (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_ZK_PROVER_URL) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PROGRESS_API_URL) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) ||
+    'http://localhost:3333';
+}
 
 export async function fetchProgress(address) {
   if (!address || typeof address !== 'string') return null;
-  const url = `${PROGRESS_API_URL.replace(/\/$/, '')}/player/${encodeURIComponent(address.trim())}/progress`;
+  const url = `${getProgressApiUrl().replace(/\/$/, '')}/player/${encodeURIComponent(address.trim())}/progress`;
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
@@ -25,7 +28,7 @@ export async function fetchProgress(address) {
 
 export async function saveProgress(address, payload) {
   if (!address || typeof address !== 'string') return false;
-  const url = `${PROGRESS_API_URL.replace(/\/$/, '')}/player/${encodeURIComponent(address.trim())}/progress`;
+  const url = `${getProgressApiUrl().replace(/\/$/, '')}/player/${encodeURIComponent(address.trim())}/progress`;
   try {
     const res = await fetch(url, {
       method: 'POST',
