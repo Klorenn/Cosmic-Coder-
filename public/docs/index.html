@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cosmic Coder — Documentación</title>
+  <script type="importmap">
+  { "imports": { "marked": "https://esm.sh/marked@12.0.1" } }
+  </script>
+  <style>
+    :root {
+      --bg: #0a0a12;
+      --surface: #12121f;
+      --border: #1e2a3a;
+      --text: #e4e8ec;
+      --text-muted: #8899aa;
+      --accent: #00ffff;
+      --accent-dim: #00aacc;
+      --gold: #ffd700;
+      --code-bg: #0d1117;
+      --table-header: #1a2332;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: var(--surface);
+      border-bottom: 2px solid var(--accent);
+      padding: 0.75rem 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .header h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      color: var(--gold);
+    }
+    .nav {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .nav a {
+      color: var(--accent-dim);
+      text-decoration: none;
+      padding: 0.35rem 0.75rem;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+    .nav a:hover { color: var(--accent); background: rgba(0, 255, 255, 0.08); }
+    .nav a.active { color: var(--accent); border: 1px solid var(--accent); }
+    .lang-switch {
+      margin-left: auto;
+      display: flex;
+      gap: 0.25rem;
+      align-items: center;
+    }
+    .lang-switch span { color: var(--text-muted); font-size: 0.85rem; margin-right: 0.25rem; }
+    .lang-switch button {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 0.3rem 0.6rem;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+    .lang-switch button:hover { color: var(--accent); border-color: var(--accent); }
+    .lang-switch button.active { color: var(--accent); border-color: var(--accent); }
+    main {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 3rem;
+    }
+    #content h1 {
+      font-size: 1.75rem;
+      color: var(--gold);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.5rem;
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+    }
+    #content h1:first-child { margin-top: 0; }
+    #content h2 { font-size: 1.35rem; color: var(--accent); margin-top: 1.75rem; margin-bottom: 0.75rem; }
+    #content h3 { font-size: 1.15rem; color: var(--text); margin-top: 1.25rem; margin-bottom: 0.5rem; }
+    #content p { margin: 0.75rem 0; }
+    #content ul, #content ol { margin: 0.75rem 0; padding-left: 1.5rem; }
+    #content li { margin: 0.35rem 0; }
+    #content strong { color: var(--gold); }
+    #content a { color: var(--accent-dim); text-decoration: none; }
+    #content a:hover { color: var(--accent); text-decoration: underline; }
+    #content code {
+      background: var(--code-bg);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-size: 0.9em;
+      color: var(--accent);
+    }
+    #content pre {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-x: auto;
+      margin: 1rem 0;
+    }
+    #content pre code { background: none; padding: 0; color: var(--text); }
+    #content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+    }
+    #content th, #content td {
+      border: 1px solid var(--border);
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+    }
+    #content th { background: var(--table-header); color: var(--accent); }
+    #content tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+    #content hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+    .loading { color: var(--text-muted); padding: 2rem; }
+    .error { color: #ff6666; padding: 1rem; }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <h1>Cosmic Coder — Documentación</h1>
+    <nav class="nav">
+      <a href="#" data-doc="COSMIC_CODER_GUIDE.md" class="active" data-label-es="Guía del juego y ZK" data-label-en="Game & ZK guide">Guía del juego y ZK</a>
+      <a href="#" data-doc="TECHNICAL_DOCUMENTATION.md" data-label-es="Documentación técnica" data-label-en="Technical docs">Documentación técnica</a>
+      <a href="#" data-doc="ZK_REAL_SETUP.md" data-label-es="ZK: circuito y proof" data-label-en="ZK setup & proof">ZK: circuito y proof</a>
+      <a href="#" data-doc="ZK_AND_BALANCE.md" data-label-es="ZK + balance" data-label-en="ZK flow & leaderboard">ZK + balance</a>
+      <a href="#" data-doc="E2E_VERIFICATION.md" data-label-es="Verificación E2E" data-label-en="E2E verification">E2E verification</a>
+      <a href="#" data-doc="HACKATHON_DO_THIS.md" data-label-es="Hackathon: qué hacer" data-label-en="Hackathon: what to do">Hackathon</a>
+      <a href="#" data-doc="DEPLOY_ZK_STEPS.md" data-label-es="Deploy ZK" data-label-en="Deploy ZK">Deploy ZK</a>
+      <a href="#" data-doc="HACKATHON_REMAINING.md" data-label-es="Pendientes" data-label-en="Remaining">Pendientes</a>
+    </nav>
+    <div class="lang-switch">
+      <span>Idioma / Language:</span>
+      <button type="button" data-lang="es">ES</button>
+      <button type="button" data-lang="en">EN</button>
+    </div>
+  </header>
+  <main>
+    <div id="content">
+      <p class="loading">Cargando…</p>
+    </div>
+  </main>
+  <script type="module">
+    const content = document.getElementById('content');
+    const base = window.location.pathname.replace(/\/?index\.html$/, '') || '';
+    const docBase = base ? base + '/' : '/docs/';
+    const LANG_KEY = 'docsLang';
+
+    function getLang() {
+      const saved = localStorage.getItem(LANG_KEY);
+      if (saved === 'es' || saved === 'en') return saved;
+      const pref = (navigator.language || '').toLowerCase();
+      return pref.startsWith('es') ? 'es' : 'en';
+    }
+
+    function setLang(lang) {
+      localStorage.setItem(LANG_KEY, lang);
+      document.querySelectorAll('.lang-switch button').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-lang') === lang);
+      });
+      document.querySelectorAll('.nav a').forEach(a => {
+        const attr = 'data-label-' + lang;
+        if (a.hasAttribute(attr)) a.textContent = a.getAttribute(attr);
+      });
+      document.title = lang === 'es' ? 'Cosmic Coder — Documentación' : 'Cosmic Coder — Documentation';
+      document.documentElement.lang = lang;
+    }
+
+    function getDocFilename(doc, lang) {
+      if (doc === 'COSMIC_CODER_GUIDE.md')
+        return doc.replace('.md', '_' + lang + '.md');
+      return doc;
+    }
+
+    async function loadAndRender(doc, lang) {
+      const l = lang || getLang();
+      const loadingMsg = l === 'es' ? 'Cargando…' : 'Loading…';
+      const errorMsg = l === 'es' ? 'No se pudo cargar el documento: ' : 'Could not load document: ';
+      content.innerHTML = '<p class="loading">' + loadingMsg + '</p>';
+      try {
+        const file = getDocFilename(doc, l);
+        const res = await fetch(docBase + file);
+        if (!res.ok) throw new Error(res.statusText);
+        const md = await res.text();
+        const { marked } = await import('marked');
+        marked.setOptions({ gfm: true });
+        content.innerHTML = marked.parse(md);
+        document.querySelectorAll('.nav a').forEach(a => {
+          a.classList.toggle('active', a.getAttribute('data-doc') === doc);
+        });
+      } catch (e) {
+        content.innerHTML = `<p class="error">${errorMsg}${e.message}</p>`;
+      }
+    }
+
+    let currentDoc = 'COSMIC_CODER_GUIDE.md';
+
+    document.querySelectorAll('.nav a').forEach(a => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        const doc = a.getAttribute('data-doc');
+        if (doc) {
+          currentDoc = doc;
+          loadAndRender(doc);
+          history.replaceState({ doc }, '', '#' + doc.replace('.md', ''));
+        }
+      });
+    });
+
+    document.querySelectorAll('.lang-switch button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const lang = btn.getAttribute('data-lang');
+        if (lang === 'es' || lang === 'en') {
+          setLang(lang);
+          loadAndRender(currentDoc, lang);
+        }
+      });
+    });
+
+    const hash = (location.hash || '').replace(/^#/, '');
+    const initial = hash && ['COSMIC_CODER_GUIDE', 'TECHNICAL_DOCUMENTATION', 'ZK_REAL_SETUP', 'ZK_AND_BALANCE', 'E2E_VERIFICATION', 'HACKATHON_DO_THIS', 'HACKATHON_REMAINING', 'DEPLOY_ZK_STEPS'].some(n => hash === n.replace('.md', ''))
+      ? hash + '.md'
+      : 'COSMIC_CODER_GUIDE.md';
+    currentDoc = initial;
+    setLang(getLang());
+    loadAndRender(initial);
+    window.addEventListener('popstate', () => {
+      const doc = (history.state && history.state.doc) || 'COSMIC_CODER_GUIDE.md';
+      currentDoc = doc;
+      loadAndRender(doc);
+    });
+  </script>
+</body>
+</html>

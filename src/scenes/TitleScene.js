@@ -13,7 +13,7 @@ export default class TitleScene extends Phaser.Scene {
   constructor() {
     super({ key: 'TitleScene' });
     this.selectedOption = 0;
-    this.baseMenuOptions = ['START_GAME', 'UPGRADES', 'WEAPONS', 'LEADERBOARD', 'SETTINGS', 'CONTROLS'];
+    this.baseMenuOptions = ['START_GAME', 'UPGRADES', 'WEAPONS', 'LEADERBOARD', 'SETTINGS', 'CONTROLS', 'DOCUMENTATION'];
     this.menuOptions = [...this.baseMenuOptions];
     this.isMusicOn = false;
     this.settingsMenuOpen = false;
@@ -202,13 +202,24 @@ export default class TitleScene extends Phaser.Scene {
     this.menuStartY = startY;
     this.menuSpacing = spacing;
 
+    const lastOptionY = startY + (this.menuOptions.length - 1) * spacing;
+    // Cuadro de fondo para que el menú quede contenido y legible
+    const menuBoxH = lastOptionY - startY + 64 * uiScale;
+    const menuBoxW = 380;
+    const menuBox = this.add.rectangle(cx, startY + menuBoxH / 2 - 20, menuBoxW, menuBoxH, 0x0a0a14, 0.92);
+    menuBox.setStrokeStyle(2, 0x00ffff, 0.8);
+    menuBox.setDepth(-1);
+
     this.menuOptions.forEach((option, index) => {
-      const text = this.add.text(cx, startY + index * spacing, t('menu.' + option), {
+      const label = option === 'START_GAME' && gameClient.isZkProverConfigured()
+        ? `${t('menu.START_GAME')} ${t('menu.ranked_badge')}`
+        : t('menu.' + option);
+      const text = this.add.text(cx, startY + index * spacing, label, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${22 * uiScale}px`,
         color: index === 0 ? '#00ffff' : '#666666',
         fontStyle: index === 0 ? 'bold' : 'normal'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setDepth(10);
 
       this.menuTexts.push(text);
     });
@@ -219,7 +230,7 @@ export default class TitleScene extends Phaser.Scene {
       fontSize: `${22 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(10);
 
     // Blink selector
     this.tweens.add({
@@ -230,8 +241,7 @@ export default class TitleScene extends Phaser.Scene {
       repeat: -1
     });
 
-    // Instrucciones bien debajo del último ítem del menú, sin solapar
-    const lastOptionY = startY + (this.menuOptions.length - 1) * spacing;
+    // Instrucciones bien debajo del último ítem del menú, sin solapar (dentro del cuadro)
     this.promptText = this.add.text(cx, lastOptionY + 32 * uiScale, t('prompt.enter_select'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${11 * uiScale}px`,
@@ -302,6 +312,21 @@ export default class TitleScene extends Phaser.Scene {
     this.walletBtn.on('pointerover', () => this.walletBtn.setColor('#00ffaa'));
     this.walletBtn.on('pointerout', () => this.walletBtn.setColor('#00cc88'));
     this.updateWalletButton();
+
+    // Idioma (EN/ES) debajo del badge de conexión
+    const langPos = anchorTopRight(this, 20, 44);
+    this.langBtn = this.add.text(langPos.x, langPos.y, window.VIBE_SETTINGS?.language === 'es' ? 'ES' : 'EN', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: 12 * uiScale,
+      color: '#00aaff'
+    }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+    this.langBtn.on('pointerdown', () => {
+      const lang = window.VIBE_SETTINGS?.language === 'es' ? 'en' : 'es';
+      setLanguage(lang);
+      this.scene.start('TitleScene');
+    });
+    this.langBtn.on('pointerover', () => this.langBtn.setColor('#00ffff'));
+    this.langBtn.on('pointerout', () => this.langBtn.setColor('#00aaff'));
 
     // Connection status badge: LIVE si XP server O wallet conectada (modo online)
     const badgePos = anchorTopRight(this, 20, 20);
@@ -449,12 +474,12 @@ export default class TitleScene extends Phaser.Scene {
     const h = this.scale.height || 600;
     const playerX = w * 0.12;
 
-    // Alinear verticalmente al botón de CONTROLES (última opción del menú)
-    const controlsIndex = this.menuOptions.indexOf('CONTROLS');
+    // Alinear verticalmente al botón de DOCUMENTACIÓN (última opción del menú)
+    const docIndex = this.menuOptions.indexOf('DOCUMENTATION');
     const baseY = this.menuStartY || (h * 0.42);
     const spacing = this.menuSpacing || (40 * uiScale);
-    const controlsY = controlsIndex >= 0 ? baseY + controlsIndex * spacing : h * 0.8;
-    const playerY = controlsY;
+    const docY = docIndex >= 0 ? baseY + docIndex * spacing : h * 0.8;
+    const playerY = docY;
 
     // Player character (CraftPix robot - 128px sprites), anclado abajo-izquierda
     this.idlePlayer = this.add.sprite(playerX, playerY, 'player');
@@ -876,10 +901,17 @@ export default class TitleScene extends Phaser.Scene {
     }
 
     const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
 
-    // Position bubble above player
-    const bubbleX = this.idlePlayer.x;
+    // Posicionar bocadillo a la derecha del personaje para no solapar menú ni leaderboard
+    const bubbleOffsetX = 110 * uiScale;
+    let bubbleX = this.idlePlayer.x + bubbleOffsetX;
     const bubbleY = this.idlePlayer.y - 80 * uiScale;
+    const bubbleWidth = 190 * uiScale;
+    const bubbleHeight = 65 * uiScale;
+    // Evitar que se salga por la derecha
+    if (bubbleX + bubbleWidth / 2 > w - 20) bubbleX = w - 20 - bubbleWidth / 2;
+    if (bubbleX - bubbleWidth / 2 < this.idlePlayer.x) bubbleX = this.idlePlayer.x + bubbleWidth / 2 + 10;
 
     // Draw speech bubble
     this.speechBubble.clear();
@@ -887,8 +919,6 @@ export default class TitleScene extends Phaser.Scene {
     this.speechBubble.lineStyle(2, 0x00ffff, 1);
 
     // Bubble shape (más alto/ancho para 2 líneas de texto)
-    const bubbleWidth = 190 * uiScale;
-    const bubbleHeight = 65 * uiScale;
     this.speechBubble.fillRoundedRect(
       bubbleX - bubbleWidth/2,
       bubbleY - bubbleHeight/2,
@@ -904,21 +934,24 @@ export default class TitleScene extends Phaser.Scene {
       8
     );
 
-    // Little triangle pointer
+    // Triángulo apuntando al personaje (burbuja a la derecha)
+    const leftEdge = bubbleX - bubbleWidth / 2;
     this.speechBubble.fillTriangle(
-      bubbleX - 8 * uiScale, bubbleY + bubbleHeight/2,
-      bubbleX + 8 * uiScale, bubbleY + bubbleHeight/2,
-      bubbleX, bubbleY + bubbleHeight/2 + 10 * uiScale
+      leftEdge, bubbleY - 6,
+      leftEdge, bubbleY + 6,
+      leftEdge - 10 * uiScale, bubbleY
     );
     this.speechBubble.lineStyle(2, 0x00ffff, 1);
-    this.speechBubble.lineBetween(bubbleX - 8 * uiScale, bubbleY + bubbleHeight/2, bubbleX, bubbleY + bubbleHeight/2 + 10 * uiScale);
-    this.speechBubble.lineBetween(bubbleX + 8, bubbleY + bubbleHeight/2, bubbleX, bubbleY + bubbleHeight/2 + 10);
+    this.speechBubble.lineBetween(leftEdge, bubbleY - 6, leftEdge - 10 * uiScale, bubbleY);
+    this.speechBubble.lineBetween(leftEdge - 10 * uiScale, bubbleY, leftEdge, bubbleY + 6);
 
     // Set text
     this.speechText.setPosition(bubbleX, bubbleY);
     this.speechText.setText(text);
 
-    // Show
+    // Mostrar encima del menú pero sin tapar modales
+    this.speechBubble.setDepth(5);
+    this.speechText.setDepth(6);
     this.speechBubble.setVisible(true);
     this.speechText.setVisible(true);
 
@@ -1292,21 +1325,29 @@ export default class TitleScene extends Phaser.Scene {
     const option = this.menuOptions[this.selectedOption];
 
     switch (option) {
-      case 'CONTINUE':
-        // Continue from saved game
+      case 'CONTINUE': {
+        if (!stellarWallet.isConnected()) {
+          this.sayQuote(t('prompt.link_wallet'));
+          return;
+        }
         Audio.playLevelUp();
         this.cameras.main.fade(500, 0, 0, 0);
         this.time.delayedCall(500, () => {
           this.scene.start('ArenaScene', { continueGame: true });
         });
         break;
+      }
 
       case 'START_GAME': {
+        if (!stellarWallet.isConnected()) {
+          this.sayQuote(t('prompt.link_wallet'));
+          return;
+        }
         Audio.playLevelUp();
         window.VIBE_CODER.reset();
         SaveManager.clearSave();
         (async () => {
-          if (stellarWallet.isConnected() && gameClient.isContractConfigured()) {
+          if (gameClient.isContractConfigured()) {
             try {
               const addr = await stellarWallet.getAddress();
               await gameClient.startMatch(addr, (xdr) => stellarWallet.signTransaction(xdr));
@@ -1341,31 +1382,124 @@ export default class TitleScene extends Phaser.Scene {
       case 'CONTROLS':
         this.showControls();
         break;
+
+      case 'DOCUMENTATION':
+        // Abre toda la doc en nueva pestaña
+        const docsUrl = new URL('docs/', window.location.href).href;
+        if (typeof window !== 'undefined') window.open(docsUrl, '_blank', 'noopener');
+        break;
     }
   }
 
-  async showLeaderboard() {
-    const container = this.add.container(0, 0);
+  showDocumentation() {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
-    const overlay = this.add.rectangle(cx, cy, 620, 480, 0x000000, 0.95);
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const container = this.add.container(0, 0);
+    container.setDepth(1000);
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.97);
+    backdrop.setInteractive({ useHandCursor: true });
+    container.add(backdrop);
+    const overlay = this.add.rectangle(cx, cy, 540, 340, 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
     overlay.setInteractive({ useHandCursor: true });
     container.add(overlay);
 
-    const title = this.add.text(cx, 50, t('leaderboard.title'), {
+    const title = this.add.text(cx, cy - 100, t('documentation.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
+      fontSize: `${22 * uiScale}px`,
       color: '#ffd700',
       fontStyle: 'bold'
     }).setOrigin(0.5);
     container.add(title);
 
-    const headerY = 100;
-    container.add(this.add.text(80, headerY, '#', { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
-    container.add(this.add.text(200, headerY, t('leaderboard.name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
-    container.add(this.add.text(420, headerY, t('leaderboard.wave'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
-    container.add(this.add.text(520, headerY, t('leaderboard.score'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ffff' }));
+    const baseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_DOCS_BASE_URL) || (typeof window !== 'undefined' ? window.location.origin + '/docs' : '/docs');
+    const docsUrl = baseUrl.replace(/\/$/, '') + (baseUrl.endsWith('/') ? '' : '/');
+    const links = [
+      { label: t('documentation.guide'), path: '' },
+      { label: t('documentation.technical'), path: '/TECHNICAL_DOCUMENTATION.md' },
+      { label: t('documentation.zk_setup'), path: '/ZK_REAL_SETUP.md' }
+    ];
+
+    links.forEach((link, i) => {
+      const y = cy - 50 + i * 40;
+      const text = this.add.text(cx, y, link.label, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${16 * uiScale}px`,
+        color: '#00aaff'
+      }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+      text.on('pointerover', () => text.setColor('#00ffff'));
+      text.on('pointerout', () => text.setColor('#00aaff'));
+      text.on('pointerdown', () => {
+        const url = link.path ? docsUrl + link.path.replace(/^\//, '') : docsUrl + 'index.html';
+        if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');
+      });
+      container.add(text);
+    });
+
+    const close = () => {
+      container.destroy();
+      this.input.keyboard.off('keydown-ESC', close);
+    };
+    this.input.keyboard.once('keydown-ESC', close);
+    backdrop.on('pointerdown', close);
+
+    const backHint = this.add.text(cx, cy + 90, t('documentation.back'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${10 * uiScale}px`,
+      color: '#888888'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    backHint.on('pointerover', () => backHint.setColor('#00aaff'));
+    backHint.on('pointerout', () => backHint.setColor('#888888'));
+    backHint.on('pointerdown', close);
+    container.add(backHint);
+  }
+
+  async showLeaderboard() {
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const container = this.add.container(0, 0);
+    container.setDepth(1000);
+
+    // Fondo a pantalla completa opaco para tapar menú y título
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    backdrop.setInteractive({ useHandCursor: true });
+    container.add(backdrop);
+
+    const overlayW = Math.min(620, w - 60);
+    const overlayH = Math.min(480, h - 60);
+    const overlayLeft = cx - overlayW / 2;
+    const overlayTop = cy - overlayH / 2;
+
+    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
+    overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setInteractive({ useHandCursor: true });
+    container.add(overlay);
+
+    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 44, t('leaderboard.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${24 * uiScale}px`,
+      color: '#ffd700',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(title);
+
+    const headerY = overlayTop + 88;
+    const colRank = overlayLeft + 24;
+    const colName = overlayLeft + 140;
+    const colWave = overlayLeft + overlayW - 200;
+    const colScore = overlayLeft + overlayW - 100;
+    const fs = (n) => `${Math.round(n * uiScale)}px`;
+    container.add(this.add.text(colRank, headerY, '#', { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
+    container.add(this.add.text(colName, headerY, t('leaderboard.name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
+    container.add(this.add.text(colWave, headerY, t('leaderboard.wave'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
+    container.add(this.add.text(colScore, headerY, t('leaderboard.score'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
 
     const walletConnected = stellarWallet.isConnected();
     let top;
@@ -1382,40 +1516,65 @@ export default class TitleScene extends Phaser.Scene {
     } else {
       top = LeaderboardManager.getTop(10);
     }
-    const lineHeight = 36;
-    const startY = 140;
+
+    const lineHeight = 32 * uiScale;
+    const maxRows = 7;
+    const tableStartY = overlayTop + 118;
+    const tableEndY = tableStartY + maxRows * lineHeight;
 
     if (top.length === 0) {
       const msg = walletConnected ? t('leaderboard.empty') : t('leaderboard.connect_hint');
-      container.add(this.add.text(cx, 260, msg, {
+      container.add(this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH / 2 - 20, msg, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: walletConnected ? 16 : 12,
-        color: '#888888',
-        align: 'center'
+        fontSize: fs(walletConnected ? 16 : 13),
+        color: '#aaaaaa',
+        align: 'center',
+        wordWrap: { width: overlayW - 80 }
       }).setOrigin(0.5));
     } else {
-      top.forEach((entry, i) => {
-        const y = startY + i * lineHeight;
-        const medalColor = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#aaaaaa';
-        container.add(this.add.text(80, y, `${entry.rank}.`, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: medalColor }));
-        container.add(this.add.text(200, y, (entry.name || '').slice(0, 18), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#ffffff' }));
-        container.add(this.add.text(420, y, String(entry.wave), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#00ff88' }));
-        container.add(this.add.text(520, y, String(entry.score), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: '14px', color: '#ffff00' }));
+      const toShow = top.slice(0, maxRows);
+      toShow.forEach((entry, i) => {
+        const y = tableStartY + i * lineHeight;
+        const medalColor = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#cccccc';
+        container.add(this.add.text(colRank, y, `${entry.rank}.`, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: medalColor }));
+        container.add(this.add.text(colName, y, (entry.name || '').slice(0, 16), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: '#ffffff' }));
+        container.add(this.add.text(colWave, y, String(entry.wave), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: '#00ff88' }));
+        container.add(this.add.text(colScore, y, String(entry.score), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: '#ffff00' }));
       });
-      if (!walletConnected) {
-        container.add(this.add.text(cx, 400, t('leaderboard.connect_hint'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '11px',
-          color: '#666666',
-          align: 'center'
-        }).setOrigin(0.5));
-      }
     }
 
-    const closeText = this.add.text(cx, 450, t('leaderboard.back'), {
+    // Pie fijo: hint de wallet, reiniciar local, cerrar
+    const footerHintY = overlayTop + overlayH - 52;
+    const footerResetY = overlayTop + overlayH - 38;
+    const footerCloseY = overlayTop + overlayH - 24;
+    if (!walletConnected && top.length > 0) {
+      container.add(this.add.text(overlayLeft + overlayW / 2, footerHintY, t('leaderboard.connect_hint'), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: fs(11),
+        color: '#666666',
+        align: 'center',
+        wordWrap: { width: overlayW - 60 }
+      }).setOrigin(0.5));
+    }
+    const resetBtn = this.add.text(overlayLeft + overlayW / 2, footerResetY, t('leaderboard.reset_local'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
-      color: '#888888'
+      fontSize: fs(10),
+      color: '#666666'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    resetBtn.on('pointerover', () => resetBtn.setColor('#00aaff'));
+    resetBtn.on('pointerout', () => resetBtn.setColor('#666666'));
+    resetBtn.on('pointerdown', () => {
+      LeaderboardManager.reset();
+      container.destroy();
+      this.input.keyboard.off('keydown', close);
+      this.input.off('pointerdown', close);
+      this.showLeaderboard();
+    });
+    container.add(resetBtn);
+    const closeText = this.add.text(overlayLeft + overlayW / 2, footerCloseY, t('leaderboard.back'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: fs(12),
+      color: '#00aaff'
     }).setOrigin(0.5);
     container.add(closeText);
 
@@ -1425,6 +1584,7 @@ export default class TitleScene extends Phaser.Scene {
       this.input.off('pointerdown', close);
     };
 
+    backdrop.on('pointerdown', close);
     overlay.on('pointerdown', close);
     this.input.keyboard.once('keydown', close);
   }
@@ -1433,17 +1593,22 @@ export default class TitleScene extends Phaser.Scene {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
     const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
 
-    // Create overlay
-    const overlay = this.add.rectangle(cx, cy, 600, 400, 0x000000, 0.9);
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.97);
+    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
+
+    const overlay = this.add.rectangle(cx, cy, Math.min(600, w - 80), Math.min(400, h - 80), 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setDepth(1001).setInteractive({ useHandCursor: true });
 
-    const controlsTitle = this.add.text(cx, 150, t('controls.title'), {
+    const controlsTitle = this.add.text(cx, cy - 120, t('controls.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${28 * uiScale}px`,
+      fontSize: `${24 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
     const controls = [
       t('controls.wasd'),
@@ -1458,32 +1623,37 @@ export default class TitleScene extends Phaser.Scene {
       'npm run server'
     ];
 
-    // Store all control text elements for cleanup
     const controlTexts = [];
     controls.forEach((line, index) => {
-      const text = this.add.text(cx, 200 + index * 25, line, {
+      const text = this.add.text(cx, cy - 75 + index * 22, line, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${14 * uiScale}px`,
-        color: line.includes('npm') ? '#ffff00' : '#ffffff'
-      }).setOrigin(0.5);
+        fontSize: `${13 * uiScale}px`,
+        color: line.includes('npm') ? '#ffff00' : '#e0e0e0'
+      }).setOrigin(0.5).setDepth(1002);
       controlTexts.push(text);
     });
 
-    const closeText = this.add.text(cx, 480, t('prompt.any_key_close'), {
+    const closeText = this.add.text(cx, cy + 155, t('prompt.any_key_close'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${12 * uiScale}px`,
-      color: '#888888'
-    }).setOrigin(0.5);
+      fontSize: `${11 * uiScale}px`,
+      color: '#00aaff'
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Cleanup function
     const closeControls = () => {
+      backdrop.destroy();
       overlay.destroy();
       controlsTitle.destroy();
       closeText.destroy();
-      controlTexts.forEach(t => t.destroy());
+      controlTexts.forEach(el => el.destroy());
+      this.input.keyboard.off('keydown', closeControls);
+      this.input.keyboard.off('keydown-ESC', closeControls);
+      this.input.off('pointerdown', closeControls);
     };
 
-    // Close on any key
+    backdrop.on('pointerdown', closeControls);
+    overlay.on('pointerdown', closeControls);
+    closeText.setInteractive({ useHandCursor: true }).on('pointerdown', closeControls);
+    this.input.keyboard.on('keydown-ESC', closeControls);
     this.input.keyboard.once('keydown', closeControls);
     this.input.once('pointerdown', closeControls);
   }
@@ -1498,16 +1668,21 @@ export default class TitleScene extends Phaser.Scene {
     const cy = this.scale.height / 2;
     const uiScale = getUIScale(this);
 
-    // Fondo a pantalla completa para que solo se vea el recuadro (sin título/menú detrás)
-    const backdrop = this.add.rectangle(cx, cy, 800, 600, 0x0a0a12, 0.97);
-    backdrop.setDepth(1000);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
 
-    const boxH = isElectron ? 500 : 420;
-    const overlay = this.add.rectangle(cx, cy, 560, boxH, 0x0a0a14, 0.98);
+    const boxW = 580;
+    const boxH = isElectron ? 540 : 520;
+    const overlayLeft = cx - boxW / 2;
+    const overlayTop = cy - boxH / 2;
+    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001);
+    overlay.setDepth(1001).setInteractive({ useHandCursor: false });
 
-    const titleY = cy - boxH / 2 + 38;
+    // Título y lista bien dentro del cuadro (márgenes claros)
+    const titleY = overlayTop + 48;
     const title = this.add.text(cx, titleY, t('settings.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${28 * uiScale}px`,
@@ -1520,7 +1695,6 @@ export default class TitleScene extends Phaser.Scene {
       { key: 'music', labelKey: 'settings.MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); }},
       { key: 'sfx', labelKey: 'settings.SOUND_FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },
       { key: 'autoMove', labelKey: 'settings.AUTO_MOVE', type: 'toggle', getValue: () => settings.autoMove, toggle: () => settings.toggle('autoMove') },
-      { key: 'immortalMode', labelKey: 'settings.IMMORTAL_MODE', type: 'toggle', getValue: () => settings.immortalMode, toggle: () => settings.toggle('immortalMode') },
       { key: 'masterVol', labelKey: 'settings.MASTER_VOL', type: 'slider', getValue: () => settings.masterVolume, setValue: (v) => settings.setVolume('master', v) },
       { key: 'playerName', labelKey: 'settings.NAME', type: 'input', getValue: () => settings.playerName || t('settings.NOT_SET'), setValue: (v) => settings.setPlayerName(v) },
       {
@@ -1564,8 +1738,9 @@ export default class TitleScene extends Phaser.Scene {
       );
     }
 
-    const spacingBase = isElectron ? 40 : 42;
+    const spacingBase = isElectron ? 38 : 36;
     const spacing = spacingBase * uiScale;
+    const listX = overlayLeft + 32;
     const settingTexts = [];
 
     // Cache for async values
@@ -1582,16 +1757,21 @@ export default class TitleScene extends Phaser.Scene {
 
     const getSettingValue = (setting) => {
       if (setting.getValue?.constructor?.name === 'AsyncFunction') {
-        return asyncValues[setting.key];
+        const v = asyncValues[setting.key];
+        if (v !== undefined) return v;
+        if (setting.type === 'toggle') return false;
+        if (setting.type === 'slider') return 0.5;
+        if (setting.type === 'select' && setting.options?.length) return setting.options[0];
+        return '';
       }
       return setting.getValue?.();
     };
 
-    // Calcula la zona vertical donde va la lista de settings,
-    // centrada dentro del cuadro, dejando hueco para el título y los hints.
     const contentCount = settingsData.length;
-    const contentHeight = contentCount * spacing;
-    const listTop = cy - contentHeight / 2 + 20 * uiScale;
+    const listTop = overlayTop + 82;
+    const footerTop = overlayTop + boxH - 78;
+    const helpY = footerTop + 18;
+    const closeY = footerTop + 42;
 
     const renderSettings = () => {
       settingsData.forEach((setting, index) => {
@@ -1601,45 +1781,44 @@ export default class TitleScene extends Phaser.Scene {
         } else if (setting.type === 'toggle') {
           valueStr = getSettingValue(setting) ? t('settings.on') : t('settings.off');
         } else if (setting.type === 'slider') {
-          const val = Math.round(getSettingValue(setting) * 100);
+          const raw = getSettingValue(setting);
+          const val = Math.min(100, Math.max(0, Math.round((typeof raw === 'number' ? raw : 0.5) * 100)));
           const bars = Math.round(val / 10);
-          valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + ` ${val}%`;
+          valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + '  ' + val + '%';
         } else if (setting.type === 'input') {
-          valueStr = getSettingValue(setting);
+          valueStr = (getSettingValue(setting) || '') + '';
         } else if (setting.type === 'select') {
           const currentVal = getSettingValue(setting);
           const optionIndex = setting.options.indexOf(currentVal);
-          valueStr = `< ${setting.optionLabels[optionIndex] || currentVal} >`;
+          const safeIndex = optionIndex >= 0 ? optionIndex : 0;
+          valueStr = '< ' + (setting.optionLabels[safeIndex] || setting.options[safeIndex] || currentVal) + ' >';
         }
 
         const isDivider = setting.type === 'divider';
         const label = setting.labelKey ? t(setting.labelKey) : setting.label;
-        const text = this.add.text(cx, listTop + index * spacing,
+        const text = this.add.text(listX, listTop + index * spacing,
           isDivider ? label : `${label}\n${valueStr}`, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: isDivider ? `${12 * uiScale}px` : `${14 * uiScale}px`,
           color: isDivider ? '#666666' : (index === 0 ? '#00ffff' : '#888888'),
-          align: 'center',
-          lineSpacing: 4
-        }).setOrigin(0.5).setDepth(1002);
+          align: 'left',
+          lineSpacing: 2
+        }).setOrigin(0, 0.5).setDepth(1002);
 
         settingTexts.push({ text, setting, index });
       });
     };
 
-    // Initialize and render
-    initAsyncValues().then(() => renderSettings());
+    // Mostrar lista de ajustes de inmediato (luego se actualiza si hay valores async)
+    renderSettings();
+    initAsyncValues().then(() => updateVisuals()).catch(() => {});
 
-    // Selector (dentro del recuadro)
-    const selector = this.add.text(cx - 220 * uiScale, listTop, '>', {
+    const selector = this.add.text(listX - 20, listTop, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${18 * uiScale}px`,
       color: '#ffff00'
     }).setOrigin(0.5).setDepth(1002);
 
-    // Instrucciones y cerrar (dentro del recuadro, con margen al borde)
-    const helpY = listTop + contentHeight + 18 * uiScale;
-    const closeY = helpY + 20 * uiScale;
     const helpText = this.add.text(cx, helpY, t('prompt.up_down_adjust'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${11 * uiScale}px`,
@@ -1649,8 +1828,17 @@ export default class TitleScene extends Phaser.Scene {
     const closeHint = this.add.text(cx, closeY, t('prompt.esc_close'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${12 * uiScale}px`,
-      color: '#aaaaaa'
+      color: '#00aaff'
     }).setOrigin(0.5).setDepth(1002);
+
+    const closeBtn = this.add.text(cx, closeY + 22, t('leaderboard.back'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${14 * uiScale}px`,
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
+    closeBtn.on('pointerdown', close);
+    closeBtn.on('pointerover', () => closeBtn.setColor('#ffffff'));
+    closeBtn.on('pointerout', () => closeBtn.setColor('#00ffff'));
 
     // Update visuals
     const updateVisuals = async () => {
@@ -1670,15 +1858,17 @@ export default class TitleScene extends Phaser.Scene {
         } else if (item.setting.type === 'toggle') {
           valueStr = getSettingValue(item.setting) ? t('settings.on') : t('settings.off');
         } else if (item.setting.type === 'slider') {
-          const val = Math.round(getSettingValue(item.setting) * 100);
+          const raw = getSettingValue(item.setting);
+          const val = Math.min(100, Math.max(0, Math.round((typeof raw === 'number' ? raw : 0.5) * 100)));
           const bars = Math.round(val / 10);
-          valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + ` ${val}%`;
+          valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + '  ' + val + '%';
         } else if (item.setting.type === 'input') {
-          valueStr = getSettingValue(item.setting);
+          valueStr = (getSettingValue(item.setting) || '') + '';
         } else if (item.setting.type === 'select') {
           const currentVal = getSettingValue(item.setting);
           const optionIndex = item.setting.options.indexOf(currentVal);
-          valueStr = `< ${item.setting.optionLabels[optionIndex] || currentVal} >`;
+          const safeIndex = optionIndex >= 0 ? optionIndex : 0;
+          valueStr = `< ${item.setting.optionLabels[safeIndex] || item.setting.options[safeIndex] || currentVal} >`;
         }
 
         const lbl = item.setting.labelKey ? t(item.setting.labelKey) : item.setting.label;
@@ -1764,7 +1954,11 @@ export default class TitleScene extends Phaser.Scene {
       }
     };
 
+    const escKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+
     const close = () => {
+      if (!this.settingsMenuOpen) return;
+      this.settingsMenuOpen = false;
       this.input.keyboard.off('keydown-UP', moveUp);
       this.input.keyboard.off('keydown-DOWN', moveDown);
       this.input.keyboard.off('keydown-W', moveUp);
@@ -1775,7 +1969,7 @@ export default class TitleScene extends Phaser.Scene {
       this.input.keyboard.off('keydown-D', adjustRight);
       this.input.keyboard.off('keydown-ENTER', select);
       this.input.keyboard.off('keydown-SPACE', select);
-      this.input.keyboard.off('keydown-ESC', close);
+      escKey.off('down', onEscClose);
 
       backdrop.destroy();
       overlay.destroy();
@@ -1783,21 +1977,24 @@ export default class TitleScene extends Phaser.Scene {
       selector.destroy();
       helpText.destroy();
       closeHint.destroy();
+      if (closeBtn && closeBtn.destroy) closeBtn.destroy();
       settingTexts.forEach(item => item.text.destroy());
-      this.settingsMenuOpen = false;
     };
 
+    const onEscClose = () => close();
     this.input.keyboard.on('keydown-UP', moveUp);
     this.input.keyboard.on('keydown-DOWN', moveDown);
     this.input.keyboard.on('keydown-W', moveUp);
     this.input.keyboard.on('keydown-S', moveDown);
+
+    backdrop.on('pointerdown', close);
     this.input.keyboard.on('keydown-LEFT', adjustLeft);
     this.input.keyboard.on('keydown-RIGHT', adjustRight);
     this.input.keyboard.on('keydown-A', adjustLeft);
     this.input.keyboard.on('keydown-D', adjustRight);
     this.input.keyboard.on('keydown-ENTER', select);
     this.input.keyboard.on('keydown-SPACE', select);
-    this.input.keyboard.on('keydown-ESC', close);
+    escKey.on('down', onEscClose);
   }
 
   showNameInput(isFirstTime = false, callback = null) {
@@ -1968,11 +2165,13 @@ export default class TitleScene extends Phaser.Scene {
       color: '#ffd700'
     }).setOrigin(0.5);
 
-    // Upgrade list
+    // Upgrade list (left-aligned, names padded so level bars align)
     const upgradeKeys = Object.keys(window.VIBE_UPGRADES.upgrades);
     const upgradeTexts = [];
+    const listX = 140;
     const startY = 160;
     const spacing = 42;
+    const namePadLen = 14;
 
     upgradeKeys.forEach((key, index) => {
       const upgrade = window.VIBE_UPGRADES.upgrades[key];
@@ -1985,15 +2184,16 @@ export default class TitleScene extends Phaser.Scene {
       const canAfford = window.VIBE_UPGRADES.currency >= cost && !maxed;
       const name = t('upgrade_names.' + key);
       const desc = t('upgrade_descs.' + key);
+      const paddedName = name.padEnd(namePadLen, ' ');
 
-      const text = this.add.text(400, startY + index * spacing,
-        `${name} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
+      const text = this.add.text(listX, startY + index * spacing,
+        `${paddedName} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`, {
+        fontFamily: '"Consolas", "Monaco", monospace',
         fontSize: '12px',
         color: index === 0 ? '#00ffff' : '#888888',
-        align: 'center',
+        align: 'left',
         lineSpacing: 2
-      }).setOrigin(0.5);
+      }).setOrigin(0, 0.5);
 
       if (!canAfford && !maxed) {
         text.setColor(index === 0 ? '#ff6666' : '#666666');
@@ -2031,8 +2231,9 @@ export default class TitleScene extends Phaser.Scene {
         const costStr = maxed ? t('upgrades.maxed') : `${cost} ${t('upgrades.bits')}`;
         const name = t('upgrade_names.' + item.key);
         const desc = t('upgrade_descs.' + item.key);
+        const paddedName = name.padEnd(namePadLen, ' ');
 
-        item.text.setText(`${name} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`);
+        item.text.setText(`${paddedName} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`);
 
         if (index === this.upgradeSelectedIndex) {
           item.text.setColor(item.canAfford || maxed ? '#00ffff' : '#ff6666');
@@ -2107,38 +2308,47 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   showWeapons() {
-    // Pause main menu interaction
     this.weaponMenuOpen = true;
     this.weaponSelectedIndex = 0;
-    this.weaponTab = 'legendary'; // 'legendary', 'melee', 'ranged'
+    this.weaponTab = 'legendary';
 
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
 
-    // Create overlay
-    const overlay = this.add.rectangle(cx, cy, 750, 550, 0x000000, 0.95);
+    const overlayW = Math.min(750, w - 40);
+    const overlayH = Math.min(550, h - 40);
+    const overlayLeft = cx - overlayW / 2;
+    const overlayTop = cy - overlayH / 2;
+
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
+
+    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setDepth(1001);
 
-    const title = this.add.text(cx, 40, t('weapons.gallery'), {
+    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 36, t('weapons.gallery'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
+      fontSize: `${24 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Tab buttons
     const tabs = ['LEGENDARY', 'MELEE', 'RANGED'];
     const tabTexts = [];
-    const tabStartX = cx - 200;
-    const tabSpacing = 180;
+    const tabStartX = overlayLeft + overlayW * 0.2;
+    const tabSpacing = overlayW * 0.28;
 
     tabs.forEach((tab, index) => {
-      const tabText = this.add.text(tabStartX + index * tabSpacing, 75, t('weapons.' + tab), {
+      const tabText = this.add.text(tabStartX + index * tabSpacing, overlayTop + 68, t('weapons.' + tab), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
+        fontSize: `${13 * uiScale}px`,
         color: index === 0 ? '#ffd700' : '#666666',
         fontStyle: index === 0 ? 'bold' : 'normal'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setDepth(1002);
       tabText.setInteractive({ useHandCursor: true });
       tabTexts.push(tabText);
     });
@@ -2177,11 +2387,16 @@ export default class TitleScene extends Phaser.Scene {
       blizzard: { name: 'BLIZZARD', desc: 'Evolved FREEZE + SPREAD. Area slow.', color: '#aaddff', rare: true }
     };
 
-    // Render functions for each tab
+    const colLeft = overlayLeft + 24;
+    const colName = overlayLeft + 100;
+    const colRight = overlayLeft + overlayW - 70;
+
+    const contentDepth = 1002;
     const renderLegendary = () => {
       clearContent();
-      const startY = 120;
-      const spacing = 80;
+      if (!legendaries || !legendaries.weapons) return;
+      const startY = overlayTop + 98;
+      const spacing = 76;
       const legendaryKeys = Object.keys(legendaries.weapons);
 
       legendaryKeys.forEach((key, index) => {
@@ -2189,226 +2404,216 @@ export default class TitleScene extends Phaser.Scene {
         const unlocked = legendaries.hasUnlocked(key);
         const equipped = legendaries.equipped === key;
 
-        // Weapon icon box
-        const boxX = 150;
+        const boxX = colLeft + 36;
         const boxY = startY + index * spacing;
-        const box = this.add.rectangle(boxX, boxY, 60, 60, unlocked ? 0x222222 : 0x111111);
-        box.setStrokeStyle(2, unlocked ? 0xffd700 : 0x333333);
+        const box = this.add.rectangle(boxX, boxY, 52, 52, unlocked ? 0x222222 : 0x111111);
+        box.setStrokeStyle(2, unlocked ? 0xffd700 : 0x333333).setDepth(contentDepth);
         contentElements.push(box);
 
-        // Weapon sprite if unlocked
         if (unlocked && this.textures.exists(`legendary-${key}`)) {
           const sprite = this.add.sprite(boxX, boxY, `legendary-${key}`);
-          sprite.setScale(1.2);
+          sprite.setScale(1.0).setDepth(contentDepth);
           contentElements.push(sprite);
         } else {
-          // Lock icon
           const lock = this.add.text(boxX, boxY, '?', {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '32px',
+            fontSize: '24px',
             color: '#333333'
-          }).setOrigin(0.5);
+          }).setOrigin(0.5).setDepth(contentDepth);
           contentElements.push(lock);
         }
 
-        // Weapon name
         const nameColor = equipped ? '#ffd700' : (unlocked ? '#ffffff' : '#444444');
-        const name = this.add.text(220, boxY - 20, unlocked ? weapon.name : '???', {
+        const name = this.add.text(colName, boxY - 18, unlocked ? weapon.name : '???', {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '16px',
+          fontSize: '14px',
           color: nameColor,
-          fontStyle: equipped ? 'bold' : 'normal'
-        });
+          fontStyle: equipped ? 'bold' : 'normal',
+          wordWrap: { width: colRight - colName - 90 }
+        }).setDepth(contentDepth);
         contentElements.push(name);
 
-        // Description
-        const desc = this.add.text(220, boxY, unlocked ? weapon.desc : t('weapons.locked'), {
+        const desc = this.add.text(colName, boxY, unlocked ? weapon.desc : t('weapons.locked'), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '11px',
-          color: unlocked ? '#888888' : '#444444'
-        });
+          fontSize: '10px',
+          color: unlocked ? '#888888' : '#444444',
+          wordWrap: { width: colRight - colName - 90 }
+        }).setDepth(contentDepth);
         contentElements.push(desc);
 
-        // Stats or status
         if (unlocked) {
-          const stats = this.add.text(220, boxY + 18, `DMG: ${weapon.damage} | RADIUS: ${weapon.radius} | COUNT: ${weapon.orbitalCount}`, {
+          const stats = this.add.text(colName, boxY + 16, `DMG: ${weapon.damage} | RADIUS: ${weapon.radius} | COUNT: ${weapon.orbitalCount}`, {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '10px',
-            color: '#666666'
-          });
+            fontSize: '9px',
+            color: '#666666',
+            wordWrap: { width: colRight - colName - 90 }
+          }).setDepth(contentDepth);
           contentElements.push(stats);
 
-          // Equip button
-          const equipBtn = this.add.text(620, boxY, equipped ? t('weapons.equipped') : t('weapons.equip'), {
+          const equipBtn = this.add.text(colRight, boxY, equipped ? t('weapons.equipped') : t('weapons.equip'), {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '12px',
+            fontSize: '11px',
             color: equipped ? '#ffd700' : '#00ffff',
             fontStyle: 'bold'
-          }).setOrigin(0.5);
+          }).setOrigin(0.5).setDepth(contentDepth);
           equipBtn.setInteractive({ useHandCursor: true });
           equipBtn.on('pointerover', () => equipBtn.setColor('#ffffff'));
           equipBtn.on('pointerout', () => equipBtn.setColor(equipped ? '#ffd700' : '#00ffff'));
           equipBtn.on('pointerdown', () => {
-            if (equipped) {
-              legendaries.unequip();
-            } else {
-              legendaries.equip(key);
-            }
-            renderLegendary(); // Re-render
+            if (equipped) legendaries.unequip();
+            else legendaries.equip(key);
+            renderLegendary();
             Audio.playLevelUp();
           });
           contentElements.push(equipBtn);
         } else {
-          const dropRate = this.add.text(620, boxY, `${(weapon.dropRate * 100).toFixed(2)}${t('weapons.drop')}`, {
+          const dropRate = this.add.text(colRight, boxY, `${(weapon.dropRate * 100).toFixed(2)}${t('weapons.drop')}`, {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '10px',
             color: '#ff6666'
-          }).setOrigin(0.5);
+          }).setOrigin(0.5).setDepth(contentDepth);
           contentElements.push(dropRate);
         }
       });
 
-      // Info text
-      const info = this.add.text(400, 520, t('weapons.legendary_info'), {
+      const info = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 42, t('weapons.legendary_info'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '11px',
+        fontSize: `${11 * uiScale}px`,
         color: '#ffd700'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setDepth(contentDepth);
       contentElements.push(info);
     };
 
     const renderMelee = () => {
       clearContent();
-      const startY = 120;
-      const spacing = 70;
+      if (!melee) return;
+      const startY = overlayTop + 98;
+      const spacing = 64;
       const meleeKeys = Object.keys(melee);
 
       meleeKeys.forEach((key, index) => {
         const weapon = melee[key];
-        const boxX = 150;
+        const boxX = colLeft + 36;
         const boxY = startY + index * spacing;
 
-        // Weapon icon box
-        const box = this.add.rectangle(boxX, boxY, 60, 60, 0x222222);
-        box.setStrokeStyle(2, weapon.color);
+        const box = this.add.rectangle(boxX, boxY, 52, 52, 0x222222);
+        box.setStrokeStyle(2, weapon.color).setDepth(contentDepth);
         contentElements.push(box);
 
-        // Weapon sprite
         if (this.textures.exists(`melee-${key}`)) {
           const sprite = this.add.sprite(boxX, boxY, `melee-${key}`);
-          sprite.setScale(1.2);
+          sprite.setScale(1.0).setDepth(contentDepth);
           contentElements.push(sprite);
         }
 
-        // Weapon name
-        const name = this.add.text(220, boxY - 15, weapon.name, {
+        const name = this.add.text(colName, boxY - 14, weapon.name, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '16px',
-          color: '#ffffff'
-        });
+          fontSize: '14px',
+          color: '#ffffff',
+          wordWrap: { width: colRight - colName - 100 }
+        }).setDepth(contentDepth);
         contentElements.push(name);
 
-        // Stats
-        const stats = this.add.text(220, boxY + 5, `DMG: ${weapon.damage} | RATE: ${weapon.attackRate} | RANGE: ${weapon.range}`, {
+        const stats = this.add.text(colName, boxY + 4, `DMG: ${weapon.damage} | RATE: ${weapon.attackRate} | RANGE: ${weapon.range}`, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '11px',
-          color: '#888888'
-        });
+          fontSize: '10px',
+          color: '#888888',
+          wordWrap: { width: colRight - colName - 100 }
+        }).setDepth(contentDepth);
         contentElements.push(stats);
 
-        // Type
-        const typeText = this.add.text(620, boxY, weapon.type.toUpperCase(), {
+        const typeText = this.add.text(colRight, boxY, weapon.type.toUpperCase(), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '12px',
+          fontSize: '11px',
           color: Phaser.Display.Color.IntegerToColor(weapon.color).rgba
-        }).setOrigin(0.5);
+        }).setOrigin(0.5).setDepth(contentDepth);
         contentElements.push(typeText);
       });
 
-      // Info text
-      const info = this.add.text(400, 520, 'Melee weapons have 15% drop chance from enemies', {
+      const info = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 42, t('weapons.melee_info'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '11px',
+        fontSize: `${11 * uiScale}px`,
         color: '#00ffff'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setDepth(contentDepth);
       contentElements.push(info);
     };
 
     const renderRanged = () => {
       clearContent();
 
-      // Base weapons
-      const baseTitle = this.add.text(100, 110, 'BASE WEAPONS', {
+      const baseTitle = this.add.text(overlayLeft + 24, overlayTop + 98, 'BASE WEAPONS', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
+        fontSize: `${13 * uiScale}px`,
         color: '#00ffff',
         fontStyle: 'bold'
-      });
+      }).setDepth(contentDepth);
       contentElements.push(baseTitle);
 
-      let y = 135;
+      let y = overlayTop + 122;
       const rangedKeys = Object.keys(rangedWeapons);
       rangedKeys.forEach((key, index) => {
         const weapon = rangedWeapons[key];
         const col = index % 2;
         const row = Math.floor(index / 2);
-        const x = 100 + col * 320;
-        const itemY = y + row * 35;
+        const x = overlayLeft + 24 + col * (overlayW / 2 - 20);
+        const itemY = y + row * 32;
 
-        const text = this.add.text(x, itemY, `${weapon.name}`, {
+        const text = this.add.text(x, itemY, weapon.name, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '12px',
-          color: weapon.color
-        });
+          fontSize: `${11 * uiScale}px`,
+          color: weapon.color,
+          wordWrap: { width: 200 }
+        }).setDepth(contentDepth);
         contentElements.push(text);
 
-        const desc = this.add.text(x + 120, itemY, weapon.desc.substring(0, 30), {
+        const desc = this.add.text(x, itemY + 14, weapon.desc.substring(0, 35), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '10px',
-          color: '#666666'
-        });
+          fontSize: '9px',
+          color: '#666666',
+          wordWrap: { width: 200 }
+        }).setDepth(contentDepth);
         contentElements.push(desc);
       });
 
-      // Evolved weapons
-      const evolvedTitle = this.add.text(100, 310, 'EVOLVED WEAPONS (Combine 2 weapons!)', {
+      const evolvedTitle = this.add.text(overlayLeft + 24, overlayTop + 298, 'EVOLVED (Combine 2!)', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
+        fontSize: `${12 * uiScale}px`,
         color: '#ff00ff',
         fontStyle: 'bold'
-      });
+      }).setDepth(contentDepth);
       contentElements.push(evolvedTitle);
 
-      y = 335;
+      y = overlayTop + 320;
       const evolvedKeys = Object.keys(evolvedWeapons);
       evolvedKeys.forEach((key, index) => {
         const weapon = evolvedWeapons[key];
         const col = index % 2;
         const row = Math.floor(index / 2);
-        const x = 100 + col * 320;
-        const itemY = y + row * 32;
+        const x = overlayLeft + 24 + col * (overlayW / 2 - 20);
+        const itemY = y + row * 28;
 
-        const text = this.add.text(x, itemY, `${weapon.name}`, {
+        const text = this.add.text(x, itemY, weapon.name, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '11px',
-          color: weapon.color
-        });
+          fontSize: '10px',
+          color: weapon.color,
+          wordWrap: { width: 180 }
+        }).setDepth(contentDepth);
         contentElements.push(text);
 
-        const desc = this.add.text(x + 130, itemY, weapon.desc.substring(0, 28), {
+        const desc = this.add.text(x, itemY + 12, weapon.desc.substring(0, 28), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '9px',
-          color: '#555555'
-        });
+          color: '#555555',
+          wordWrap: { width: 180 }
+        }).setDepth(contentDepth);
         contentElements.push(desc);
       });
 
-      // Info text
-      const info = this.add.text(400, 520, 'Ranged weapons drop from enemies during gameplay', {
+      const info = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 42, t('weapons.ranged_info'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '11px',
+        fontSize: `${11 * uiScale}px`,
         color: '#00ffff'
-      }).setOrigin(0.5);
+      }).setOrigin(0.5).setDepth(contentDepth);
       contentElements.push(info);
     };
 
@@ -2443,17 +2648,14 @@ export default class TitleScene extends Phaser.Scene {
       });
     });
 
-    // Instructions
-    const instructions = this.add.text(400, 555, '[ LEFT/RIGHT: Switch Tab | ESC: Close ]', {
+    const instructions = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 22, t('weapons.tab_instructions'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '11px',
+      fontSize: `${10 * uiScale}px`,
       color: '#666666'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Initial render
     renderLegendary();
 
-    // Input handlers
     let currentTab = 0;
 
     const tabLeft = () => {
@@ -2478,6 +2680,7 @@ export default class TitleScene extends Phaser.Scene {
       this.input.keyboard.off('keydown-ESC', close);
 
       clearContent();
+      backdrop.destroy();
       overlay.destroy();
       title.destroy();
       instructions.destroy();
@@ -2486,7 +2689,7 @@ export default class TitleScene extends Phaser.Scene {
       this.weaponMenuOpen = false;
     };
 
-    // Bind inputs
+    backdrop.on('pointerdown', close);
     this.input.keyboard.on('keydown-LEFT', tabLeft);
     this.input.keyboard.on('keydown-RIGHT', tabRight);
     this.input.keyboard.on('keydown-A', tabLeft);
