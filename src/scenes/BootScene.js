@@ -64,37 +64,14 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('swordsman-walk', './assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-hurt', './assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('werewolf-run', './assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
-    //
-    // Blue Version background pack:
-    // In dev we can load directly from Downloads via Vite /@fs path.
-    // Local fallback keys are also loaded from public/assets/backgrounds/blue/.
-    const bluePackAbs = '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version';
-    const layeredAbs = `${bluePackAbs}/layered`;
-    const toFsUrl = (absPath) => `/@fs${encodeURI(absPath)}`;
-
-    // Primary keys (used by TitleScene) -> layered folder first
-    this.load.image('bg-blue-back', toFsUrl(`${layeredAbs}/blue-back.png`));
-    this.load.image('bg-blue-stars', toFsUrl(`${layeredAbs}/blue-stars.png`));
-    this.load.image('bg-blue-with-stars', toFsUrl(`${layeredAbs}/blue-with-stars.png`));
-    this.load.image('bg-planet-big', toFsUrl(`${layeredAbs}/prop-planet-big.png`));
-    this.load.image('bg-asteroid-1', toFsUrl(`${layeredAbs}/asteroid-1.png`));
-    this.load.image('bg-asteroid-2', toFsUrl(`${layeredAbs}/asteroid-2.png`));
-
-    // Backup keys from Blue Version root
-    this.load.image('bg-blue-back-root', toFsUrl(`${bluePackAbs}/blue-back.png`));
-    this.load.image('bg-blue-stars-root', toFsUrl(`${bluePackAbs}/blue-stars.png`));
-    this.load.image('bg-blue-with-stars-root', toFsUrl(`${bluePackAbs}/blue-with-stars.png`));
-    this.load.image('bg-planet-big-root', toFsUrl(`${bluePackAbs}/prop-planet-big.png`));
-    this.load.image('bg-asteroid-1-root', toFsUrl(`${bluePackAbs}/asteroid-1.png`));
-    this.load.image('bg-asteroid-2-root', toFsUrl(`${bluePackAbs}/asteroid-2.png`));
-
-    // Backup local keys from public/assets (optional)
-    this.load.image('bg-blue-back-local', './assets/backgrounds/blue/blue-back.png');
-    this.load.image('bg-blue-stars-local', './assets/backgrounds/blue/blue-stars.png');
-    this.load.image('bg-blue-with-stars-local', './assets/backgrounds/blue/blue-with-stars.png');
-    this.load.image('bg-planet-big-local', './assets/backgrounds/blue/prop-planet-big.png');
-    this.load.image('bg-asteroid-1-local', './assets/backgrounds/blue/asteroid-1.png');
-    this.load.image('bg-asteroid-2-local', './assets/backgrounds/blue/asteroid-2.png');
+    // Blue Version background pack — from public/ so it works in production (Vercel, etc.)
+    const bgBase = './assets/backgrounds/blue';
+    this.load.image('bg-blue-back', `${bgBase}/blue-back.png`);
+    this.load.image('bg-blue-stars', `${bgBase}/blue-stars.png`);
+    this.load.image('bg-blue-with-stars', `${bgBase}/blue-with-stars.png`);
+    this.load.image('bg-planet-big', `${bgBase}/prop-planet-big.png`);
+    this.load.image('bg-asteroid-1', `${bgBase}/asteroid-1.png`);
+    this.load.image('bg-asteroid-2', `${bgBase}/asteroid-2.png`);
 
     // We'll generate all textures procedurally (and with fallbacks) in create()
     this.time.delayedCall(500, () => {

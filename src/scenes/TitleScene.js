@@ -134,7 +134,7 @@ export default class TitleScene extends Phaser.Scene {
     this.bgTweens = [];
 
     // Depth 0: base background (cover image, no tiling to avoid mosaic).
-    const bgBaseKey = pickKey('bg-blue-back', 'bg-blue-back-root', 'bg-blue-back-local');
+    const bgBaseKey = pickKey('bg-blue-back');
     this.bgBase = bgBaseKey ? placeCover(bgBaseKey, 0, 1) : null;
     if (!this.bgBase) {
       const fallback = this.add.graphics();
@@ -156,7 +156,7 @@ export default class TitleScene extends Phaser.Scene {
     }
 
     // Depth 1: optional mid layer + stars.
-    const bgMidKey = pickKey('bg-blue-with-stars', 'bg-blue-with-stars-root', 'bg-blue-with-stars-local');
+    const bgMidKey = pickKey('bg-blue-with-stars');
     if (bgMidKey) {
       this.bgMid = placeCover(bgMidKey, 1, 0.35);
       if (this.bgMid) {
@@ -182,7 +182,7 @@ export default class TitleScene extends Phaser.Scene {
       }
     }
 
-    const starsKey = pickKey('bg-blue-stars', 'bg-blue-stars-root', 'bg-blue-stars-local');
+    const starsKey = pickKey('bg-blue-stars');
     if (starsKey) {
       this.bgStarsFar = this.add.tileSprite(width / 2, height / 2, width, height, starsKey);
       this.bgStarsFar.setDepth(1).setAlpha(0.25);
@@ -210,7 +210,7 @@ export default class TitleScene extends Phaser.Scene {
     }
 
     // Depth 2: planet + asteroids.
-    const planetKey = pickKey('bg-planet-big', 'bg-planet-big-root', 'bg-planet-big-local');
+    const planetKey = pickKey('bg-planet-big');
     if (planetKey) {
       this.bgPlanet = this.add.image(width - 200, height - 180, planetKey);
       this.bgPlanet.setDepth(3).setScale(0.8).setAlpha(0.9);
@@ -225,8 +225,8 @@ export default class TitleScene extends Phaser.Scene {
       }));
     }
 
-    const addAsteroid = (key, rootKey, localKey, x, y, scale, driftX, driftY) => {
-      const finalKey = pickKey(key, rootKey, localKey);
+    const addAsteroid = (key, x, y, scale, driftX, driftY) => {
+      const finalKey = pickKey(key);
       if (!finalKey) return;
       const asteroid = this.add.image(x, y, finalKey).setDepth(3).setScale(scale).setAlpha(0.82);
       const tween = this.tweens.add({
@@ -241,8 +241,8 @@ export default class TitleScene extends Phaser.Scene {
       this.bgTweens.push(tween);
     };
 
-    addAsteroid('bg-asteroid-1', 'bg-asteroid-1-root', 'bg-asteroid-1-local', width * 0.18, height * 0.22, 0.75, 10, -8);
-    addAsteroid('bg-asteroid-2', 'bg-asteroid-2-root', 'bg-asteroid-2-local', width * 0.78, height * 0.32, 0.85, -12, 8);
+    addAsteroid('bg-asteroid-1', width * 0.18, height * 0.22, 0.75, 10, -8);
+    addAsteroid('bg-asteroid-2', width * 0.78, height * 0.32, 0.85, -12, 8);
   }
 
   createTitle() {
