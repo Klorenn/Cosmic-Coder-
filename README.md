@@ -3,9 +3,9 @@
 **A vampire-survivors-style idle game where coding powers your astronaut. Code, conquer, and grow!**  
 **Un juego idle al estilo Vampire Survivors donde tu actividad de codificación potencia a tu astronauta. Programa, conquista y crece.**
 
-▶️ [Play Now / Jugar Ahora](https://daredev256.github.io/vibe-coder/) | ⬇️ [Download Desktop App / Descargar App](#-desktop-app--app-de-escritorio) | 📖 [Setup Guide / Guía de Configuración](./SETUP.md) | 📋 [Changelog / Historial de Cambios](./CHANGELOG.md)
+▶️ [Play Now / Jugar Ahora](https://klorenn.github.io/Cosmic-Coder-/) | ⬇️ [Download Desktop App / Descargar App](#-desktop-app--app-de-escritorio) | 📖 [Setup Guide / Guía de Configuración](./SETUP.md) | 📋 [Changelog / Historial de Cambios](./CHANGELOG.md)
 
-![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Electron](https://img.shields.io/badge/Electron-33.x-9feaf9) ![Node](https://img.shields.io/badge/Node-18+-green) ![Tests](https://img.shields.io/badge/Tests-240_passing-brightgreen) ![Deploy](https://img.shields.io/github/actions/workflow/status/DareDev256/vibe-coder/deploy.yml?label=Deploy) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen)
+![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Electron](https://img.shields.io/badge/Electron-33.x-9feaf9) ![Node](https://img.shields.io/badge/Node-18+-green) ![Tests](https://img.shields.io/badge/Tests-240_passing-brightgreen) ![Deploy](https://img.shields.io/github/actions/workflow/status/Klorenn/Cosmic-Coder-/deploy.yml?label=Deploy) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen)
 
 ---
 
@@ -50,7 +50,7 @@
 ## 🚀 Quick Start / Inicio Rápido
 
 ### Play Online (No Install) / Jugar en línea (sin instalar)
-**[▶️ Play Cosmic Coder Now / Jugar Cosmic Coder](https://daredev256.github.io/vibe-coder/)**
+**[▶️ Play Cosmic Coder Now / Jugar Cosmic Coder](https://klorenn.github.io/Cosmic-Coder-/)**
 
 Press **SPACE** to manually gain XP, or connect the hooks for real coding rewards!  
 **Pulsa ESPACIO para ganar XP manualmente, o conecta los hooks para recompensas por codificar.**
@@ -69,6 +69,27 @@ Open http://localhost:3000 in your browser.
 The game supports **English** and **Spanish**. Change language in **Settings → Language** on the title screen.  
 El juego soporta **inglés** y **español**. Cambia el idioma en **Ajustes → Idioma** en la pantalla de título.
 
+### Menu Character Assets (Important)
+
+The title menu and character selector use sprite sheets from `public/assets/sprites`:
+
+- `public/assets/sprites/player/robot-idle.png`
+- `public/assets/sprites/player/robot-walk.png`
+- `public/assets/sprites/player/robot-hurt.png`
+- `public/assets/sprites/player/destroyer-idle.png`
+- `public/assets/sprites/player/destroyer-walk.png`
+- `public/assets/sprites/player/destroyer-hurt.png`
+- `public/assets/sprites/player/swordsman-idle.png`
+- `public/assets/sprites/player/swordsman-walk.png`
+- `public/assets/sprites/player/swordsman-hurt.png`
+- `public/assets/sprites/enemies/werewolf-run.png`
+
+Behavior notes:
+
+- The title menu keeps wolves/mobs disabled by default for a clean UI.
+- Character preview in `PERSONAJE` updates immediately on LEFT/RIGHT selection.
+- If assets are missing, the game falls back to generated placeholder textures.
+
 ---
 
 ## 🖥️ Desktop App / App de escritorio
@@ -77,7 +98,7 @@ Run Cosmic Coder as a native desktop app with system tray integration!
 **Ejecuta Cosmic Coder como app de escritorio con integración en la bandeja del sistema.**
 
 ### Download / Descargar
-Check the [Releases](https://github.com/DareDev256/vibe-coder/releases) page for pre-built binaries / Revisa la página de [Releases](https://github.com/DareDev256/vibe-coder/releases) para binarios:
+Check the [Releases](https://github.com/Klorenn/Cosmic-Coder-/releases) page for pre-built binaries / Revisa la página de [Releases](https://github.com/Klorenn/Cosmic-Coder-/releases) para binarios:
 - **macOS**: `.dmg` (Universal)
 - **Windows**: `.exe`
 - **Linux**: `.AppImage` o `.deb`
@@ -109,7 +130,8 @@ Connect Cosmic Coder to your AI coding assistant for real XP gains while coding!
 
 ## 🏆 Hackathon: Provably Fair Survival (Stellar + ZK)
 
-Cosmic Coder integrates with [Stellar Game Studio](https://github.com/jamesbachini/Stellar-Game-Studio) and a **ZK-style proof** for the leaderboard.
+Cosmic Coder integrates with [Stellar Game Studio](https://github.com/jamesbachini/Stellar-Game-Studio) and a **ZK-style proof** for the leaderboard.  
+**[📋 Hackathon & Repo documentation](./public/docs/index.html)** — complete doc for judges and repo (ES/EN). Select "Hackathon & Repo" in the nav.
 
 ### What it does
 
@@ -162,22 +184,55 @@ Document the cost envelope from simulation in your runbook.
 
 **Demo narrative:** *"Shadow Ascension is a competitive survival game where every ranked run is validated on-chain using Groth16 zero-knowledge proofs over BN254. The Stellar Testnet contract verifies mathematical consistency of run stats without revealing internal gameplay state. Only cryptographically valid runs enter the official leaderboard."*
 
+### Hackathon: How to play and verify
+
+**Requirement:** Players **must** link a [Freighter](https://www.freighterapp.com/) wallet on the title screen to play (browser extension). The game cannot be played without a connected wallet.
+
+**How to play and verify:**
+
+1. Open the game (online: [Play Cosmic Coder](https://klorenn.github.io/Cosmic-Coder-/) or run `npm run dev` locally).
+2. **Connect your Freighter wallet** on the title screen — **required to play**. Install the [Freighter](https://www.freighterapp.com/) extension if needed.
+3. Choose **Start Game** (not "Continue") so the run is eligible for **ZK Ranked** submission.
+4. Play until you die. On death, the game submits your run on-chain: either **ZK Ranked** (proof + verifier) or **Casual** (legacy). You’ll see a short message: "Submitted to ZK leaderboard" or "Submitted to casual leaderboard".
+
+**How ZK works (short):** The client binds your run with a hash `run_hash = H(player, wave, score, runSeed, timestamp)`, requests a Groth16 proof from the backend, and sends it to the policy contract. The contract verifies the proof on-chain and updates the ranked leaderboard; anti-replay is enforced by (player, nonce, season_id).
+
+**Links:**
+
+- **Game (online):** [Play Cosmic Coder](https://klorenn.github.io/Cosmic-Coder-/)
+- **Game Hub (Testnet):** [Stellar Expert – Game Hub](https://stellar.expert/explorer/testnet/contract/CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG)
+- **Policy (shadow_ascension) on Testnet:** [Stellar Expert – Policy](https://stellar.expert/explorer/testnet/contract/CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO)
+- **Verifier (groth16_verifier) on Testnet:** [Stellar Expert – Verifier](https://stellar.expert/explorer/testnet/contract/CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA)
+- **Deploy / re-deploy:** [docs/DEPLOY_ZK_STEPS.md](docs/DEPLOY_ZK_STEPS.md) (build with `wasm32v1-none`, then deploy with Stellar CLI).
+
+**How to verify on-chain:**
+
+- On **Start Game**, the policy calls `start_game()` on the Game Hub; you can look up the Game Hub contract on Stellar Expert and check recent invocations.
+- On **death**, the policy calls `end_game(session, success)` on the Game Hub after a valid `submit_result` or `submit_zk`. Ranked runs appear in the per-season leaderboard via `get_leaderboard_by_season(season_id, limit)`.
+
+**Verificación visual:** Flujo: Iniciar run → `start_match()` → jugar off-chain → morir → `submit_zk` → leaderboard actualizado on-chain. Ver [public/docs/VIBECODER_HACKATHON_es.md](public/docs/VIBECODER_HACKATHON_es.md) y [docs/E2E_VERIFICATION.md](docs/E2E_VERIFICATION.md).
+
+**Comandos E2E:** `npm run zk:e2e` — compila circuito, genera proof real y ejecuta tests (verifier + policy + proof real).
+
+**Deploying contracts, prover, and GitHub Pages:** See [docs/HACKATHON_DO_THIS.md](docs/HACKATHON_DO_THIS.md) for step-by-step: deploy verifier + policy on Testnet, init policy, deploy the ZK prover (Render/Railway), and add GitHub secrets for the production build.
+
 ### Contract (Soroban)
 
 - **Layout**: `contracts/zk_types/` (shared types), `contracts/groth16_verifier/`, `contracts/shadow_ascension/`
-- **Build** ([Stellar CLI](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup), `rustup target add wasm32-unknown-unknown`):
+- **Build** ([Stellar CLI](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup); for testnet use target `wasm32v1-none`):
 
 ```bash
 cd contracts
-cargo build -p groth16_verifier --target wasm32-unknown-unknown --release
-cargo build -p shadow_ascension --target wasm32-unknown-unknown --release
+rustup target add wasm32v1-none
+cargo build -p groth16_verifier --target wasm32v1-none --release
+cargo build -p shadow_ascension --target wasm32v1-none --release
 ```
 
 Deploy verifier and game policy; init policy with Game Hub, then `set_verifier(verifier_id)`. Set `VITE_SHADOW_ASCENSION_CONTRACT_ID` for the frontend.
 
 ### Frontend
 
-- **Connect wallet**: Stellar Wallets Kit (Freighter, xBull, etc.) on the title screen.
+- **Connect wallet (required to play):** Stellar wallet via [Freighter](https://www.freighterapp.com/) on the title screen; the game requires a linked wallet to play.
 - **Start game**: If contract is configured, "Start Game" triggers `start_match()` (one signature).
 - **Game over**: If rules pass, the game calls `submit_result(wave, score)` (one signature).
 

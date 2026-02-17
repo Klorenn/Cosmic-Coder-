@@ -8,7 +8,7 @@ This guide will help you connect Vibe Coder to your coding workflow so you earn 
 
 Just want to try the game? No setup needed!
 
-1. Visit the **[Live Demo](https://daredev256.github.io/vibe-coder/)**
+1. Visit the **[Live Demo](https://klorenn.github.io/Cosmic-Coder-/)**
 2. Press **SPACE** to manually gain XP
 3. Use **WASD** or **Arrow Keys** to move
 
@@ -24,7 +24,7 @@ Just want to try the game? No setup needed!
 ### Step 1: Clone & Install
 
 ```bash
-git clone https://github.com/DareDev256/vibe-coder.git
+git clone https://github.com/Klorenn/Cosmic-Coder-.git
 cd vibe-coder
 npm install
 ```
@@ -122,6 +122,20 @@ curl -X POST http://localhost:3333 \
 - Press SPACE for manual XP (won't trigger auto-move)
 - Check the status indicator at the bottom (🟢 = connected)
 
+### Character/Mob sprites not visible on title screen
+- Verify these files exist under `public/assets/sprites/`:
+  - `player/robot-idle.png`, `player/robot-walk.png`, `player/robot-hurt.png`
+  - `player/destroyer-idle.png`, `player/destroyer-walk.png`, `player/destroyer-hurt.png`
+  - `player/swordsman-idle.png`, `player/swordsman-walk.png`, `player/swordsman-hurt.png`
+  - `enemies/werewolf-run.png`
+- Restart the dev server after changing assets (`npm run dev`)
+- Hard refresh browser (`Cmd/Ctrl + Shift + R`) so `BootScene` reloads textures
+
+### Character selector changes but menu robot doesn't update
+- Re-open `PERSONAJE` and switch with LEFT/RIGHT once
+- Confirm no stale tab is open (close older game tabs)
+- Restart `npm run dev` if hot-reload got out of sync
+
 ### Game won't load
 - Make sure you're using `npm run dev` (not a static file server)
 - Clear browser cache and refresh
@@ -197,7 +211,7 @@ The hooks just make it more fun by rewarding your real coding! 🚀
 
 ## Need Help?
 
-- Open an issue on [GitHub](https://github.com/DareDev256/vibe-coder/issues)
+- Open an issue on [GitHub](https://github.com/Klorenn/Cosmic-Coder-/issues)
 - Check the [README](./README.md) for feature overview
 - See [CHANGELOG](./CHANGELOG.md) for version history
 
