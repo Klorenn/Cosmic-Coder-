@@ -3972,9 +3972,12 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
 
     let submitStatusText = null;
-    const showSubmitStatus = (status) => {
-      const msg = status === 'zk' ? t('game.submit_zk_ranked') : status === 'zk_failed' ? t('game.submit_zk_fallback') : status === 'casual' ? t('game.submit_casual') : t('game.submit_failed');
-      const color = status === 'failed' ? '#ff6666' : status === 'zk' ? '#ffd700' : '#88ff88';
+    let submitErrorText = null;
+    const showSubmitStatus = (status, errorMessage) => {
+      const s = typeof status === 'object' ? status.status : status;
+      const err = typeof status === 'object' ? status.error : errorMessage;
+      const msg = s === 'zk' ? t('game.submit_zk_ranked') : s === 'zk_failed' ? t('game.submit_zk_fallback') : s === 'casual' ? t('game.submit_casual') : s === 'timeout' ? t('game.submit_timeout') : t('game.submit_failed');
+      const color = (s === 'failed' || s === 'timeout') ? '#ff6666' : s === 'zk' ? '#ffd700' : '#88ff88';
       submitStatusText = this.add.text(cx, cy + 10, msg, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '18px',
@@ -3985,6 +3988,16 @@ export default class ArenaScene extends Phaser.Scene {
         align: 'center'
       }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(1001);
       submitStatusText.setWordWrapWidth(480);
+      if (err && (s === 'failed' || s === 'zk_failed')) {
+        const short = String(err).slice(0, 80);
+        submitErrorText = this.add.text(cx, cy + 32, short, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: '12px',
+          color: '#cc8888',
+          align: 'center',
+          wordWrap: { width: 460 }
+        }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(1001);
+      }
     };
 
     const willSubmit = gameClient.isContractConfigured() && validateGameRules(this.waveNumber, state.totalXP).valid;
@@ -4032,17 +4045,18 @@ export default class ArenaScene extends Phaser.Scene {
             resolve('casual');
           }
         } catch (e) {
-          console.warn('Submit failed:', e.message, e);
+          const firstError = e?.message || String(e);
+          console.warn('Submit failed:', firstError, e);
           try {
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
             timeout.destroy();
-            resolve(triedZk ? 'zk_failed' : 'casual');
-          } catch (_) {
+            resolve(triedZk ? { status: 'zk_failed', error: firstError } : 'casual');
+          } catch (e2) {
             timeout.destroy();
-            resolve('failed');
+            resolve({ status: 'failed', error: firstError + (e2?.message ? '; ' + e2.message : '') });
           }
         }
-      }).catch(() => { timeout.destroy(); resolve('failed'); });
+      }).catch((e) => { timeout.destroy(); resolve({ status: 'failed', error: e?.message || 'Unknown error' }); });
     });
 
     // Controls button (always visible on game over)
@@ -4070,9 +4084,10 @@ export default class ArenaScene extends Phaser.Scene {
     submitPromise.then((status) => {
       if (submittingText && submittingText.scene) submittingText.destroy();
       window.VIBE_UPGRADES.addCurrency(totalBits);
-      if (status === 'zk' || status === 'casual' || status === 'failed') {
+      const s = typeof status === 'object' ? status?.status : status;
+      if (s === 'zk' || s === 'casual' || s === 'failed' || s === 'zk_failed' || s === 'timeout') {
         showSubmitStatus(status);
-        if (status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
+        if (s === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
           const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));
           window.VIBE_UPGRADES.addCurrency(bonus);
           bitsText.setText(`+${totalBits + bonus} ${t('game.bits_earned')} (+${bonus} ZK bonus)`);
@@ -4093,6 +4108,7 @@ export default class ArenaScene extends Phaser.Scene {
         gameOverText.destroy();
         bitsText.destroy();
         if (submitStatusText && submitStatusText.scene) submitStatusText.destroy();
+        if (submitErrorText && submitErrorText.scene) submitErrorText.destroy();
         if (chainHintText && chainHintText.scene) chainHintText.destroy();
         if (controlsBtn && controlsBtn.scene) controlsBtn.destroy();
         if (returnHint && returnHint.scene) returnHint.destroy();

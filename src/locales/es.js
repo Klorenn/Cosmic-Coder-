@@ -204,6 +204,7 @@ export default {
     submit_zk_fallback: '✓ CASUAL — Prover ZK no disponible, enviado al ranking',
     submit_casual: '✓ CASUAL — Enviado al ranking',
     submit_failed: '✗ No se pudo enviar a la cadena',
+    submit_timeout: '⏱ Tiempo de envío agotado',
     leaderboard_hint: 'Para salir en el ranking on-chain: conecta wallet y pon VITE_SHADOW_ASCENSION_CONTRACT_ID en .env',
     xp_lost: 'XP PERDIDOS',
     immortal_respawn: '♾️ REVIVIR INMORTAL',

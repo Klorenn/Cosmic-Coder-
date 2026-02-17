@@ -3,7 +3,9 @@ dist/
 .DS_Store
 *.log
 .env
-circuits/build/
+# Ignore large ceremony files; keep GameRun_final.zkey + GameRun_js/ for prover deploy
+circuits/build/*.ptau
+circuits/build/*_0000.zkey
 circuits/input.json
 circuits/*.sym
 contracts/target/

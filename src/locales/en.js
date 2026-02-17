@@ -206,6 +206,7 @@ export default {
     submit_zk_fallback: '✓ CASUAL — ZK prover unavailable, submitted to leaderboard',
     submit_casual: '✓ CASUAL — Submitted to leaderboard',
     submit_failed: '✗ Could not submit to chain',
+    submit_timeout: '⏱ Submitting timed out',
     leaderboard_hint: 'To appear on chain leaderboard: connect wallet and set VITE_SHADOW_ASCENSION_CONTRACT_ID in .env',
     xp_lost: 'XP LOST',
     immortal_respawn: '♾️ IMMORTAL RESPAWN',
