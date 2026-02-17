@@ -64,8 +64,8 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('swordsman-walk', './assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-hurt', './assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('werewolf-run', './assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
-    // Blue Version background pack — from public/ so it works in production (Vercel, etc.)
-    const bgBase = './assets/backgrounds/blue';
+    // Blue Version background pack — absolute path from site root so it works in dev and production (Vercel, etc.)
+    const bgBase = '/assets/backgrounds/blue';
     this.load.image('bg-blue-back', `${bgBase}/blue-back.png`);
     this.load.image('bg-blue-stars', `${bgBase}/blue-stars.png`);
     this.load.image('bg-blue-with-stars', `${bgBase}/blue-with-stars.png`);
