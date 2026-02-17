@@ -9,9 +9,9 @@ Single-responsibility contract: verify Groth16 proofs on the BN254 curve. No gam
 ## Build
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 cd contracts
-cargo build -p groth16_verifier --target wasm32-unknown-unknown --release
+cargo build -p groth16_verifier --target wasm32v1-none --release
 ```
 
 ## Deploy

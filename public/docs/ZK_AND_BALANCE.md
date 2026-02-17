@@ -97,6 +97,36 @@ Los tests usan (wave, score) que cumplen la regla (por ejemplo wave=5 score=100,
 
 ---
 
+# ¿Por qué no vi la verificación ZK? ¿Por qué no salgo en el leaderboard?
+
+## Qué pasa cuando mueres (memento mori)
+
+1. **Local:** Tu partida se guarda siempre en el leaderboard **local** (y récord de ola/puntos en localStorage).
+2. **Envío on-chain** solo ocurre si:
+   - Tienes **wallet conectada** (Freighter).
+   - El **contrato está configurado:** `VITE_SHADOW_ASCENSION_CONTRACT_ID` en `.env` (ver `.env.example`).
+3. **Qué ves en game over:**
+   - Si el contrato está configurado y se cumplen las reglas: **"Enviando a la cadena..."** y luego **"✓ ZK RANKED"** (proof enviada), **"✓ CASUAL"** (envío sin ZK) o **"✗ No se pudo enviar a la cadena"** (error de red/contrato).
+   - Si el contrato **no** está configurado: no sale "Enviando..."; tu puntuación solo se guarda local.
+
+## ZK vs casual
+
+- **ZK RANKED:** Aparece cuando el juego llama al **prover** (`VITE_ZK_PROVER_URL`, ej. `http://localhost:3333`), obtiene una proof y envía `submit_zk` al contrato. Requiere el backend ZK en marcha y el contrato desplegado con el verifier.
+- **CASUAL:** Aparece cuando no se usa ZK (prover no configurado o falló la petición de proof) pero `submit_result` tuvo éxito. Igual apareces en el leaderboard **on-chain**.
+- Si ambos fallan, ves **"✗ No se pudo enviar a la cadena"** y **no** apareces en el leaderboard de **cadena** (solo local).
+
+## Por qué el leaderboard está vacío o no sales
+
+- El panel **TOP PLAYERS** del menú lee del **contrato Soroban** (`get_leaderboard`), no del servidor local.
+- **"No entries yet" / "Aún no hay partidas"** puede ser:
+  1. **Contract ID no configurado** — nadie puede enviar; pon `VITE_SHADOW_ASCENSION_CONTRACT_ID` en `.env` y reinicia.
+  2. **Contrato desplegado pero nadie ha enviado aún** — juega una partida, **muere**, con wallet y contrato configurados; deberías ver "Enviando..." y luego "✓ ZK RANKED" o "✓ CASUAL". Después abre de nuevo el leaderboard.
+  3. **El envío falló** — habrías visto "✗ No se pudo enviar a la cadena" al morir; revisa red, RPC y que el contrato esté desplegado y el prover (para ZK) en marcha.
+
+**Checklist para salir en el leaderboard on-chain:** Conectar wallet → configurar `VITE_SHADOW_ASCENSION_CONTRACT_ID` → jugar → morir → ver "✓ ZK RANKED" o "✓ CASUAL" → volver a abrir el leaderboard.
+
+---
+
 # ZK flow, anti-replay and leaderboard — With difficulty balance (English)
 
 **Cosmic Coder** uses zero-knowledge proofs (Groth16) on Soroban for a **provably fair** leaderboard. This section summarizes the same content in English.
@@ -145,3 +175,33 @@ Ensure `validateGameRules(wave, score)` passes (e.g. score and wave from current
 - **test_real_proof_verifier_and_submit_zk:** With `contract_proof.json`, verifies real proof and policy submit.
 
 Tests use (wave, score) pairs that satisfy the rule (e.g. 5/100, 10/200) to match current balance.
+
+---
+
+# Why didn’t I see ZK verification? Why am I not on the leaderboard?
+
+## What happens when you die (memento mori)
+
+1. **Local:** Your run is always saved to the **local** leaderboard (and high wave/score in localStorage).
+2. **On-chain submit** only runs if:
+   - **Wallet is connected** (Freighter).
+   - **Contract is configured:** `VITE_SHADOW_ASCENSION_CONTRACT_ID` in `.env` (see `.env.example`).
+3. **What you see on game over:**
+   - If contract is configured and rules are valid: **"Submitting to chain..."** then either **"✓ ZK RANKED"** (proof sent) or **"✓ CASUAL"** (fallback without ZK) or **"✗ Could not submit to chain"** (network/contract error).
+   - If contract is **not** configured: no "Submitting..." message; your score is only stored locally.
+
+## ZK vs casual
+
+- **ZK RANKED:** Shown when the game calls the **prover** (`VITE_ZK_PROVER_URL`, e.g. `http://localhost:3333`), gets a proof, and sends `submit_zk` to the contract. Requires the ZK backend running and the contract deployed with the verifier.
+- **CASUAL:** Shown when ZK is skipped (prover not configured or proof request failed) but `submit_result` succeeded. You still appear on the **on-chain** leaderboard.
+- If both fail, you see **"✗ Could not submit to chain"** and you **won’t** appear on the **chain** leaderboard (only local).
+
+## Why is the leaderboard empty / why am I not on it?
+
+- The **TOP PLAYERS** panel in the menu reads from the **Soroban contract** (`get_leaderboard`), not from the local server.
+- **"No entries yet"** means either:
+  1. **Contract ID not set** — no one can submit; leave `VITE_SHADOW_ASCENSION_CONTRACT_ID` in `.env` and redeploy/restart.
+  2. **Contract deployed but no successful submit yet** — play a run, **die**, have wallet connected and contract set; you should see "Submitting..." then "✓ ZK RANKED" or "✓ CASUAL". After that, reopen the leaderboard.
+  3. **Submit failed** — you would see "✗ Could not submit to chain" on game over; check network, RPC, and that the contract is deployed and the prover (for ZK) is running.
+
+**Checklist to appear on chain leaderboard:** Connect wallet → set `VITE_SHADOW_ASCENSION_CONTRACT_ID` → play → die → see "✓ ZK RANKED" or "✓ CASUAL" → reopen leaderboard.

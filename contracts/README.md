@@ -8,17 +8,17 @@ Layout:
 
 ## Build (WASM)
 
-Use **rustup’s cargo** (e.g. `export PATH="$HOME/.cargo/bin:$PATH"`) so the `wasm32-unknown-unknown` target is available. Homebrew cargo can lack the target and fail with "can't find crate for \`core\`".
+Use **rustup’s cargo** (e.g. `export PATH="$HOME/.cargo/bin:$PATH"`) For Soroban testnet use target **wasm32v1-none**.
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 cd contracts
 cargo build -p zk_types
-cargo build -p groth16_verifier --target wasm32-unknown-unknown --release
-cargo build -p shadow_ascension --target wasm32-unknown-unknown --release
+cargo build -p groth16_verifier --target wasm32v1-none --release
+cargo build -p shadow_ascension --target wasm32v1-none --release
 ```
 
-Artifacts: `target/wasm32-unknown-unknown/release/groth16_verifier.wasm`, `target/wasm32-unknown-unknown/release/shadow_ascension.wasm`.
+Artifacts: `target/wasm32v1-none/release/groth16_verifier.wasm`, `target/wasm32v1-none/release/shadow_ascension.wasm`.
 
 ## Deploy & simulate (demo script)
 
@@ -27,7 +27,7 @@ Use **Stellar CLI** with `--network testnet` for deploy; `--sim-only` to validat
 ### Deploy verifier
 
 ```bash
-stellar contract deploy --wasm target/wasm32-unknown-unknown/release/groth16_verifier.wasm --network testnet
+stellar contract deploy --source-account <SOURCE> --wasm target/wasm32v1-none/release/groth16_verifier.wasm --network testnet
 ```
 
 Save the returned contract ID as `VERIFIER_ID`.
@@ -35,7 +35,7 @@ Save the returned contract ID as `VERIFIER_ID`.
 ### Deploy policy
 
 ```bash
-stellar contract deploy --wasm target/wasm32-unknown-unknown/release/shadow_ascension.wasm --network testnet
+stellar contract deploy --source-account <SOURCE> --wasm target/wasm32v1-none/release/shadow_ascension.wasm --network testnet
 ```
 
 Save as `POLICY_ID`. Then init with Game Hub and call `set_verifier(VERIFIER_ID)`.
@@ -69,6 +69,18 @@ cd contracts
 cargo test -p groth16_verifier
 cargo test -p shadow_ascension
 ```
+
+## ZK full stack (circuit + prover + contract)
+
+From repo root:
+
+1. **Build circuit** (requires circom 2.x in PATH, e.g. `~/.cargo/bin`):  
+   `npm run zk:build`
+2. **E2E check** (circuit → proof → contract tests):  
+   `npm run zk:e2e`
+3. **Prover server** (for ranked submit):  
+   `npm run server` → `POST http://localhost:3333/zk/prove` with `run_hash_hex`, `score`, `wave`, `nonce`, `season_id`.
+4. **Frontend**: set `VITE_SHADOW_ASCENSION_CONTRACT_ID` and `VITE_ZK_PROVER_URL` (e.g. `http://localhost:3333`) so ranked mode and submit ZK work.
 
 ## CAP / protocol
 

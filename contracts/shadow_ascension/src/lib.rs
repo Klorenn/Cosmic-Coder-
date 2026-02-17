@@ -181,6 +181,11 @@ impl ShadowAscension {
         if score == 0 || wave == 0 {
             return Err(ShadowAscensionError::InvalidInput);
         }
+        // Regla de progresión: score >= wave * MIN_SCORE_PER_WAVE (igual que submit_result)
+        let min_score = wave.saturating_mul(MIN_SCORE_PER_WAVE);
+        if score < min_score {
+            return Err(ShadowAscensionError::InvalidInput);
+        }
 
         let replay_key = ReplayKey {
             player: player.clone(),

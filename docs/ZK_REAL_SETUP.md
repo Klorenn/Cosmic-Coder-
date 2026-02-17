@@ -11,7 +11,9 @@ Guía para compilar el circuito Circom, generar VK/proof real y usarlos con `gro
 
 ## 1. Circuito (Circom)
 
-El circuito `circuits/GameRun.circom` tiene **6 señales públicas**:
+El circuito `circuits/GameRun.circom` **valida la regla de juego**: `score >= wave * 10` (MIN_SCORE_PER_WAVE). Usa `GreaterEqThan` de circomlib; una proof solo es válida si cumple la regla.
+
+Tiene **6 señales públicas**:
 
 | Señal       | Uso                          |
 |------------|-------------------------------|
@@ -65,11 +67,13 @@ Salida: `circuits/build/contract_proof.json` (proof, vk y pub_signals en hex par
 
 ## 4. Verificar con el verifier (Soroban)
 
-Tras desplegar el verifier:
+Tras desplegar el verifier (ver [DEPLOY_ZK_STEPS.md](DEPLOY_ZK_STEPS.md); build con **wasm32v1-none**). En testnet conviene usar `--source-account <SOURCE>` en las invocaciones.
+
+**Referencia (Testnet):** Verifier `CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA`, Policy `CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO`.
 
 ```bash
 # Sustituir VERIFIER_ID y los valores por los de contract_proof.json
-stellar contract invoke --id <VERIFIER_ID> --network testnet --sim-only -- \
+stellar contract invoke --id <VERIFIER_ID> --source-account <SOURCE> --network testnet --sim-only -- \
   verify_proof \
   --vk '{"alpha":"<hex>","beta":"<hex>","gamma":"<hex>","delta":"<hex>","ic":["<hex>",...]}' \
   --proof '{"a":"<hex>","b":"<hex>","c":"<hex>"}' \
@@ -84,7 +88,18 @@ node scripts/zk/contract_args_from_proof.js circuits/build
 
 (Se puede usar la salida para rellenar vk/proof/pub_signals en la invocación.)
 
-## 5. submit_zk con proof real (policy)
+## 5. Opción B: backend genera la proof (flujo integrado en el juego)
+
+El servidor (`npm run server`) expone `POST /zk/prove` con body:
+
+`{ "run_hash_hex", "score", "wave", "nonce", "season_id" }`
+
+El backend escribe `circuits/build/input.json`, ejecuta `generate_proof.js` y devuelve el JSON listo para contrato. El frontend llama a `requestZkProof(proverUrl, payload)` y luego `submitZkFromProver(addr, sign, proverUrl, payload)`.
+
+- **Variable de entorno (frontend):** `VITE_ZK_PROVER_URL` (por defecto `http://localhost:3333`). Si está definida y el contrato también, al morir en partida nueva se usa **ranked (ZK)** en lugar de casual.
+- **Requisito:** Partida nueva (no “continuar”) para tener `runSeed`; servidor con circuito compilado y `snarkjs` en PATH.
+
+## 6. submit_zk con proof real (policy)
 
 Desde el frontend (o con Stellar CLI):
 
@@ -138,11 +153,12 @@ await submitZk(
 
 Si tu `gameClient.submitZk` construye los ScVals internamente, pasa `zk` con la estructura que espere (p. ej. ya convertida a `xdr.ScVal` según el SDK).
 
-## 6. Simulación de recursos (Testnet)
+## 7. Simulación de recursos (Testnet)
 
 ```bash
 stellar contract invoke --sim-only \
   --id <POLICY_ID> \
+  --source-account <SOURCE> \
   --network testnet \
   -- submit_zk \
   --player <ADDRESS> \
@@ -158,7 +174,7 @@ stellar contract invoke --sim-only \
 
 Revisar en la salida: CPU/memoria y eventos (p. ej. `zk_run_submitted`).
 
-## 7. Checklist validación end-to-end
+## 8. Checklist validación end-to-end
 
 - [ ] **Circuito**: `circuits/GameRun.circom` compila con `build_circuit.sh` (r1cs, wasm, zkey, vkey.json).
 - [ ] **Proof real**: `input.json` + `generate_proof.js` → `contract_proof.json` sin error.

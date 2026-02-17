@@ -133,6 +133,52 @@ Connect Cosmic Coder to your AI coding assistant for real XP gains while coding!
 Cosmic Coder integrates with [Stellar Game Studio](https://github.com/jamesbachini/Stellar-Game-Studio) and a **ZK-style proof** for the leaderboard.  
 **[📋 Hackathon & Repo documentation](./public/docs/index.html)** — complete doc for judges and repo (ES/EN). Select "Hackathon & Repo" in the nav.
 
+### Quick Setup: Make Stellar + ZK work locally
+
+If you want the full ranked flow working end-to-end (wallet + contracts + prover + on-chain leaderboard), use this order:
+
+1. **Install deps and run the game**
+   ```bash
+   npm install
+   npm run dev
+   ```
+2. **Set required env vars** (`.env`):
+   ```bash
+   VITE_SHADOW_ASCENSION_CONTRACT_ID=<your_policy_contract_id_on_testnet>
+   VITE_ZK_PROVER_URL=http://localhost:3333
+   ```
+3. **Run prover/backend** (for proof generation endpoint `/zk/prove`):
+   - Use your prover service (local or hosted), and ensure `VITE_ZK_PROVER_URL` points to it.
+4. **Connect wallet in title screen** (Freighter/Testnet account with balance).
+5. **Start a fresh run** with **Start Game** (ranked path), play, die, and submit.
+
+How the app decides ranked availability:
+
+- `VITE_SHADOW_ASCENSION_CONTRACT_ID` must be set.
+- `VITE_ZK_PROVER_URL` must be reachable.
+- Wallet must be connected and able to sign.
+
+In code, this is handled in `src/contracts/gameClient.js` via:
+- `start_match(...)`
+- `submit_result(...)`
+- `submit_zk(...)`
+- `isZkProverConfigured()`
+
+### Local verification checklist
+
+- On run start: contract `start_match` is invoked.
+- On run end: rules are validated and `submit_zk` (or fallback `submit_result`) is sent.
+- Leaderboard query returns entries from chain (`get_leaderboard` / season variant).
+- UI hint disappears once wallet + contract/prover are configured.
+
+### Useful commands
+
+```bash
+npm run dev        # frontend
+npm run server     # xp/prover backend (project setup dependent)
+npm run zk:e2e     # end-to-end zk script
+```
+
 ### What it does
 
 - **Gameplay stays 100% off-chain** (Phaser). No lag, no on-chain combat.

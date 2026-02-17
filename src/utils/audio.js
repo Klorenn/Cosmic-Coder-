@@ -6,9 +6,11 @@ let masterGain = null;
 let musicGain = null;
 let sfxGain = null;
 let isMusicPlaying = false;
-let musicOscillators = [];
-let currentTrack = 0;
 let musicTimeouts = [];
+let menuAudio = null; // HTML5 Audio for menu music (Arcade by Lucjo)
+let gameplayAudio = null; // HTML5 Audio for gameplay
+let gameplayTrackIndex = 0; // índice en GAMEPLAY_PLAYLIST
+let musicMode = 'menu'; // 'menu' | 'gameplay'
 
 // Initialize audio context (must be called after user interaction)
 export function initAudio() {
@@ -390,190 +392,156 @@ export function playMagnet() {
   osc.stop(audioContext.currentTime + 0.5);
 }
 
-// === BACKGROUND MUSIC ===
-
-// Track definitions
-const TRACKS = [
-  { name: 'DEBUG ZONE', bpm: 140, bassPattern: [0, 0, 7, 7, 5, 5, 3, 3], arpPattern: [0, 4, 7, 12, 7, 4], bassRoot: 110, arpRoot: 220, bassType: 'square', arpType: 'triangle' },
-  { name: 'MEMORY BANKS', bpm: 128, bassPattern: [0, 0, 5, 5, 7, 7, 10, 10], arpPattern: [0, 3, 7, 10, 12, 10, 7, 3], bassRoot: 82.4, arpRoot: 329.63, bassType: 'sawtooth', arpType: 'sine' },
-  { name: 'NETWORK LAYER', bpm: 150, bassPattern: [0, 0, 0, 5, 7, 7, 5, 3], arpPattern: [0, 5, 7, 12, 5, 7, 12, 17], bassRoot: 98, arpRoot: 196, bassType: 'square', arpType: 'square' },
-  { name: 'KERNEL SPACE', bpm: 160, bassPattern: [0, 3, 5, 0, 7, 5, 3, 0], arpPattern: [0, 4, 7, 11, 12, 11, 7, 4], bassRoot: 73.4, arpRoot: 293.66, bassType: 'sawtooth', arpType: 'triangle' },
-  { name: 'BOSS FIGHT', bpm: 170, bassPattern: [0, 0, 12, 12, 0, 0, 10, 10], arpPattern: [0, 3, 6, 9, 12, 9, 6, 3], bassRoot: 55, arpRoot: 220, bassType: 'sawtooth', arpType: 'sawtooth' }
+// === MUSIC ===
+const MENU_MUSIC_URL = '/assets/audio/arcade-by-lucjo.mp3';
+// Gameplay playlist: se repite en ciclo (1 → 2 → 1 → 2...)
+const GAMEPLAY_PLAYLIST = [
+  '/assets/audio/Galaxy_Guppy_KLICKAUD.mp3',
+  '/assets/audio/Kubbi-Ember.mp3'
 ];
 
-// Chiptune-style background music
-export function startMusic(trackIndex = 0) {
-  if (!audioContext) return;
+export function setMusicMode(mode) {
+  musicMode = mode;
+}
 
-  // Stop current music first
-  if (isMusicPlaying) {
-    stopMusic();
+function getMenuMusicVolume() {
+  return window.VIBE_SETTINGS ? window.VIBE_SETTINGS.getEffectiveMenuMusicVolume() : 0.5;
+}
+
+function getGameplayMusicVolume() {
+  return window.VIBE_SETTINGS ? window.VIBE_SETTINGS.getEffectiveGameplayMusicVolume() : 0.5;
+}
+
+export function updateMenuMusicVolume() {
+  if (menuAudio && window.VIBE_SETTINGS) {
+    menuAudio.volume = getMenuMusicVolume();
   }
+}
 
-  isMusicPlaying = true;
-  currentTrack = trackIndex % TRACKS.length;
-  const track = TRACKS[currentTrack];
-
-  const bpm = track.bpm;
-  const beatDuration = 60 / bpm;
-  const sixteenthDuration = beatDuration / 4;
-
-  let bassIndex = 0;
-  let arpIndex = 0;
-
-  function playBass() {
-    if (!isMusicPlaying) return;
-
-    const semitone = track.bassPattern[bassIndex % track.bassPattern.length];
-    const freq = track.bassRoot * Math.pow(2, semitone / 12);
-
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-
-    osc.type = track.bassType;
-    osc.frequency.value = freq;
-
-    gain.gain.setValueAtTime(0.15, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + beatDuration * 0.9);
-
-    osc.connect(gain);
-    gain.connect(musicGain);
-
-    osc.start();
-    osc.stop(audioContext.currentTime + beatDuration);
-
-    bassIndex++;
-    const timeout = setTimeout(playBass, beatDuration * 1000);
-    musicTimeouts.push(timeout);
+export function updateGameplayMusicVolume() {
+  if (gameplayAudio && window.VIBE_SETTINGS) {
+    gameplayAudio.volume = getGameplayMusicVolume();
   }
+}
 
-  function playArp() {
-    if (!isMusicPlaying) return;
+export function startMenuMusic() {
+  stopGameplayMusic();
+  stopMenuMusic();
+  if (!window.VIBE_SETTINGS?.musicEnabled) return;
 
-    const semitone = track.arpPattern[arpIndex % track.arpPattern.length];
-    const freq = track.arpRoot * Math.pow(2, semitone / 12);
-
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
-
-    osc.type = track.arpType;
-    osc.frequency.value = freq;
-
-    gain.gain.setValueAtTime(0.08, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + sixteenthDuration * 0.8);
-
-    osc.connect(gain);
-    gain.connect(musicGain);
-
-    osc.start();
-    osc.stop(audioContext.currentTime + sixteenthDuration);
-
-    arpIndex++;
-    const timeout = setTimeout(playArp, sixteenthDuration * 1000);
-    musicTimeouts.push(timeout);
+  try {
+    menuAudio = new Audio(MENU_MUSIC_URL);
+    menuAudio.loop = true;
+    menuAudio.volume = getMenuMusicVolume();
+    menuAudio.play().catch(() => {});
+    isMusicPlaying = true;
+    console.log('🎵 Menu music (Arcade) started');
+  } catch (e) {
+    console.warn('Menu music failed:', e);
   }
+}
 
-  // Hi-hat pattern
-  function playHiHat() {
-    if (!isMusicPlaying) return;
-
-    const bufferSize = audioContext.sampleRate * 0.05;
-    const buffer = audioContext.createBuffer(1, bufferSize, audioContext.sampleRate);
-    const data = buffer.getChannelData(0);
-
-    for (let i = 0; i < bufferSize; i++) {
-      data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize);
-    }
-
-    const noise = audioContext.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = audioContext.createBiquadFilter();
-    filter.type = 'highpass';
-    filter.frequency.value = 8000;
-
-    const gain = audioContext.createGain();
-    gain.gain.setValueAtTime(0.05, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, audioContext.currentTime + 0.05);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(musicGain);
-
-    noise.start();
-
-    const timeout = setTimeout(playHiHat, sixteenthDuration * 1000);
-    musicTimeouts.push(timeout);
+export function stopMenuMusic() {
+  if (menuAudio) {
+    menuAudio.pause();
+    menuAudio.currentTime = 0;
+    menuAudio = null;
   }
+  if (!gameplayAudio) isMusicPlaying = false;
+  console.log('🎵 Menu music stopped');
+}
 
-  // Kick drum (for faster tracks)
-  function playKick() {
-    if (!isMusicPlaying) return;
+function playNextGameplayTrack() {
+  if (!window.VIBE_SETTINGS?.musicEnabled || !gameplayAudio) return;
+  const url = GAMEPLAY_PLAYLIST[gameplayTrackIndex];
+  gameplayAudio.src = url;
+  gameplayAudio.volume = getGameplayMusicVolume();
+  gameplayAudio.play().catch(() => {});
+  console.log(`🎵 Gameplay track ${gameplayTrackIndex + 1}/${GAMEPLAY_PLAYLIST.length} started`);
+}
 
-    const osc = audioContext.createOscillator();
-    const gain = audioContext.createGain();
+export function startGameplayMusic() {
+  stopMenuMusic();
+  stopGameplayMusic();
+  if (!window.VIBE_SETTINGS?.musicEnabled) return;
 
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(150, audioContext.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(40, audioContext.currentTime + 0.1);
+  try {
+    gameplayAudio = new Audio();
+    gameplayAudio.volume = getGameplayMusicVolume();
 
-    gain.gain.setValueAtTime(0.2, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.15);
+    // Cuando termina una canción, pasa a la siguiente (cíclico)
+    gameplayAudio.addEventListener('ended', () => {
+      if (!gameplayAudio || !window.VIBE_SETTINGS?.musicEnabled) return;
+      gameplayTrackIndex = (gameplayTrackIndex + 1) % GAMEPLAY_PLAYLIST.length;
+      playNextGameplayTrack();
+    });
 
-    osc.connect(gain);
-    gain.connect(musicGain);
-
-    osc.start();
-    osc.stop(audioContext.currentTime + 0.15);
-
-    const timeout = setTimeout(playKick, beatDuration * 1000);
-    musicTimeouts.push(timeout);
+    gameplayTrackIndex = 0;
+    playNextGameplayTrack();
+    isMusicPlaying = true;
+  } catch (e) {
+    console.warn('Gameplay music failed:', e);
   }
+}
 
-  // Start all parts
-  playBass();
-  musicTimeouts.push(setTimeout(playArp, 100));
-  musicTimeouts.push(setTimeout(playHiHat, 50));
-  if (bpm >= 150) {
-    musicTimeouts.push(setTimeout(playKick, 200));
+export function stopGameplayMusic() {
+  if (gameplayAudio) {
+    gameplayAudio.pause();
+    gameplayAudio.currentTime = 0;
+    gameplayAudio.src = '';
+    gameplayAudio = null;
   }
+  if (!menuAudio) isMusicPlaying = false;
+  musicTimeouts.forEach(t => clearTimeout(t));
+  musicTimeouts = [];
+  console.log('🎵 Gameplay music stopped');
+}
 
-  console.log(`🎵 Music started: ${track.name}`);
+export function isMenuMusicPlaying() {
+  return menuAudio && !menuAudio.paused;
+}
+
+export function isGameplayMusicPlaying() {
+  return gameplayAudio && !gameplayAudio.paused;
+}
+
+// Legacy: startMusic = startGameplayMusic (MP3, loop infinito)
+export function startMusic() {
+  startGameplayMusic();
 }
 
 export function stopMusic() {
+  stopMenuMusic();
+  stopGameplayMusic();
   isMusicPlaying = false;
-  // Clear all music timeouts
-  musicTimeouts.forEach(t => clearTimeout(t));
-  musicTimeouts = [];
   console.log('🎵 Music stopped');
 }
 
 export function toggleMusic() {
-  if (isMusicPlaying) {
-    stopMusic();
+  if (musicMode === 'menu') {
+    if (isMenuMusicPlaying()) {
+      stopMenuMusic();
+      return false;
+    } else {
+      startMenuMusic();
+      return true;
+    }
   } else {
-    startMusic(currentTrack);
-  }
-  return isMusicPlaying;
-}
-
-// Change to a specific track (0-4)
-export function setTrack(trackIndex) {
-  currentTrack = trackIndex % TRACKS.length;
-  if (isMusicPlaying) {
-    stopMusic();
-    startMusic(currentTrack);
+    if (isGameplayMusicPlaying()) {
+      stopGameplayMusic();
+      return false;
+    } else {
+      startGameplayMusic();
+      return true;
+    }
   }
 }
 
-// Get current track info
-export function getCurrentTrack() {
-  return { index: currentTrack, name: TRACKS[currentTrack].name };
-}
-
-export function getTrackCount() {
-  return TRACKS.length;
+// Arena calls this to start gameplay music (kept for compatibility)
+export function setTrack() {
+  if (window.VIBE_SETTINGS?.musicEnabled) {
+    startGameplayMusic();
+  }
 }
 
 // Volume controls

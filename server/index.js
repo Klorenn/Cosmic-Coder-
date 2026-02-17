@@ -1,6 +1,7 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { generateProof } from './zkProve.js';
 
 const app = express();
 app.use(express.json());
@@ -125,6 +126,36 @@ app.post('/cli/:source', (req, res) => {
   res.json({ success: true, xp: xpAmount, source });
 });
 
+// Player progress - keyed by wallet address (no cookies/localStorage)
+const playerProgress = new Map();
+
+app.get('/player/:address/progress', (req, res) => {
+  const address = String(req.params.address || '').trim().slice(0, 56);
+  if (!address) return res.status(400).json({ error: 'address required' });
+  const data = playerProgress.get(address);
+  if (!data) return res.json({ upgrades: null, legendaries: null, highWave: 0, highScore: 0, saveState: null, selectedCharacter: 'vibecoder' });
+  res.json(data);
+});
+
+app.post('/player/:address/progress', (req, res) => {
+  const address = String(req.params.address || '').trim().slice(0, 56);
+  if (!address) return res.status(400).json({ error: 'address required' });
+  const { upgrades, legendaries, highWave, highScore, saveState, selectedCharacter } = req.body || {};
+  const validChars = ['vibecoder', 'destroyer', 'swordsman'];
+  const char = validChars.includes(selectedCharacter) ? selectedCharacter : 'vibecoder';
+  const data = {
+    upgrades: upgrades && typeof upgrades === 'object' ? upgrades : null,
+    legendaries: legendaries && typeof legendaries === 'object' ? legendaries : null,
+    highWave: typeof highWave === 'number' ? Math.max(0, Math.floor(highWave)) : 0,
+    highScore: typeof highScore === 'number' ? Math.max(0, Math.floor(highScore)) : 0,
+    saveState: saveState && typeof saveState === 'object' ? saveState : null,
+    selectedCharacter: char,
+    updatedAt: Date.now()
+  };
+  playerProgress.set(address, data);
+  res.json({ success: true });
+});
+
 // Leaderboard (on-chain style: identity = Stellar address)
 const leaderboardEntries = [];
 const LEADERBOARD_MAX = 50;
@@ -166,6 +197,29 @@ app.post('/leaderboard', (req, res) => {
   res.json({ success: true, entries: leaderboardEntries.slice(0, 10) });
 });
 
+// ZK proof for ranked submit (option B: backend generates proof from run data)
+app.post('/zk/prove', (req, res) => {
+  const { run_hash_hex, score, wave, nonce, season_id } = req.body || {};
+  if (!run_hash_hex || score == null || wave == null || nonce == null) {
+    return res.status(400).json({
+      error: 'Missing required fields: run_hash_hex, score, wave, nonce. season_id optional (default 1).'
+    });
+  }
+  try {
+    const payload = generateProof({
+      run_hash_hex,
+      score: Number(score),
+      wave: Number(wave),
+      nonce: Number(nonce),
+      season_id: season_id != null ? Number(season_id) : 1
+    });
+    res.json(payload);
+  } catch (err) {
+    console.error('ZK prove error:', err.message);
+    res.status(500).json({ error: err.message || 'Proof generation failed' });
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.json({
@@ -175,7 +229,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-const PORT = 3333;
+const PORT = Number(process.env.PORT) || 3333;
 server.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════╗

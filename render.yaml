@@ -1,0 +1,14 @@
+# Render Blueprint: ZK Prover for Cosmic Coder
+# One-click deploy: connect this repo at render.com → New → Blueprint → link repo.
+# The web service will use Dockerfile.prover and expose the ZK prove API.
+
+services:
+  - type: web
+    name: cosmic-coder-zk-prover
+    runtime: docker
+    dockerfilePath: ./Dockerfile.prover
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production

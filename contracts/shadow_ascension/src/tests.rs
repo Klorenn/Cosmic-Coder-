@@ -190,6 +190,38 @@ fn test_submit_zk_invalid_proof_verifier_error() {
     assert!(res.is_err(), "submit_zk with bad VK should panic");
 }
 
+/// submit_zk with score < wave * MIN_SCORE_PER_WAVE: InvalidInput (progress rule).
+#[test]
+fn test_submit_zk_invalid_input_score_below_min() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let hub = env.register(MockHub, ());
+    let verifier = env.register(Groth16Verifier, ());
+    let policy = env.register(ShadowAscension, ());
+    let policy_client = ShadowAscensionClient::new(&env, &policy);
+
+    policy_client.init(&hub);
+    policy_client.set_verifier(&verifier);
+    let player = Address::generate(&env);
+
+    // wave=5 -> min_score=50; score=40 fails
+    let res = catch_unwind(std::panic::AssertUnwindSafe(|| {
+        policy_client.submit_zk(
+            &player,
+            &default_proof(&env),
+            &default_vk(&env),
+            &default_pub_signals(&env),
+            &1u64,
+            &run_hash_32(&env),
+            &1u32,
+            &40u32,
+            &5u32,
+        );
+    }));
+    assert!(res.is_err(), "submit_zk with score < wave*MIN_SCORE_PER_WAVE should panic");
+}
+
 /// submit_zk with score 0 or wave 0: InvalidInput.
 #[test]
 fn test_submit_zk_invalid_input_zero_score() {

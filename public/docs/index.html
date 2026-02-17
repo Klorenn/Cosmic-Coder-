@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Cosmic Coder — Documentación</title>
+  <title>VibeCoder — Documentación</title>
   <script type="importmap">
   { "imports": { "marked": "https://esm.sh/marked@12.0.1" } }
   </script>
@@ -136,16 +136,12 @@
 </head>
 <body>
   <header class="header">
-    <h1>Cosmic Coder — Documentación</h1>
+    <h1>VibeCoder — Documentación</h1>
     <nav class="nav">
-      <a href="#" data-doc="COSMIC_CODER_GUIDE.md" class="active" data-label-es="Guía del juego y ZK" data-label-en="Game & ZK guide">Guía del juego y ZK</a>
-      <a href="#" data-doc="TECHNICAL_DOCUMENTATION.md" data-label-es="Documentación técnica" data-label-en="Technical docs">Documentación técnica</a>
-      <a href="#" data-doc="ZK_REAL_SETUP.md" data-label-es="ZK: circuito y proof" data-label-en="ZK setup & proof">ZK: circuito y proof</a>
-      <a href="#" data-doc="ZK_AND_BALANCE.md" data-label-es="ZK + balance" data-label-en="ZK flow & leaderboard">ZK + balance</a>
-      <a href="#" data-doc="E2E_VERIFICATION.md" data-label-es="Verificación E2E" data-label-en="E2E verification">E2E verification</a>
-      <a href="#" data-doc="HACKATHON_DO_THIS.md" data-label-es="Hackathon: qué hacer" data-label-en="Hackathon: what to do">Hackathon</a>
-      <a href="#" data-doc="DEPLOY_ZK_STEPS.md" data-label-es="Deploy ZK" data-label-en="Deploy ZK">Deploy ZK</a>
-      <a href="#" data-doc="HACKATHON_REMAINING.md" data-label-es="Pendientes" data-label-en="Remaining">Pendientes</a>
+      <a href="#" data-doc="HOW_IT_WORKS.md" class="active" data-label-es="Cómo funciona todo" data-label-en="How everything works">Cómo funciona todo</a>
+      <a href="#" data-doc="COSMIC_CODER_GUIDE.md" data-label-es="Guía completa" data-label-en="Complete guide">Guía completa</a>
+      <a href="#" data-doc="TECHNICAL_DOCUMENTATION.md" data-label-es="Técnica" data-label-en="Technical">Técnica</a>
+      <a href="#" data-doc="VIBECODER_HACKATHON.md" data-label-es="Hackathon & Repo" data-label-en="Hackathon & Repo">Hackathon & Repo</a>
     </nav>
     <div class="lang-switch">
       <span>Idioma / Language:</span>
@@ -180,13 +176,14 @@
         const attr = 'data-label-' + lang;
         if (a.hasAttribute(attr)) a.textContent = a.getAttribute(attr);
       });
-      document.title = lang === 'es' ? 'Cosmic Coder — Documentación' : 'Cosmic Coder — Documentation';
+      document.title = lang === 'es' ? 'VibeCoder — Documentación' : 'VibeCoder — Documentation';
       document.documentElement.lang = lang;
     }
 
     function getDocFilename(doc, lang) {
-      if (doc === 'COSMIC_CODER_GUIDE.md')
-        return doc.replace('.md', '_' + lang + '.md');
+      if (doc === 'VIBECODER_HACKATHON.md') return lang === 'es' ? 'VIBECODER_HACKATHON_es.md' : 'VIBECODER_HACKATHON_en.md';
+      if (doc === 'HOW_IT_WORKS.md') return lang === 'es' ? 'HOW_IT_WORKS.md' : 'HOW_IT_WORKS_en.md';
+      if (doc === 'COSMIC_CODER_GUIDE.md') return lang === 'es' ? 'COSMIC_CODER_GUIDE_es.md' : 'COSMIC_CODER_GUIDE_en.md';
       return doc;
     }
 
@@ -211,7 +208,7 @@
       }
     }
 
-    let currentDoc = 'COSMIC_CODER_GUIDE.md';
+    let currentDoc = 'HOW_IT_WORKS.md';
 
     document.querySelectorAll('.nav a').forEach(a => {
       a.addEventListener('click', (e) => {
@@ -236,14 +233,13 @@
     });
 
     const hash = (location.hash || '').replace(/^#/, '');
-    const initial = hash && ['COSMIC_CODER_GUIDE', 'TECHNICAL_DOCUMENTATION', 'ZK_REAL_SETUP', 'ZK_AND_BALANCE', 'E2E_VERIFICATION', 'HACKATHON_DO_THIS', 'HACKATHON_REMAINING', 'DEPLOY_ZK_STEPS'].some(n => hash === n.replace('.md', ''))
-      ? hash + '.md'
-      : 'COSMIC_CODER_GUIDE.md';
+    const docMap = { HOW_IT_WORKS: 'HOW_IT_WORKS.md', COSMIC_CODER_GUIDE: 'COSMIC_CODER_GUIDE.md', TECHNICAL_DOCUMENTATION: 'TECHNICAL_DOCUMENTATION.md', ZK_REAL_SETUP: 'ZK_REAL_SETUP.md', VIBECODER_HACKATHON: 'VIBECODER_HACKATHON.md' };
+    const initial = docMap[hash] || 'HOW_IT_WORKS.md';
     currentDoc = initial;
     setLang(getLang());
     loadAndRender(initial);
     window.addEventListener('popstate', () => {
-      const doc = (history.state && history.state.doc) || 'COSMIC_CODER_GUIDE.md';
+      const doc = (history.state && history.state.doc) || 'HOW_IT_WORKS.md';
       currentDoc = doc;
       loadAndRender(doc);
     });

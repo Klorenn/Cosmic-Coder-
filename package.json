@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "zk:build": "bash scripts/zk/build_circuit.sh",
     "zk:proof": "node scripts/zk/generate_proof.js",
-    "zk:args": "node scripts/zk/contract_args_from_proof.js circuits/build"
+    "zk:args": "node scripts/zk/contract_args_from_proof.js circuits/build",
+    "zk:e2e": "bash scripts/e2e_zk.sh"
   },
   "keywords": [
     "game",
@@ -38,6 +39,7 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "circomlib": "^2.0.5",
     "concurrently": "^9.1.2",
     "electron": "^33.4.0",
     "electron-builder": "^25.1.8",

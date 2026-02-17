@@ -11,6 +11,10 @@ const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 const CONTRACT_ID =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SHADOW_ASCENSION_CONTRACT_ID) || '';
 
+/** Base URL for ZK prover backend (option B: backend generates proof). */
+const ZK_PROVER_URL =
+  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || 'http://localhost:3333';
+
 /**
  * Get Soroban RPC server (SDK 14: rpc.Server).
  */
@@ -84,8 +88,63 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
 }
 
 /**
+ * Request ZK proof from backend (option B). Backend runs fullprove and returns contract_proof format.
+ * @param {string} [baseUrl] - Prover server URL (default VITE_ZK_PROVER_URL or http://localhost:3333)
+ * @param {{ run_hash_hex: string, score: number, wave: number, nonce: number, season_id?: number }} payload
+ * @returns {Promise<{ proof: { a, b, c }, vk: object, pub_signals: string[] }>} hex strings
+ */
+export async function requestZkProof(baseUrl, payload) {
+  const url = (baseUrl || ZK_PROVER_URL).replace(/\/$/, '') + '/zk/prove';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      run_hash_hex: payload.run_hash_hex,
+      score: payload.score,
+      wave: payload.wave,
+      nonce: payload.nonce,
+      season_id: payload.season_id != null ? payload.season_id : 1
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || `ZK prover ${res.status}`);
+  }
+  return res.json();
+}
+
+/**
+ * Convert contract_proof.json payload (hex) to zk object for submitZk (byte arrays).
+ * Works in browser (Uint8Array) and Node (Buffer).
+ */
+function contractProofToZk(payload) {
+  const toBytes = (hex) => {
+    const h = String(hex).replace(/^0x/, '').slice(0, 64);
+    const arr = new Uint8Array(h.length / 2);
+    for (let i = 0; i < h.length; i += 2) arr[i / 2] = parseInt(h.slice(i, i + 2), 16);
+    return arr;
+  };
+  return {
+    proof: {
+      a: toBytes(payload.proof.a),
+      b: toBytes(payload.proof.b),
+      c: toBytes(payload.proof.c)
+    },
+    vk: {
+      alpha: toBytes(payload.vk.alpha),
+      beta: toBytes(payload.vk.beta),
+      gamma: toBytes(payload.vk.gamma),
+      delta: toBytes(payload.vk.delta),
+      ic: payload.vk.ic.map(toBytes)
+    },
+    pubSignals: payload.pub_signals.map(toBytes)
+  };
+}
+
+/**
  * Submit ZK run (submit_zk). Requires Groth16 proof + VK + pub_signals from off-chain circuit.
  * Anti-replay: nonce must be unique per player. Bind proof to run_hash and season_id.
+ * Contract and client enforce: score >= wave * MIN_SCORE_PER_WAVE.
  * @param {object} zk - { proof, vk, pubSignals } (BN254-encoded)
  * @param {number} nonce - unique per run (e.g. timestamp or counter)
  * @param {string} runHashHex - run hash binding (e.g. from gameProof.computeGameHash)
@@ -107,9 +166,13 @@ export async function submitZk(
   if (!zk?.proof || !zk?.vk || !zk?.pubSignals) {
     throw new Error('submitZk requires zk.proof, zk.vk, zk.pubSignals (BN254 Groth16)');
   }
+  const { validateGameRules } = await import('../zk/gameProof.js');
+  const { valid, reason } = validateGameRules(wave, score);
+  if (!valid) throw new Error(`submit_zk rules: ${reason || 'score >= wave * MIN_SCORE_PER_WAVE'}`);
   const { xdr } = await import('@stellar/stellar-sdk');
-  const runHashBuf = Buffer.alloc(32);
-  Buffer.from(runHashHex.slice(0, 64), 'hex').copy(runHashBuf, 0, 0, 32);
+  const runHashHexClean = String(runHashHex).replace(/^0x/, '').slice(0, 64).padStart(64, '0');
+  const runHashBuf = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) runHashBuf[i] = parseInt(runHashHexClean.slice(i * 2, i * 2 + 2), 16);
   const runHashBytes = xdr.ScVal.scvBytes(runHashBuf);
   const args = [
     await playerScVal(signerPublicKey),
@@ -123,6 +186,30 @@ export async function submitZk(
     xdr.ScVal.scvU32(wave),
   ];
   return invoke(CONTRACT_ID, 'submit_zk', args, signerPublicKey, signTransaction);
+}
+
+/**
+ * Ranked submit (option B): request proof from backend, then submit_zk.
+ * @param {string} signerPublicKey
+ * @param {function} signTransaction
+ * @param {string} [proverUrl] - default VITE_ZK_PROVER_URL
+ * @param {{ run_hash_hex: string, score: number, wave: number, nonce: number, season_id?: number }} payload
+ */
+export async function submitZkFromProver(signerPublicKey, signTransaction, proverUrl, payload) {
+  const raw = await requestZkProof(proverUrl, payload);
+  const zk = contractProofToZk(raw);
+  const runHashHex = payload.run_hash_hex.slice(0, 64);
+  const seasonId = payload.season_id != null ? payload.season_id : 1;
+  return submitZk(
+    signerPublicKey,
+    signTransaction,
+    zk,
+    payload.nonce,
+    runHashHex,
+    seasonId,
+    payload.score,
+    payload.wave
+  );
 }
 
 /**
@@ -181,4 +268,9 @@ export async function getLeaderboard(limit = 10) {
 
 export function isContractConfigured() {
   return !!CONTRACT_ID;
+}
+
+/** True if ranked (ZK) submit is available: contract + prover URL. */
+export function isZkProverConfigured() {
+  return !!CONTRACT_ID && !!(ZK_PROVER_URL && ZK_PROVER_URL.startsWith('http'));
 }

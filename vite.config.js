@@ -12,7 +12,16 @@ export default defineConfig({
   base: isCI ? baseForPages : './',
   server: {
     port: 3000,
-    open: true
+    open: true,
+    fs: {
+      allow: [
+        // Keep project root accessible by Vite dev server
+        '/Users/paukoh/vibe-coder',
+        // Allow loading local art packs via /@fs during development
+        '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version',
+        '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version/layered'
+      ]
+    }
   },
   build: {
     outDir: 'dist',

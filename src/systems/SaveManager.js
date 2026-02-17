@@ -101,6 +101,33 @@ export default class SaveManager {
   }
 
   /**
+   * Restore save from wallet-backed data (called when loading progress from API).
+   * @param {object} data - Same shape as saveRun output
+   */
+  static setFromWalletData(data) {
+    if (!data || typeof data !== 'object') return;
+    try {
+      localStorage.setItem(this.SAVE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.error('Failed to restore save from wallet:', e);
+    }
+  }
+
+  /**
+   * Get current save data for wallet persistence (server API).
+   * @returns {object|null}
+   */
+  static getSaveDataForWallet() {
+    const saved = localStorage.getItem(this.SAVE_KEY);
+    if (!saved) return null;
+    try {
+      return JSON.parse(saved);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
    * Get human-readable time ago string
    * @param {number} timestamp - Unix timestamp
    * @returns {string} Human-readable time ago

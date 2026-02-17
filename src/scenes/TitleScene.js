@@ -6,14 +6,18 @@ import LeaderboardManager from '../systems/LeaderboardManager.js';
 import { isConnected } from '../utils/socket.js';
 import { t, setLanguage } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
+import { loadProgressForWallet, resetProgressForDisconnect, progressStore, cycleCharacter, selectCharacter } from '../utils/walletProgressService.js';
 import * as gameClient from '../contracts/gameClient.js';
 import { getUIScale, getCameraZoom, anchorTopLeft, anchorTopRight, anchorBottomLeft, anchorBottomRight, anchorBottomCenter } from '../utils/layout.js';
+
+// Debug flag for TitleScene (FPS overlay, selection logs, etc.)
+const DEBUG = false;
 
 export default class TitleScene extends Phaser.Scene {
   constructor() {
     super({ key: 'TitleScene' });
     this.selectedOption = 0;
-    this.baseMenuOptions = ['START_GAME', 'UPGRADES', 'WEAPONS', 'LEADERBOARD', 'SETTINGS', 'CONTROLS', 'DOCUMENTATION'];
+    this.baseMenuOptions = ['START_GAME', 'UPGRADES', 'WEAPONS', 'CHARACTER', 'LEADERBOARD', 'SETTINGS', 'CONTROLS', 'DOCUMENTATION', 'CREDITS'];
     this.menuOptions = [...this.baseMenuOptions];
     this.isMusicOn = false;
     this.settingsMenuOpen = false;
@@ -24,10 +28,22 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   create() {
-    // Initialize audio on first interaction (no auto fullscreen)
+    // Ensure we always clean up tweens, timers and listeners when the scene shuts down
+    this.events.once('shutdown', this.handleShutdown, this);
+
+    // Menu music mode (Arcade by Lucjo - loop infinito)
+    Audio.setMusicMode('menu');
+    if (window.VIBE_SETTINGS?.musicEnabled) {
+      Audio.startMenuMusic();
+    }
+
+    // Initialize audio on first interaction (browsers block autoplay)
     const onFirstInteraction = () => {
       Audio.initAudio();
       Audio.resumeAudio();
+      if (window.VIBE_SETTINGS?.musicEnabled && !Audio.isMenuMusicPlaying()) {
+        Audio.startMenuMusic();
+      }
     };
     this.input.once('pointerdown', onFirstInteraction);
     this.input.keyboard.once('keydown', onFirstInteraction);
@@ -40,12 +56,28 @@ export default class TitleScene extends Phaser.Scene {
       this.menuOptions = [...this.baseMenuOptions];
     }
 
+    // Load progress from API if wallet already connected (updates menu and character after load)
+    if (stellarWallet.isConnected()) {
+      stellarWallet.getAddress().then((addr) => {
+        if (addr) return loadProgressForWallet(addr);
+      }).then(() => {
+        this.updateContinueMenuOption?.();
+        this.updateIdleCharacter?.();
+      });
+    }
+
     // Create animated background
     this.createBackground();
 
     // Zoom de cámara: en ventanas con poca altura acercamos ligeramente
     // todo el título para que texto y personaje no se vean tan pequeños.
     this.cameras.main.setZoom(getCameraZoom(this));
+
+    // Main centered UI layout container (title + menu)
+    const centerX = this.cameras.main.width / 2;
+    const centerY = this.cameras.main.height / 2;
+    this.uiLayout = this.add.container(centerX, centerY);
+    this.uiLayout.setDepth(10);
 
     // Create title
     this.createTitle();
@@ -68,6 +100,9 @@ export default class TitleScene extends Phaser.Scene {
     // Git / build phrases every 6 seconds
     this.startGitQuotes();
 
+    // Optional debug overlay (FPS, etc.)
+    this.createDebugOverlay();
+
     // Check if we need to ask for name on first launch
     if (!window.VIBE_SETTINGS.playerName) {
       this.time.delayedCall(500, () => this.showNameInput(true));
@@ -75,104 +110,191 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   createBackground() {
-    const graphics = this.add.graphics();
     const width = this.scale.width;
     const height = this.scale.height;
 
-    // Gradient background
-    for (let y = 0; y < height; y += 2) {
-      const ratio = y / height;
-      const r = Math.floor(10 + ratio * 5);
-      const g = Math.floor(10 + ratio * 15);
-      const b = Math.floor(25 + ratio * 10);
-      graphics.fillStyle(Phaser.Display.Color.GetColor(r, g, b), 1);
-      graphics.fillRect(0, y, width, 2);
+    const pickKey = (...keys) => {
+      for (const key of keys) {
+        if (key && this.textures.exists(key)) return key;
+      }
+      return null;
+    };
+
+    const placeCover = (key, depth = 0, alpha = 1) => {
+      if (!this.textures.exists(key)) return null;
+      const img = this.add.image(width / 2, height / 2, key);
+      const scale = Math.max(width / img.width, height / img.height);
+      img.setScale(scale);
+      img.setDepth(depth);
+      img.setAlpha(alpha);
+      return img;
+    };
+
+    this.bgParallaxLayers = [];
+    this.bgTweens = [];
+
+    // Depth 0: base background (cover image, no tiling to avoid mosaic).
+    const bgBaseKey = pickKey('bg-blue-back', 'bg-blue-back-root', 'bg-blue-back-local');
+    this.bgBase = bgBaseKey ? placeCover(bgBaseKey, 0, 1) : null;
+    if (!this.bgBase) {
+      const fallback = this.add.graphics();
+      fallback.fillStyle(0x050913, 1);
+      fallback.fillRect(0, 0, width, height);
+      fallback.setDepth(0);
+      this.bgBase = fallback;
+    } else {
+      // Very slow drift to keep image alive without visible repetition.
+      this.bgTweens.push(this.tweens.add({
+        targets: this.bgBase,
+        x: width / 2 + 56,
+        y: height / 2 - 30,
+        duration: 10000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      }));
     }
 
-    // Grid lines
-    graphics.lineStyle(1, 0x00ffff, 0.1);
-    for (let x = 0; x < width; x += 50) {
-      graphics.lineBetween(x, 0, x, height);
-    }
-    for (let y = 0; y < height; y += 50) {
-      graphics.lineBetween(0, y, width, y);
+    // Depth 1: optional mid layer + stars.
+    const bgMidKey = pickKey('bg-blue-with-stars', 'bg-blue-with-stars-root', 'bg-blue-with-stars-local');
+    if (bgMidKey) {
+      this.bgMid = placeCover(bgMidKey, 1, 0.35);
+      if (this.bgMid) {
+        // Subtle breathing/rotation similar to layered animated space menus.
+        this.bgTweens.push(this.tweens.add({
+          targets: this.bgMid,
+          scaleX: this.bgMid.scaleX * 1.14,
+          scaleY: this.bgMid.scaleY * 1.14,
+          angle: 3.8,
+          duration: 7000,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        }));
+        this.bgTweens.push(this.tweens.add({
+          targets: this.bgMid,
+          alpha: { from: 0.24, to: 0.62 },
+          duration: 4200,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        }));
+      }
     }
 
-    // Animated scanlines
-    this.scanlines = this.add.graphics();
-    this.scanlines.setAlpha(0.03);
+    const starsKey = pickKey('bg-blue-stars', 'bg-blue-stars-root', 'bg-blue-stars-local');
+    if (starsKey) {
+      this.bgStarsFar = this.add.tileSprite(width / 2, height / 2, width, height, starsKey);
+      this.bgStarsFar.setDepth(1).setAlpha(0.25);
+      this.bgParallaxLayers.push({ layer: this.bgStarsFar, speedX: 0.18, speedY: 0.24 });
 
-    this.time.addEvent({
-      delay: 50,
-      callback: () => {
-        this.scanlines.clear();
-        this.scanlines.fillStyle(0xffffff, 1);
-        for (let y = (this.time.now / 20) % 4; y < height; y += 4) {
-          this.scanlines.fillRect(0, y, width, 1);
+      this.bgStars = this.add.tileSprite(width / 2, height / 2, width, height, starsKey);
+      this.bgStars.setDepth(2).setAlpha(0.48);
+      this.bgParallaxLayers.push({ layer: this.bgStars, speedX: 0.45, speedY: 0.68 });
+    }
+
+    if (this.bgParallaxLayers.length > 0) {
+      // Single lightweight loop for all layered parallax movement.
+      this.starScrollEvent = this.time.addEvent({
+        delay: 33,
+        loop: true,
+        callback: () => {
+          for (const entry of this.bgParallaxLayers) {
+            const layer = entry.layer;
+            if (!layer || !layer.scene || typeof layer.tilePositionX !== 'number') continue;
+            layer.tilePositionX += entry.speedX;
+            layer.tilePositionY += entry.speedY;
+          }
         }
-      },
-      loop: true
-    });
+      });
+    }
+
+    // Depth 2: planet + asteroids.
+    const planetKey = pickKey('bg-planet-big', 'bg-planet-big-root', 'bg-planet-big-local');
+    if (planetKey) {
+      this.bgPlanet = this.add.image(width - 200, height - 180, planetKey);
+      this.bgPlanet.setDepth(3).setScale(0.8).setAlpha(0.9);
+      this.bgTweens.push(this.tweens.add({
+        targets: this.bgPlanet,
+        x: this.bgPlanet.x - 34,
+        y: this.bgPlanet.y + 20,
+        duration: 4200,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      }));
+    }
+
+    const addAsteroid = (key, rootKey, localKey, x, y, scale, driftX, driftY) => {
+      const finalKey = pickKey(key, rootKey, localKey);
+      if (!finalKey) return;
+      const asteroid = this.add.image(x, y, finalKey).setDepth(3).setScale(scale).setAlpha(0.82);
+      const tween = this.tweens.add({
+        targets: asteroid,
+        x: x + driftX,
+        y: y + driftY,
+        duration: 8000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+      this.bgTweens.push(tween);
+    };
+
+    addAsteroid('bg-asteroid-1', 'bg-asteroid-1-root', 'bg-asteroid-1-local', width * 0.18, height * 0.22, 0.75, 10, -8);
+    addAsteroid('bg-asteroid-2', 'bg-asteroid-2-root', 'bg-asteroid-2-local', width * 0.78, height * 0.32, 0.85, -12, 8);
   }
 
   createTitle() {
-    const cx = this.scale.width / 2;
-    const h = this.scale.height || 600;
-    const uiScale = getUIScale(this);
+    if (!this.uiLayout) return;
 
-    // Alturas relativas para armonía en cualquier resolución
-    const titleY = h * 0.18;      // ~108px en 600
-    const subtitleY = h * 0.26;   // ~156px en 600
-    const underlineY = h * 0.30;  // ~180px en 600
-    const versionY = h * 0.335;   // ~201px en 600
-
-    // Título principal: tamaño moderado para que se lea bien y no se vea pixelado
-    this.titleText = this.add.text(cx, titleY, t('title'), {
+    // Título principal (layout local)
+    this.titleText = this.add.text(0, -220, t('title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${48 * uiScale}px`,
+      fontSize: '64px',
       color: '#00ffff',
       fontStyle: 'bold',
       stroke: '#003333',
-      strokeThickness: 6
-    }).setOrigin(0.5);
+      strokeThickness: 5
+    }).setOrigin(0.5).setDepth(10);
+    this.uiLayout.add(this.titleText);
 
-    // Glitch effect on title
-    this.time.addEvent({
-      delay: 3000,
-      callback: () => this.glitchTitle(),
-      loop: true
+    // Glow suave, no exagerado
+    this.titleText.setShadow(0, 0, '#00ffff', 15, true, true);
+    this.titleGlowTween = this.tweens.add({
+      targets: this.titleText,
+      alpha: { from: 0.9, to: 1 },
+      duration: 2000,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
     });
+
+    // Glitch effect cada 5–8 segundos
+    const scheduleGlitch = () => {
+      this.glitchTimer = this.time.delayedCall(Phaser.Math.Between(5000, 8000), () => {
+        this.glitchTitle();
+        scheduleGlitch();
+      });
+    };
+    scheduleGlitch();
 
     // Subtitle
-    this.add.text(cx, subtitleY, t('subtitle'), {
+    this.subtitleText = this.add.text(0, -160, t('subtitle'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${16 * uiScale}px`,
+      fontSize: '28px',
       color: '#ff00ff'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(10);
+    this.uiLayout.add(this.subtitleText);
 
-    // Animated underline
-    const underline = this.add.graphics();
-    underline.lineStyle(2, 0x00ffff, 0.8);
-    underline.lineBetween(cx - 200, underlineY, cx + 200, underlineY);
-
-    this.tweens.add({
-      targets: underline,
-      alpha: 0.3,
-      duration: 1000,
-      yoyo: true,
-      repeat: -1
-    });
-
-    // Version
-    this.add.text(cx, versionY, t('version'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${10 * uiScale}px`,
-      color: '#666666'
-    }).setOrigin(0.5);
+    // Decorative line
+    this.titleLine = this.add.rectangle(0, -135, 520, 2, 0x00ffff, 0.65).setDepth(10);
+    this.uiLayout.add(this.titleLine);
   }
 
   glitchTitle() {
-    const originalX = this.scale.width / 2;
+    if (!this.titleText || !this.titleText.scene) return;
+    const originalX = this.titleText.x;
     const originalColor = '#00ffff';
 
     // Quick glitch
@@ -192,48 +314,108 @@ export default class TitleScene extends Phaser.Scene {
 
   createMenu() {
     this.menuTexts = [];
-    const cx = this.scale.width / 2;
-    const h = this.scale.height || 600;
+    this.menuMeta = [];
+    this.menuPrimaryBg = null;
+    this.zkHintText = null;
+    if (!this.uiLayout) return;
+
     const uiScale = getUIScale(this);
+    // Alineado justo bajo la línea decorativa (titleLine en y=-135)
+    const ctaY = -100;
+    const optionsStartY = -18;
+    const optionSpacing = 32;
 
-    // Menú centrado bajo el título, con spacing proporcional
-    const startY = h * 0.42;              // ~252px en 600
-    const spacing = 40 * uiScale;         // un poco más grande en pantallas grandes
-    this.menuStartY = startY;
-    this.menuSpacing = spacing;
+    // Keep values for idle character logic (without changing behavior flow)
+    this.menuStartY = optionsStartY;
+    this.menuSpacing = optionSpacing;
 
-    const lastOptionY = startY + (this.menuOptions.length - 1) * spacing;
-    // Cuadro de fondo para que el menú quede contenido y legible
-    const menuBoxH = lastOptionY - startY + 64 * uiScale;
-    const menuBoxW = 380;
-    const menuBox = this.add.rectangle(cx, startY + menuBoxH / 2 - 20, menuBoxW, menuBoxH, 0x0a0a14, 0.92);
-    menuBox.setStrokeStyle(2, 0x00ffff, 0.8);
-    menuBox.setDepth(-1);
+    let secondaryRow = 0;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let maxHalfWidth = 0;
 
     this.menuOptions.forEach((option, index) => {
-      const label = option === 'START_GAME' && gameClient.isZkProverConfigured()
-        ? `${t('menu.START_GAME')} ${t('menu.ranked_badge')}`
-        : t('menu.' + option);
-      const text = this.add.text(cx, startY + index * spacing, label, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${22 * uiScale}px`,
-        color: index === 0 ? '#00ffff' : '#666666',
-        fontStyle: index === 0 ? 'bold' : 'normal'
-      }).setOrigin(0.5).setDepth(10);
+      const isPrimary = option === 'START_GAME';
+      const label = t('menu.' + option);
 
+      const y = isPrimary ? ctaY : optionsStartY + secondaryRow++ * optionSpacing;
+      const isSelected = index === this.selectedOption;
+
+      const text = this.add.text(0, y, label, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: isPrimary ? '48px' : '28px',
+        color: '#00ffff',
+        fontStyle: isPrimary ? 'bold' : (isSelected ? 'bold' : 'normal')
+      }).setOrigin(0.5).setDepth(10).setAlpha(isSelected ? 1 : 0.7);
+
+      text.setScale(isPrimary ? 1 : (isSelected ? 1.05 : 1));
+      this.uiLayout.add(text);
       this.menuTexts.push(text);
+      this.menuMeta.push({ option, isPrimary, y });
+      maxY = Math.max(maxY, y);
+      maxHalfWidth = Math.max(maxHalfWidth, text.width * 0.5);
+
+      if (isPrimary) {
+        this._primaryBounds = text.getBounds();
+        this._primaryY = y;
+      }
     });
 
-    // Selection indicator
-    this.selector = this.add.text(cx - 140, startY, '>', {
+    // Recuadro CTA (START GAME): incluye hint ZK dentro si aplica
+    const primaryIndex = this.menuOptions.indexOf('START_GAME');
+    const primaryText = primaryIndex >= 0 ? this.menuTexts[primaryIndex] : null;
+    if (primaryText && this._primaryBounds) {
+      const bounds = this._primaryBounds;
+      const buttonW = Math.min(this.scale.width * 0.6, bounds.width + 80);
+      const ctaY = this._primaryY;
+
+      if (gameClient.isZkProverConfigured()) {
+        this.zkHintText = this.add.text(0, 0, t('prompt.zk_cta_hint'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: '16px',
+          color: '#ffffff',
+          align: 'center',
+          wordWrap: { width: Math.max(200, buttonW - 48) }
+        }).setOrigin(0.5, 0).setDepth(10).setAlpha(0.82);
+        const hintH = this.zkHintText.height;
+        const gapBelowCta = 12;
+        this.zkHintText.setPosition(0, ctaY + bounds.height / 2 + gapBelowCta);
+        this.uiLayout.add(this.zkHintText);
+        maxY = Math.max(maxY, this.zkHintText.y + hintH);
+
+        // Bajar las opciones secundarias para que no choquen con el hint
+        const hintBottom = this.zkHintText.y + hintH;
+        const gap = 24;
+        const neededStart = hintBottom + gap;
+        const delta = neededStart - optionsStartY;
+        if (delta > 0) {
+          this.menuTexts.forEach((text, i) => {
+            if (!this.menuMeta[i].isPrimary) {
+              const newY = text.y + delta;
+              text.setY(newY);
+              this.menuMeta[i].y = newY;
+            }
+          });
+          this.menuStartY = neededStart;
+          maxY = this.menuTexts.reduce((m, t) => Math.max(m, t.y), maxY);
+        }
+      }
+    }
+
+    const lastOptionY = Number.isFinite(maxY) ? maxY : optionsStartY;
+    const initialTarget = this.menuTexts[this.selectedOption];
+    const selectorY = initialTarget ? initialTarget.y : optionsStartY;
+    const arrowOffset = 20;
+    const selectorX = initialTarget ? initialTarget.x - initialTarget.width / 2 - arrowOffset : -200;
+    this.menuSelectorArrowOffset = arrowOffset;
+    this.selector = this.add.text(selectorX, selectorY, '▶', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${22 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(10);
+    this.uiLayout.add(this.selector);
 
-    // Blink selector
-    this.tweens.add({
+    this.selectorBlinkTween = this.tweens.add({
       targets: this.selector,
       alpha: 0.3,
       duration: 500,
@@ -241,16 +423,16 @@ export default class TitleScene extends Phaser.Scene {
       repeat: -1
     });
 
-    // Instrucciones bien debajo del último ítem del menú, sin solapar (dentro del cuadro)
-    this.promptText = this.add.text(cx, lastOptionY + 32 * uiScale, t('prompt.enter_select'), {
+    this.promptText = this.add.text(0, lastOptionY + 48, t('prompt.enter_select'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#888888'
-    }).setOrigin(0.5);
+      fontSize: '14px',
+      color: '#ffffff'
+    }).setOrigin(0.5).setDepth(10).setAlpha(0.75);
+    this.uiLayout.add(this.promptText);
 
-    this.tweens.add({
+    this.promptBlinkTween = this.tweens.add({
       targets: this.promptText,
-      alpha: 0.5,
+      alpha: 0.45,
       duration: 1000,
       yoyo: true,
       repeat: -1
@@ -261,13 +443,13 @@ export default class TitleScene extends Phaser.Scene {
     const uiScale = getUIScale(this);
 
     // Ola máxima y BITS en esquinas inferiores, separados para que no se solapen
-    const highWave = localStorage.getItem('vibeCoderHighWave') || '0';
+    const highWave = String(progressStore.highWave);
     const highWavePos = anchorBottomLeft(this, 140, 42);
     this.add.text(highWavePos.x, highWavePos.y, `${t('footer.high_wave')}: ${highWave}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: 13 * uiScale,
       color: '#ffd700'
-    }).setOrigin(0, 0.5);
+    }).setOrigin(0, 0.5).setDepth(10);
 
     const currency = window.VIBE_UPGRADES?.currency || 0;
     const bitsPos = anchorBottomRight(this, 140, 42);
@@ -275,7 +457,7 @@ export default class TitleScene extends Phaser.Scene {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: 13 * uiScale,
       color: '#00ffff'
-    }).setOrigin(1, 0.5);
+    }).setOrigin(1, 0.5).setDepth(10);
 
     // Fullscreen button (top left)
     const fsPos = anchorTopLeft(this, 20, 20);
@@ -283,7 +465,7 @@ export default class TitleScene extends Phaser.Scene {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: 12 * uiScale,
       color: '#00aaff'
-    }).setOrigin(0, 0).setInteractive({ useHandCursor: true });
+    }).setOrigin(0, 0).setDepth(10).setInteractive({ useHandCursor: true });
     this.fullscreenBtn.on('pointerdown', () => this.toggleFullscreen());
     this.fullscreenBtn.on('pointerover', () => this.fullscreenBtn.setColor('#00ffff'));
     this.fullscreenBtn.on('pointerout', () => this.fullscreenBtn.setColor('#00aaff'));
@@ -295,15 +477,21 @@ export default class TitleScene extends Phaser.Scene {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: 12 * uiScale,
       color: '#00cc88'
-    }).setOrigin(0, 0).setInteractive({ useHandCursor: true });
+    }).setOrigin(0, 0).setDepth(10).setInteractive({ useHandCursor: true });
     this.walletBtn.on('pointerdown', async () => {
       if (stellarWallet.isConnected()) {
         stellarWallet.disconnect();
+        resetProgressForDisconnect();
         this.updateWalletButton();
         this.updateConnectionBadge();
+        this.updateContinueMenuOption();
       } else {
         this.walletBtn.setText('...');
         const addr = await stellarWallet.connect();
+        if (addr) {
+          await loadProgressForWallet(addr);
+          this.updateContinueMenuOption();
+        }
         this.updateWalletButton();
         this.updateConnectionBadge();
         if (!addr && this.sayQuote) this.sayQuote(t('footer.wallet_error'));
@@ -319,7 +507,7 @@ export default class TitleScene extends Phaser.Scene {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: 12 * uiScale,
       color: '#00aaff'
-    }).setOrigin(1, 0).setInteractive({ useHandCursor: true });
+    }).setOrigin(1, 0).setDepth(10).setInteractive({ useHandCursor: true });
     this.langBtn.on('pointerdown', () => {
       const lang = window.VIBE_SETTINGS?.language === 'es' ? 'en' : 'es';
       setLanguage(lang);
@@ -334,16 +522,9 @@ export default class TitleScene extends Phaser.Scene {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: 12 * uiScale,
       color: '#ff6666'
-    }).setOrigin(1, 0);
+    }).setOrigin(1, 0).setDepth(10);
     this.updateConnectionBadge();
 
-    // Credits (centrado, debajo de high wave / bits)
-    const creditsPos = anchorBottomCenter(this, 18);
-    this.add.text(creditsPos.x, creditsPos.y, t('footer.tagline'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 10 * uiScale,
-      color: '#444444'
-    }).setOrigin(0.5);
   }
 
   isFullscreen() {
@@ -379,6 +560,88 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   /** Badge LIVE cuando XP server o wallet conectada (modo online = avances on-chain/leaderboard). */
+  updateIdleCharacter() {
+    this.refreshIdlePlayerSprite();
+  }
+
+  onCycleCharacter(dir) {
+    cycleCharacter(dir).then((charId) => {
+      this.refreshIdlePlayerSprite();
+      if (window.VIBE_SETTINGS?.sfxEnabled) Audio.playLevelUp();
+    });
+  }
+
+  getActiveCharacterMeta() {
+    const fallbackChar = { textureKey: 'player', animPrefix: 'player', name: 'VibeCoder' };
+    const charId = progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
+    const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS?.vibecoder || fallbackChar;
+    return { charId, char };
+  }
+
+  playIdleForActiveCharacter(force = true) {
+    if (!this.idlePlayer || !this.idlePlayer.scene) return false;
+    const { char } = this.getActiveCharacterMeta();
+    const idleKey = char.animPrefix + '-idle';
+    if (this.anims.exists(idleKey)) {
+      this.idlePlayer.play(idleKey, force);
+      return true;
+    }
+    if (this.anims.exists('player-idle')) {
+      this.idlePlayer.play('player-idle', force);
+      return true;
+    }
+    this.idlePlayer.setFrame(0);
+    return false;
+  }
+
+  playWalkForActiveCharacter(force = true) {
+    if (!this.idlePlayer || !this.idlePlayer.scene) return false;
+    const { char } = this.getActiveCharacterMeta();
+    const walkKey = char.animPrefix + '-walk-side';
+    if (this.anims.exists(walkKey)) {
+      this.idlePlayer.play(walkKey, force);
+      return true;
+    }
+    if (this.anims.exists('player-walk-side')) {
+      this.idlePlayer.play('player-walk-side', force);
+      return true;
+    }
+    return this.playIdleForActiveCharacter(force);
+  }
+
+  /** Refresh the idle player sprite to match selected character (texture + animation). */
+  refreshIdlePlayerSprite() {
+    if (!this.idlePlayer) return;
+    const { char } = this.getActiveCharacterMeta();
+    const nextTexture = this.textures.exists(char.textureKey)
+      ? char.textureKey
+      : (this.textures.exists('player') ? 'player' : null);
+    if (!nextTexture) return;
+    this.idlePlayer.setTexture(nextTexture, 0);
+    this.playIdleForActiveCharacter();
+    if (this.charNameText) this.charNameText.setText(char.name);
+  }
+
+  updateContinueMenuOption() {
+    this.hasSavedGame = SaveManager.hasSave();
+    const hadContinue = this.menuOptions[0] === 'CONTINUE';
+    if (this.hasSavedGame && !hadContinue) {
+      this.menuOptions = ['CONTINUE', ...this.baseMenuOptions];
+    } else if (!this.hasSavedGame && hadContinue) {
+      this.menuOptions = [...this.baseMenuOptions];
+    } else return;
+    // Rebuild menu
+    this.menuTexts?.forEach((t) => t.destroy());
+    this.menuTexts = [];
+    this.menuMeta = [];
+    this.selector?.destroy();
+    this.promptText?.destroy();
+    this.menuBox?.destroy();
+    this.menuPrimaryBg?.destroy();
+    this.zkHintText?.destroy();
+    this.createMenu();
+  }
+
   updateConnectionBadge() {
     if (!this.connectionBadge || !this.connectionBadge.scene) return;
     const online = isConnected() || stellarWallet.isConnected();
@@ -399,6 +662,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   shutdown() {
+    // Mantener por compatibilidad; será llamado desde handleShutdown()
     document.removeEventListener('fullscreenchange', this.onFullscreenChange);
     if (this.gitQuoteTimer) {
       this.gitQuoteTimer.remove(false);
@@ -406,106 +670,217 @@ export default class TitleScene extends Phaser.Scene {
     }
   }
 
-  createCodeParticles() {
-    // Floating code symbols
-    const codeSymbols = ['{ }', '( )', '< >', '[ ]', '//', '/*', '*/', '=>', '&&', '||', '!=', '==', '++', '--', '::'];
+  /**
+   * Limpieza completa de la escena: tweens, timers, listeners globales.
+   * Se engancha al evento Phaser `shutdown` en create().
+   */
+  handleShutdown() {
+    // Teclado principal del menú
+    if (this.onKeyDownHandler) {
+      this.input.keyboard.off('keydown', this.onKeyDownHandler);
+      this.onKeyDownHandler = null;
+    }
 
-    for (let i = 0; i < 15; i++) {
+    // Eventos globales de XP / coding
+    if (this.xpGainedHandler) {
+      window.removeEventListener('xpgained', this.xpGainedHandler);
+      this.xpGainedHandler = null;
+    }
+    if (this.xpConnectedHandler) {
+      window.removeEventListener('xpserver-connected', this.xpConnectedHandler);
+      this.xpConnectedHandler = null;
+    }
+    if (this.xpDisconnectedHandler) {
+      window.removeEventListener('xpserver-disconnected', this.xpDisconnectedHandler);
+      this.xpDisconnectedHandler = null;
+    }
+    if (this.levelUpHandler) {
+      window.removeEventListener('levelup', this.levelUpHandler);
+      this.levelUpHandler = null;
+    }
+
+    // Timer de frases git + otros timers de la escena
+    if (this.gitQuoteTimer) {
+      this.gitQuoteTimer.remove(false);
+      this.gitQuoteTimer = null;
+    }
+    if (this.scanlineEvent) {
+      this.scanlineEvent.remove(false);
+      this.scanlineEvent = null;
+    }
+    if (this.verticalScanEvent) {
+      this.verticalScanEvent.remove(false);
+      this.verticalScanEvent = null;
+    }
+    if (this.glitchTimer) {
+      this.glitchTimer.remove(false);
+      this.glitchTimer = null;
+    }
+    if (this.debugFpsEvent) {
+      this.debugFpsEvent.remove(false);
+      this.debugFpsEvent = null;
+    }
+
+    // Parar todos los tweens de esta escena (incluidos glow, partículas, etc.)
+    this.tweens.killAll();
+
+    // Eliminar todos los eventos de tiempo locales a la escena
+    this.time.removeAllEvents();
+
+    // Limpieza adicional ya existente
+    this.shutdown();
+  }
+
+  createCodeParticles() {
+    // Floating code symbols (máx 20, tweens ligeros)
+    const codeSymbols = ['{ }', '( )', '< >', '[ ]', '//', '/*', '*/', '=>', '&&', '||', '!=', '==', '++', '--', '::'];
+    const width = this.scale.width || 800;
+    const height = this.scale.height || 600;
+    const maxParticles = 15;
+
+    this.codeParticles = [];
+
+    for (let i = 0; i < maxParticles; i++) {
       const symbol = Phaser.Utils.Array.GetRandom(codeSymbols);
-      const x = Phaser.Math.Between(50, 750);
-      const y = Phaser.Math.Between(250, 550);
+      const x = Phaser.Math.Between(width * 0.1, width * 0.9);
+      const y = Phaser.Math.Between(height * 0.35, height * 0.9);
 
       const particle = this.add.text(x, y, symbol, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: Phaser.Math.Between(10, 16) + 'px',
         color: '#00ffff'
-      }).setAlpha(Phaser.Math.FloatBetween(0.1, 0.3));
+      }).setAlpha(Phaser.Math.FloatBetween(0.15, 0.4));
+
+      this.codeParticles.push(particle);
 
       this.tweens.add({
         targets: particle,
-        y: y + Phaser.Math.Between(-50, 50),
-        x: x + Phaser.Math.Between(-30, 30),
-        alpha: 0,
+        y: y + Phaser.Math.Between(-40, 40),
+        x: x + Phaser.Math.Between(-20, 20),
+        alpha: { from: particle.alpha, to: 0.05 },
         duration: Phaser.Math.Between(3000, 6000),
-        onComplete: () => {
-          particle.setPosition(Phaser.Math.Between(50, 750), Phaser.Math.Between(250, 550));
-          particle.setAlpha(Phaser.Math.FloatBetween(0.1, 0.3));
-          this.tweens.add({
-            targets: particle,
-            y: particle.y + Phaser.Math.Between(-50, 50),
-            alpha: 0,
-            duration: Phaser.Math.Between(3000, 6000),
-            repeat: -1,
-            yoyo: false
-          });
-        }
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
       });
     }
   }
 
   createIdleCharacter() {
-    // Floating Warglaive decoration in bottom right
-    this.warglaiveDecor = this.add.sprite(720, 510, 'legendary-huntersWarglaive');
-    this.warglaiveDecor.setScale(2);
-    this.warglaiveDecor.setAlpha(0.95);
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const CHARACTER_DEPTH = 15;
 
-    // Gentle floating animation - no rotation, just hovering
-    this.tweens.add({
-      targets: this.warglaiveDecor,
-      y: 500,
-      duration: 2500,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut'
-    });
+    // Floating Warglaive decoration in bottom right (solo si existe la textura)
+    if (this.textures.exists('legendary-huntersWarglaive')) {
+      const decoX = w * 0.82;
+      const decoY = h * 0.84;
+      this.warglaiveDecor = this.add.sprite(decoX, decoY, 'legendary-huntersWarglaive');
+      this.warglaiveDecor.setScale(2 * uiScale);
+      this.warglaiveDecor.setAlpha(0.95);
+      this.warglaiveDecor.setDepth(2);
 
-    // Subtle glow pulse
-    this.tweens.add({
-      targets: this.warglaiveDecor,
-      alpha: 0.75,
+      // Gentle floating animation - no rotation, just hovering
+      this.warglaiveFloatTween = this.tweens.add({
+        targets: this.warglaiveDecor,
+        y: decoY - 10 * uiScale,
+        duration: 2500,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+
+      // Subtle glow pulse
+      this.warglaiveGlowTween = this.tweens.add({
+        targets: this.warglaiveDecor,
+        alpha: { from: 0.95, to: 0.7 },
+        duration: 2000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+    } else if (DEBUG) {
+      // eslint-disable-next-line no-console
+      console.warn('[TitleScene] legendary-huntersWarglaive texture missing — skipping decoration');
+    }
+
+    const playerX = Math.max(120, Math.floor(w * 0.18));
+    const playerY = Math.floor(h * 0.74);
+
+    // Player character - uses selected character (VibeCoder, Destroyer, Swordsman)
+    const { char } = this.getActiveCharacterMeta();
+    let textureKey = null;
+    if (this.textures.exists(char.textureKey)) textureKey = char.textureKey;
+    else if (this.textures.exists('player')) textureKey = 'player';
+    else {
+      const placeholderKey = 'title-player-placeholder';
+      if (!this.textures.exists(placeholderKey)) {
+        const g = this.make.graphics({ x: 0, y: 0, add: false });
+        g.fillStyle(0x003344, 1);
+        g.fillRoundedRect(0, 0, 72, 96, 10);
+        g.lineStyle(3, 0x00ffff, 1);
+        g.strokeRoundedRect(0, 0, 72, 96, 10);
+        g.lineStyle(2, 0x00ffff, 1);
+        g.strokeCircle(36, 28, 10);
+        g.lineBetween(24, 52, 48, 52);
+        g.lineBetween(22, 70, 50, 70);
+        g.generateTexture(placeholderKey, 72, 96);
+        g.destroy();
+      }
+      textureKey = placeholderKey;
+    }
+    this.idlePlayer = this.add.sprite(playerX, playerY, textureKey, 0);
+    this.idlePlayer.setScale(1.45 * uiScale);
+    this.idlePlayer.setDepth(CHARACTER_DEPTH);
+    this.playIdleForActiveCharacter(false);
+
+    // Short walk burst so the title character feels alive.
+    const scheduleWalkBurst = () => {
+      this.walkBurstTimer = this.time.delayedCall(4500, () => {
+        if (!this.idlePlayer || !this.idlePlayer.scene) return;
+        this.playWalkForActiveCharacter(true);
+        this.time.delayedCall(900, () => {
+          if (!this.idlePlayer || !this.idlePlayer.scene) return;
+          this.playIdleForActiveCharacter(true);
+          scheduleWalkBurst();
+        });
+      });
+    };
+    scheduleWalkBurst();
+
+    // Subtle life motion (3px float) without affecting gameplay logic
+    this.idleFloatTween = this.tweens.add({
+      targets: this.idlePlayer,
+      y: playerY - 6,
       duration: 2000,
       yoyo: true,
       repeat: -1,
       ease: 'Sine.easeInOut'
     });
 
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-    const playerX = w * 0.12;
-
-    // Alinear verticalmente al botón de DOCUMENTACIÓN (última opción del menú)
-    const docIndex = this.menuOptions.indexOf('DOCUMENTATION');
-    const baseY = this.menuStartY || (h * 0.42);
-    const spacing = this.menuSpacing || (40 * uiScale);
-    const docY = docIndex >= 0 ? baseY + docIndex * spacing : h * 0.8;
-    const playerY = docY;
-
-    // Player character (CraftPix robot - 128px sprites), anclado abajo-izquierda
-    this.idlePlayer = this.add.sprite(playerX, playerY, 'player');
-    this.idlePlayer.setScale(1.4 * uiScale); // Más grande en pantallas grandes
-    this.idlePlayer.play('player-idle');
-
     // Speech bubble (hidden initially)
     this.speechBubble = this.add.graphics();
+    this.speechBubble.setDepth(CHARACTER_DEPTH + 1);
     this.speechText = this.add.text(0, 0, '', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${11 * uiScale}px`,
       color: '#000000',
       align: 'center',
       wordWrap: { width: 170 * uiScale }
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(CHARACTER_DEPTH + 2);
     this.speechBubble.setVisible(false);
     this.speechText.setVisible(false);
 
     // Thinking bubble (shows coding activity)
     this.thinkingBubble = this.add.graphics();
+    this.thinkingBubble.setDepth(CHARACTER_DEPTH + 1);
     this.thinkingDots = this.add.text(0, 0, '...', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${16 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(CHARACTER_DEPTH + 2);
     this.thinkingBubble.setVisible(false);
     this.thinkingDots.setVisible(false);
     this.thinkingTimer = null;
@@ -523,8 +898,8 @@ export default class TitleScene extends Phaser.Scene {
     this.enemySpawnInterval = 4000; // Spawn every 4 seconds
     this.titleProjectiles = [];
 
-    // Start title screen defense
-    this.startTitleDefense();
+    // Disable title combat mobs in menu (requested).
+    this.titleDefenseEnabled = false;
 
     // Random quotes
     this.idleQuotes = [
@@ -590,8 +965,8 @@ export default class TitleScene extends Phaser.Scene {
     ];
 
     this.xpDisconnectedQuotes = [
-      "XP server down...\nOffline mode",
-      "Connection lost\n*sad beep*"
+      "XP server offline",
+      "Offline mode"
     ];
 
     // Time-based easter egg quotes
@@ -720,10 +1095,13 @@ export default class TitleScene extends Phaser.Scene {
       });
     };
 
-    // XP server disconnected
+    // XP server disconnected (no mostrar "Connection lost" si acabamos de abrir docs en nueva pestaña)
     this.xpDisconnectedHandler = () => {
       this.updateConnectionBadge();
-      this.sayQuote(Phaser.Utils.Array.GetRandom(this.xpDisconnectedQuotes));
+      const justOpenedDocs = this.lastDocsOpenTime && (Date.now() - this.lastDocsOpenTime < 5000);
+      if (!justOpenedDocs) {
+        this.sayQuote(Phaser.Utils.Array.GetRandom(this.xpDisconnectedQuotes));
+      }
     };
 
     // Level up event
@@ -740,7 +1118,7 @@ export default class TitleScene extends Phaser.Scene {
 
   reactToCoding() {
     // Don't react if menu is open
-    if (this.upgradeMenuOpen || this.weaponMenuOpen) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.characterMenuOpen) return;
 
     // Check for CLI-specific reactions
     const source = window.VIBE_CODER?.lastXPSource?.name?.toLowerCase();
@@ -813,9 +1191,32 @@ export default class TitleScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Debug overlay (FPS). Solo activo si DEBUG = true.
+   */
+  createDebugOverlay() {
+    if (!DEBUG) return;
+    const uiScale = getUIScale(this);
+    this.debugFpsText = this.add.text(10, 10, 'FPS: --', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${10 * uiScale}px`,
+      color: '#00ff00'
+    }).setOrigin(0, 0).setDepth(9999);
+
+    this.debugFpsEvent = this.time.addEvent({
+      delay: 500,
+      loop: true,
+      callback: () => {
+        if (!this.debugFpsText || !this.debugFpsText.scene) return;
+        const fps = Math.round(this.game.loop.actualFps || 0);
+        this.debugFpsText.setText(`FPS: ${fps}`);
+      }
+    });
+  }
+
   doRandomAction() {
     // Don't interrupt if any menu is open
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen) return;
 
     // Show time-based quote on first idle action (personalized if name set)
     if (!this.shownTimeQuote) {
@@ -845,7 +1246,7 @@ export default class TitleScene extends Phaser.Scene {
       this.sayQuote(this.getTimeBasedQuote());
     } else {
       // Just chill, play idle
-      this.idlePlayer.play('player-idle');
+      this.playIdleForActiveCharacter();
     }
   }
 
@@ -853,27 +1254,30 @@ export default class TitleScene extends Phaser.Scene {
     if (this.charState === 'walking') return;
 
     this.charState = 'walking';
-    this.charTarget = { x: targetX, y: targetY };
+    this.charTarget = { x: targetX, y: this.idlePlayer.y };
 
     // Face the right direction
     const dx = targetX - this.idlePlayer.x;
     this.idlePlayer.setFlipX(dx < 0);
 
     // Play walk animation
-    this.idlePlayer.play('player-walk-side');
+    this.playWalkForActiveCharacter();
 
-    // Tween to target
+    // Tween to target (horizontal only: keep same Y aligned with Docs)
     this.tweens.add({
       targets: this.idlePlayer,
       x: targetX,
-      y: targetY,
       duration: Math.abs(dx) * 8 + 500,
       ease: 'Linear',
       onComplete: () => {
         this.charState = 'idle';
-        this.idlePlayer.play('player-idle');
+        this.playIdleForActiveCharacter();
 
         // Check if near warglaive
+        if (!this.warglaiveDecor || !this.warglaiveDecor.scene) {
+          this.nearWarglaive = false;
+          return;
+        }
         const distToWarglaive = Phaser.Math.Distance.Between(
           this.idlePlayer.x, this.idlePlayer.y,
           this.warglaiveDecor.x, this.warglaiveDecor.y
@@ -903,10 +1307,10 @@ export default class TitleScene extends Phaser.Scene {
     const uiScale = getUIScale(this);
     const w = this.scale.width || 800;
 
-    // Posicionar bocadillo a la derecha del personaje para no solapar menú ni leaderboard
-    const bubbleOffsetX = 110 * uiScale;
+    // Align speech bubble with the selected character on the title screen.
+    const bubbleOffsetX = 70 * uiScale;
     let bubbleX = this.idlePlayer.x + bubbleOffsetX;
-    const bubbleY = this.idlePlayer.y - 80 * uiScale;
+    const bubbleY = this.idlePlayer.y - 125 * uiScale;
     const bubbleWidth = 190 * uiScale;
     const bubbleHeight = 65 * uiScale;
     // Evitar que se salga por la derecha
@@ -934,16 +1338,25 @@ export default class TitleScene extends Phaser.Scene {
       8
     );
 
-    // Triángulo apuntando al personaje (burbuja a la derecha)
-    const leftEdge = bubbleX - bubbleWidth / 2;
+    // Pointer from bubble bottom toward character head.
+    const bubbleLeft = bubbleX - bubbleWidth / 2;
+    const bubbleRight = bubbleX + bubbleWidth / 2;
+    const bubbleBottom = bubbleY + bubbleHeight / 2;
+    const pointerBaseX = Phaser.Math.Clamp(
+      this.idlePlayer.x + 16 * uiScale,
+      bubbleLeft + 14 * uiScale,
+      bubbleRight - 14 * uiScale
+    );
+    const pointerTipX = this.idlePlayer.x + 10 * uiScale;
+    const pointerTipY = this.idlePlayer.y - 48 * uiScale;
     this.speechBubble.fillTriangle(
-      leftEdge, bubbleY - 6,
-      leftEdge, bubbleY + 6,
-      leftEdge - 10 * uiScale, bubbleY
+      pointerBaseX - 8 * uiScale, bubbleBottom,
+      pointerBaseX + 8 * uiScale, bubbleBottom,
+      pointerTipX, pointerTipY
     );
     this.speechBubble.lineStyle(2, 0x00ffff, 1);
-    this.speechBubble.lineBetween(leftEdge, bubbleY - 6, leftEdge - 10 * uiScale, bubbleY);
-    this.speechBubble.lineBetween(leftEdge - 10 * uiScale, bubbleY, leftEdge, bubbleY + 6);
+    this.speechBubble.lineBetween(pointerBaseX - 8 * uiScale, bubbleBottom, pointerTipX, pointerTipY);
+    this.speechBubble.lineBetween(pointerTipX, pointerTipY, pointerBaseX + 8 * uiScale, bubbleBottom);
 
     // Set text
     this.speechText.setPosition(bubbleX, bubbleY);
@@ -1053,6 +1466,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   startTitleDefense() {
+    if (!this.titleDefenseEnabled) return;
     // Spawn enemies periodically on title screen
     this.time.addEvent({
       delay: this.enemySpawnInterval,
@@ -1076,8 +1490,9 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   spawnTitleEnemy() {
+    if (!this.titleDefenseEnabled) return;
     // Don't spawn if menus are open
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen) return;
 
     const uiScale = getUIScale(this);
     const w = this.scale.width || 800;
@@ -1089,10 +1504,10 @@ export default class TitleScene extends Phaser.Scene {
 
     // Create enemy sprite (use bug texture)
     const enemy = this.add.sprite(x, y, 'bug');
-    enemy.setScale(0.85 * uiScale); // Werewolf más grande y visible
+    enemy.setScale(1.0 * uiScale); // Mobs más grandes y visibles
     enemy.play('bug-walk');
-    enemy.setAlpha(0.6);            // Más sutil, efecto background
-    enemy.setDepth(-3);             // Detrás del texto del menú
+    enemy.setAlpha(0.75);           // Visible but still subtle
+    enemy.setDepth(6);              // In front of background layers
     enemy.health = 1;
     enemy.speed = Phaser.Math.Between(15, 30);
 
@@ -1111,6 +1526,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   updateTitleDefense() {
+    if (!this.titleDefenseEnabled) return;
     // Move enemies in a gentle run across the screen (background effect)
     this.titleEnemies = this.titleEnemies.filter(enemy => {
       if (!enemy.active) return false;
@@ -1161,8 +1577,9 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   titleAttack() {
+    if (!this.titleDefenseEnabled) return;
     // Don't attack if menus are open or walking
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen) return;
     if (this.charState === 'walking') return;
 
     // Find nearest enemy
@@ -1264,15 +1681,15 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   setupInput() {
-    // Arrow keys
-    this.input.keyboard.on('keydown-UP', () => this.moveSelection(-1));
-    this.input.keyboard.on('keydown-DOWN', () => this.moveSelection(1));
-    this.input.keyboard.on('keydown-W', () => this.moveSelection(-1));
-    this.input.keyboard.on('keydown-S', () => this.moveSelection(1));
-
-    // Enter/Space to select
-    this.input.keyboard.on('keydown-ENTER', () => this.selectOption());
-    this.input.keyboard.on('keydown-SPACE', () => this.selectOption());
+    // Navegación: flechas (ArrowUp/Down) y WASD — handler genérico para máxima compatibilidad
+    this.onKeyDownHandler = (event) => {
+      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen) return;
+      const k = event.key?.toLowerCase?.() || event.key;
+      if (k === 'arrowup' || k === 'up' || k === 'w') this.moveSelection(-1);
+      else if (k === 'arrowdown' || k === 'down' || k === 's') this.moveSelection(1);
+      else if (k === 'enter' || k === ' ') { event.preventDefault(); this.selectOption(); }
+    };
+    this.input.keyboard.on('keydown', this.onKeyDownHandler);
 
     // Click on menu items
     this.menuTexts.forEach((text, index) => {
@@ -1289,6 +1706,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   moveSelection(direction) {
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen) return;
     Audio.initAudio();
 
     this.selectedOption += direction;
@@ -1296,31 +1714,66 @@ export default class TitleScene extends Phaser.Scene {
     if (this.selectedOption >= this.menuOptions.length) this.selectedOption = 0;
 
     this.updateMenuVisuals();
+    if (DEBUG) {
+      const opt = this.menuOptions[this.selectedOption];
+      // eslint-disable-next-line no-console
+      console.log('[TitleScene] selection changed ->', opt);
+    }
 
-    // Play blip sound
-    Audio.playXPGain();
+    // Pequeño sonido tipo terminal al mover
+    Audio.playShoot();
   }
 
   updateMenuVisuals() {
-    const startY = this.menuStartY ?? this.scale.height * 0.42;
-    const spacing = this.menuSpacing ?? 40 * getUIScale(this);
-
     this.menuTexts.forEach((text, index) => {
-      if (index === this.selectedOption) {
+      const meta = this.menuMeta?.[index] || {};
+      const isSelected = index === this.selectedOption;
+      if (meta.isPrimary) {
         text.setColor('#00ffff');
         text.setFontStyle('bold');
+        text.setAlpha(1);
+        text.setScale(1);
       } else {
-        text.setColor('#666666');
-        text.setFontStyle('normal');
+        text.setColor('#00ffff');
+        text.setFontStyle(isSelected ? 'bold' : 'normal');
+        text.setAlpha(isSelected ? 1 : 0.7);
+        text.setScale(isSelected ? 1.05 : 1.0);
       }
     });
 
-    // Move selector to match selected menu item
-    this.selector.setY(startY + this.selectedOption * spacing);
+    // Reposicionar selector junto a la primera letra del texto seleccionado
+    const target = this.menuTexts[this.selectedOption];
+    if (target && this.selector) {
+      const offset = this.menuSelectorArrowOffset ?? 20;
+      this.selector.setY(target.y);
+      this.selector.setX(target.x - target.width / 2 - offset);
+    }
+
+    // Mantener el hint ZK alineado si cambia layout (por ejemplo, idioma)
+    if (this.zkHintText && this.menuMeta) {
+      const primaryIndex = this.menuMeta.findIndex(m => m.isPrimary);
+      const primaryText = primaryIndex >= 0 ? this.menuTexts[primaryIndex] : null;
+      if (primaryText) {
+        const gapBelowCta = 12;
+        this.zkHintText.setPosition(0, primaryText.y + primaryText.height / 2 + gapBelowCta);
+      }
+    }
   }
 
   selectOption() {
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen) return;
     Audio.initAudio();
+
+    // Flash neon rápido en el item seleccionado
+    const currentText = this.menuTexts?.[this.selectedOption];
+    if (currentText) {
+      this.tweens.add({
+        targets: currentText,
+        alpha: { from: 1, to: 0.2 },
+        duration: 90,
+        yoyo: true
+      });
+    }
 
     const option = this.menuOptions[this.selectedOption];
 
@@ -1371,6 +1824,10 @@ export default class TitleScene extends Phaser.Scene {
         this.showWeapons();
         break;
 
+      case 'CHARACTER':
+        this.showCharacterSelect();
+        break;
+
       case 'SETTINGS':
         this.showSettings();
         break;
@@ -1384,11 +1841,113 @@ export default class TitleScene extends Phaser.Scene {
         break;
 
       case 'DOCUMENTATION':
-        // Abre toda la doc en nueva pestaña
-        const docsUrl = new URL('docs/', window.location.href).href;
+        // Abre toda la doc en nueva pestaña (evita "Connection lost" al abrir nueva pestaña)
+        this.lastDocsOpenTime = Date.now();
+        const docsUrl = new URL('docs/index.html', window.location.href).href + '#COSMIC_CODER_GUIDE';
         if (typeof window !== 'undefined') window.open(docsUrl, '_blank', 'noopener');
         break;
+
+      case 'CREDITS':
+        this.showCredits();
+        break;
     }
+  }
+
+  showCredits() {
+    const cx = this.scale.width / 2;
+    const cy = this.scale.height / 2;
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
+
+    const boxW = 520;
+    const boxH = 460;
+    const textWidth = boxW - 48;
+    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
+    overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setDepth(1001).setInteractive({ useHandCursor: true });
+
+    let currentY = cy - boxH / 2 + 36;
+
+    const title = this.add.text(cx, currentY, t('credits.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${24 * uiScale}px`,
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5, 0).setDepth(1002);
+    currentY += title.height + 12;
+
+    const createdBy = this.add.text(cx, currentY, t('credits.developed_by'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${14 * uiScale}px`,
+      color: '#ffd700',
+      fontStyle: 'bold'
+    }).setOrigin(0.5, 0).setDepth(1002);
+    currentY += createdBy.height + 8;
+
+    const xLink = this.add.text(cx, currentY, `${t('credits.x_twitter')}: x.com/kl0ren`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${11 * uiScale}px`,
+      color: '#00aaff'
+    }).setOrigin(0.5, 0).setDepth(1002).setInteractive({ useHandCursor: true });
+    xLink.on('pointerdown', () => window.open('https://x.com/kl0ren', '_blank'));
+    xLink.on('pointerover', () => xLink.setColor('#00ffff'));
+    xLink.on('pointerout', () => xLink.setColor('#00aaff'));
+    currentY += xLink.height + 16;
+
+    const musicTitle = this.add.text(cx, currentY, t('credits.music_title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${13 * uiScale}px`,
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5, 0).setDepth(1002);
+    currentY += musicTitle.height + 10;
+
+    const lineTexts = [];
+    const musicEntries = [
+      [t('credits.menu_track'), t('credits.menu_author')],
+      [t('credits.gameplay_track1'), t('credits.gameplay_author1')],
+      [t('credits.gameplay_track2'), t('credits.gameplay_author2')]
+    ];
+
+    musicEntries.forEach(([track, author]) => {
+      const txt = this.add.text(cx, currentY, `${track} — ${author}`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${11 * uiScale}px`,
+        color: '#cccccc',
+        align: 'center'
+      }).setOrigin(0.5, 0).setDepth(1002);
+      lineTexts.push(txt);
+      currentY += txt.height + 6;
+    });
+
+    const closeHint = this.add.text(cx, cy + boxH / 2 - 28, t('prompt.any_key_close'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${11 * uiScale}px`,
+      color: '#00aaff'
+    }).setOrigin(0.5).setDepth(1002).setInteractive({ useHandCursor: true });
+
+    const close = () => {
+      backdrop.destroy();
+      overlay.destroy();
+      title.destroy();
+      createdBy.destroy();
+      xLink.destroy();
+      musicTitle.destroy();
+      lineTexts.forEach(el => el.destroy());
+      closeHint.destroy();
+      this.input.keyboard.off('keydown', close);
+      this.input.keyboard.off('keydown-ESC', close);
+    };
+
+    backdrop.on('pointerdown', close);
+    overlay.on('pointerdown', close);
+    closeHint.on('pointerdown', close);
+    this.input.keyboard.once('keydown', close);
+    this.input.keyboard.once('keydown-ESC', close);
   }
 
   showDocumentation() {
@@ -1417,10 +1976,12 @@ export default class TitleScene extends Phaser.Scene {
 
     const baseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_DOCS_BASE_URL) || (typeof window !== 'undefined' ? window.location.origin + '/docs' : '/docs');
     const docsUrl = baseUrl.replace(/\/$/, '') + (baseUrl.endsWith('/') ? '' : '/');
+    const lang = window.VIBE_SETTINGS?.language === 'es' ? 'es' : 'en';
     const links = [
-      { label: t('documentation.guide'), path: '' },
-      { label: t('documentation.technical'), path: '/TECHNICAL_DOCUMENTATION.md' },
-      { label: t('documentation.zk_setup'), path: '/ZK_REAL_SETUP.md' }
+      { label: t('documentation.how_it_works'), path: lang === 'es' ? '/HOW_IT_WORKS.md' : '/HOW_IT_WORKS_en.md' },
+      { label: t('documentation.guide'), path: lang === 'es' ? '/COSMIC_CODER_GUIDE_es.md' : '/COSMIC_CODER_GUIDE_en.md' },
+      { label: t('documentation.technical'), path: lang === 'es' ? '/TECHNICAL_DOCUMENTATION_es.md' : '/TECHNICAL_DOCUMENTATION.md' },
+      { label: t('documentation.zk_setup'), path: lang === 'es' ? '/ZK_REAL_SETUP_es.md' : '/ZK_REAL_SETUP.md' }
     ];
 
     links.forEach((link, i) => {
@@ -1523,14 +2084,25 @@ export default class TitleScene extends Phaser.Scene {
     const tableEndY = tableStartY + maxRows * lineHeight;
 
     if (top.length === 0) {
-      const msg = walletConnected ? t('leaderboard.empty') : t('leaderboard.connect_hint');
-      container.add(this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH / 2 - 20, msg, {
+      const centerX = overlayLeft + overlayW / 2;
+      const centerY = overlayTop + overlayH / 2 - 20;
+      const msg = walletConnected ? t('leaderboard.empty_short') : t('leaderboard.connect_hint');
+      container.add(this.add.text(centerX, centerY, msg, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: fs(walletConnected ? 16 : 13),
         color: '#aaaaaa',
         align: 'center',
         wordWrap: { width: overlayW - 80 }
       }).setOrigin(0.5));
+      if (walletConnected) {
+        container.add(this.add.text(centerX, centerY + 28, t('leaderboard.submit_hint'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: fs(11),
+          color: '#666666',
+          align: 'center',
+          wordWrap: { width: overlayW - 80 }
+        }).setOrigin(0.5));
+      }
     } else {
       const toShow = top.slice(0, maxRows);
       toShow.forEach((entry, i) => {
@@ -1543,9 +2115,8 @@ export default class TitleScene extends Phaser.Scene {
       });
     }
 
-    // Pie fijo: hint de wallet, reiniciar local, cerrar
+    // Pie fijo: hint de wallet, cerrar
     const footerHintY = overlayTop + overlayH - 52;
-    const footerResetY = overlayTop + overlayH - 38;
     const footerCloseY = overlayTop + overlayH - 24;
     if (!walletConnected && top.length > 0) {
       container.add(this.add.text(overlayLeft + overlayW / 2, footerHintY, t('leaderboard.connect_hint'), {
@@ -1556,21 +2127,6 @@ export default class TitleScene extends Phaser.Scene {
         wordWrap: { width: overlayW - 60 }
       }).setOrigin(0.5));
     }
-    const resetBtn = this.add.text(overlayLeft + overlayW / 2, footerResetY, t('leaderboard.reset_local'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: fs(10),
-      color: '#666666'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    resetBtn.on('pointerover', () => resetBtn.setColor('#00aaff'));
-    resetBtn.on('pointerout', () => resetBtn.setColor('#666666'));
-    resetBtn.on('pointerdown', () => {
-      LeaderboardManager.reset();
-      container.destroy();
-      this.input.keyboard.off('keydown', close);
-      this.input.off('pointerdown', close);
-      this.showLeaderboard();
-    });
-    container.add(resetBtn);
     const closeText = this.add.text(overlayLeft + overlayW / 2, footerCloseY, t('leaderboard.back'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: fs(12),
@@ -1596,20 +2152,27 @@ export default class TitleScene extends Phaser.Scene {
     const w = this.scale.width || 800;
     const h = this.scale.height || 600;
 
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.97);
+    const boxW = 520;
+    const boxH = 460;
+    const overlayTop = cy - boxH / 2;
+
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
     backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
 
-    const overlay = this.add.rectangle(cx, cy, Math.min(600, w - 80), Math.min(400, h - 80), 0x0a0a14, 1);
+    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
     overlay.setDepth(1001).setInteractive({ useHandCursor: true });
 
-    const controlsTitle = this.add.text(cx, cy - 120, t('controls.title'), {
+    let currentY = overlayTop + 44;
+    const title = this.add.text(cx, currentY, t('controls.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${24 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
+    }).setOrigin(0.5, 0).setDepth(1002);
+    currentY += title.height + 20;
 
+    const lineHeight = 22 * uiScale;
     const controls = [
       t('controls.wasd'),
       t('controls.space'),
@@ -1617,45 +2180,45 @@ export default class TitleScene extends Phaser.Scene {
       t('controls.esc_p'),
       '',
       t('controls.auto_attack'),
-      t('controls.collect'),
-      '',
-      t('controls.connect'),
-      'npm run server'
+      t('controls.collect')
     ];
 
     const controlTexts = [];
-    controls.forEach((line, index) => {
-      const text = this.add.text(cx, cy - 75 + index * 22, line, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${13 * uiScale}px`,
-        color: line.includes('npm') ? '#ffff00' : '#e0e0e0'
-      }).setOrigin(0.5).setDepth(1002);
-      controlTexts.push(text);
+    controls.forEach((line) => {
+      if (line.length > 0) {
+        const isCmd = line.includes('npm');
+        const text = this.add.text(cx, currentY, line, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${13 * uiScale}px`,
+          color: isCmd ? '#ffff00' : '#e0e0e0',
+          align: 'center'
+        }).setOrigin(0.5, 0).setDepth(1002);
+        controlTexts.push(text);
+      }
+      currentY += lineHeight;
     });
 
-    const closeText = this.add.text(cx, cy + 155, t('prompt.any_key_close'), {
+    const closeHint = this.add.text(cx, overlayTop + boxH - 36, t('prompt.any_key_close'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${11 * uiScale}px`,
       color: '#00aaff'
-    }).setOrigin(0.5).setDepth(1002);
+    }).setOrigin(0.5).setDepth(1002).setInteractive({ useHandCursor: true });
 
     const closeControls = () => {
       backdrop.destroy();
       overlay.destroy();
-      controlsTitle.destroy();
-      closeText.destroy();
-      controlTexts.forEach(el => el.destroy());
+      title.destroy();
+      controlTexts.forEach((el) => el.destroy());
+      closeHint.destroy();
       this.input.keyboard.off('keydown', closeControls);
       this.input.keyboard.off('keydown-ESC', closeControls);
-      this.input.off('pointerdown', closeControls);
     };
 
     backdrop.on('pointerdown', closeControls);
     overlay.on('pointerdown', closeControls);
-    closeText.setInteractive({ useHandCursor: true }).on('pointerdown', closeControls);
+    closeHint.on('pointerdown', closeControls);
+    this.input.keyboard.on('keydown', closeControls);
     this.input.keyboard.on('keydown-ESC', closeControls);
-    this.input.keyboard.once('keydown', closeControls);
-    this.input.once('pointerdown', closeControls);
   }
 
   showSettings() {
@@ -1667,22 +2230,21 @@ export default class TitleScene extends Phaser.Scene {
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
     const uiScale = getUIScale(this);
-
     const w = this.scale.width || 800;
     const h = this.scale.height || 600;
+
     const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
     backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
 
-    const boxW = 580;
-    const boxH = isElectron ? 540 : 520;
+    const boxW = 600;
+    const boxH = 560;
     const overlayLeft = cx - boxW / 2;
     const overlayTop = cy - boxH / 2;
     const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001).setInteractive({ useHandCursor: false });
+    overlay.setDepth(1001).setInteractive({ useHandCursor: true });
 
-    // Título y lista bien dentro del cuadro (márgenes claros)
-    const titleY = overlayTop + 48;
+    const titleY = overlayTop + 40;
     const title = this.add.text(cx, titleY, t('settings.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${28 * uiScale}px`,
@@ -1690,198 +2252,125 @@ export default class TitleScene extends Phaser.Scene {
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
 
-    // Settings options (labels translated via t() at render time via labelKey)
     const settingsData = [
-      { key: 'music', labelKey: 'settings.MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); }},
+      { key: 'playerName', labelKey: 'settings.NAME', type: 'input', getValue: () => settings.playerName || t('settings.NOT_SET') },
+      { key: 'language', labelKey: 'settings.LANGUAGE', type: 'select', options: ['en', 'es'], optionLabels: [t('settings.lang_en'), t('settings.lang_es')], getValue: () => settings.language || 'en', setValue: (v) => { setLanguage(v); close(); this.scene.start('TitleScene'); } },
+      { key: 'music', labelKey: 'settings.MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); } },
       { key: 'sfx', labelKey: 'settings.SOUND_FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },
-      { key: 'autoMove', labelKey: 'settings.AUTO_MOVE', type: 'toggle', getValue: () => settings.autoMove, toggle: () => settings.toggle('autoMove') },
       { key: 'masterVol', labelKey: 'settings.MASTER_VOL', type: 'slider', getValue: () => settings.masterVolume, setValue: (v) => settings.setVolume('master', v) },
-      { key: 'playerName', labelKey: 'settings.NAME', type: 'input', getValue: () => settings.playerName || t('settings.NOT_SET'), setValue: (v) => settings.setPlayerName(v) },
-      {
-        key: 'language',
-        labelKey: 'settings.LANGUAGE',
-        type: 'select',
-        options: ['en', 'es'],
-        optionLabels: [t('settings.lang_en'), t('settings.lang_es')],
-        getValue: () => settings.language || 'en',
-        setValue: (v) => {
-          if (!setLanguage(v)) return;
-          this.settingsMenuOpen = false;
-          this.scene.start('TitleScene');
-        }
-      }
+      { key: 'menuMusicVol', labelKey: 'settings.MENU_MUSIC_VOL', type: 'slider', getValue: () => settings.menuMusicVolume, setValue: (v) => { settings.setVolume('menuMusic', v); Audio.updateMenuMusicVolume(); } },
+      { key: 'gameplayMusicVol', labelKey: 'settings.GAMEPLAY_MUSIC_VOL', type: 'slider', getValue: () => settings.gameplayMusicVolume, setValue: (v) => { settings.setVolume('gameplayMusic', v); Audio.updateGameplayMusicVolume(); } }
     ];
 
-    // Add Electron-specific settings when running in desktop app
+    const electronCache = { windowMode: 'floating', alwaysOnTop: false };
     if (isElectron) {
       settingsData.push(
         { key: 'divider1', labelKey: 'settings.DESKTOP_APP', type: 'divider' },
-        {
-          key: 'windowMode',
-          labelKey: 'settings.WINDOW_MODE',
-          type: 'select',
-          options: ['floating', 'cornerSnap', 'desktopWidget', 'miniHud'],
-          optionLabels: [t('settings.windowMode_floating'), t('settings.windowMode_cornerSnap'), t('settings.windowMode_desktopWidget'), t('settings.windowMode_miniHud')],
-          getValue: async () => await window.electronAPI.getSetting('windowMode') || 'floating',
-          setValue: (v) => window.electronAPI.setSetting('windowMode', v)
-        },
-        {
-          key: 'alwaysOnTop',
-          labelKey: 'settings.ALWAYS_ON_TOP',
-          type: 'toggle',
-          getValue: async () => await window.electronAPI.getSetting('alwaysOnTop') || false,
-          toggle: async () => {
-            const current = await window.electronAPI.getSetting('alwaysOnTop');
-            window.electronAPI.setSetting('alwaysOnTop', !current);
-          }
-        }
+        { key: 'windowMode', labelKey: 'settings.WINDOW_MODE', type: 'select', options: ['floating', 'cornerSnap', 'desktopWidget', 'miniHud'], optionLabels: [t('settings.windowMode_floating'), t('settings.windowMode_cornerSnap'), t('settings.windowMode_desktopWidget'), t('settings.windowMode_miniHud')], getValue: () => electronCache.windowMode, setValue: (v) => { window.electronAPI?.setSetting?.('windowMode', v); electronCache.windowMode = v; } },
+        { key: 'alwaysOnTop', labelKey: 'settings.ALWAYS_ON_TOP', type: 'toggle', getValue: () => electronCache.alwaysOnTop, toggle: async () => { try { const c = await window.electronAPI.getSetting('alwaysOnTop'); electronCache.alwaysOnTop = !c; window.electronAPI.setSetting('alwaysOnTop', electronCache.alwaysOnTop); updateVisuals(); } catch (_) {} } }
       );
     }
 
-    const spacingBase = isElectron ? 38 : 36;
-    const spacing = spacingBase * uiScale;
-    const listX = overlayLeft + 32;
+    const listX = overlayLeft + 36;
+    const listTop = overlayTop + 80;
+    const spacing = 38 * uiScale;
     const settingTexts = [];
 
-    // Cache for async values
-    const asyncValues = {};
+    const getVal = (s) => {
+      if (s.type === 'divider') return '';
+      if (typeof s.getValue === 'function') return s.getValue();
+      return s.type === 'toggle' ? false : s.type === 'slider' ? 0.5 : '';
+    };
 
-    // Initialize async values
-    const initAsyncValues = async () => {
-      for (const setting of settingsData) {
-        if (setting.getValue?.constructor?.name === 'AsyncFunction') {
-          asyncValues[setting.key] = await setting.getValue();
-        }
+    const formatVal = (s) => {
+      if (s.type === 'divider') return '';
+      if (s.type === 'toggle') return getVal(s) ? t('settings.on') : t('settings.off');
+      if (s.type === 'slider') {
+        const v = Math.round((getVal(s) || 0.5) * 100);
+        const b = Math.round(v / 10);
+        return '█'.repeat(b) + '░'.repeat(10 - b) + '  ' + v + '%';
       }
-    };
-
-    const getSettingValue = (setting) => {
-      if (setting.getValue?.constructor?.name === 'AsyncFunction') {
-        const v = asyncValues[setting.key];
-        if (v !== undefined) return v;
-        if (setting.type === 'toggle') return false;
-        if (setting.type === 'slider') return 0.5;
-        if (setting.type === 'select' && setting.options?.length) return setting.options[0];
-        return '';
+      if (s.type === 'input') return String(getVal(s) || '');
+      if (s.type === 'select') {
+        const v = getVal(s);
+        const i = (s.options || []).indexOf(v);
+        const idx = i >= 0 ? i : 0;
+        return '< ' + (s.optionLabels?.[idx] ?? s.options?.[idx] ?? v) + ' >';
       }
-      return setting.getValue?.();
+      return '';
     };
 
-    const contentCount = settingsData.length;
-    const listTop = overlayTop + 82;
-    const footerTop = overlayTop + boxH - 78;
-    const helpY = footerTop + 18;
-    const closeY = footerTop + 42;
+    settingsData.forEach((s, i) => {
+      const lbl = s.labelKey ? t(s.labelKey) : (s.label || '');
+      const txt = this.add.text(listX, listTop + i * spacing, s.type === 'divider' ? lbl : `${lbl}\n${formatVal(s)}`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: s.type === 'divider' ? `${12 * uiScale}px` : `${14 * uiScale}px`,
+        color: s.type === 'divider' ? '#666666' : (i === this.settingsSelectedIndex ? '#ffffff' : '#aaaaaa'),
+        align: 'left',
+        lineSpacing: 2
+      }).setOrigin(0, 0.5).setDepth(1002);
 
-    const renderSettings = () => {
-      settingsData.forEach((setting, index) => {
-        let valueStr = '';
-        if (setting.type === 'divider') {
-          valueStr = '';
-        } else if (setting.type === 'toggle') {
-          valueStr = getSettingValue(setting) ? t('settings.on') : t('settings.off');
-        } else if (setting.type === 'slider') {
-          const raw = getSettingValue(setting);
-          const val = Math.min(100, Math.max(0, Math.round((typeof raw === 'number' ? raw : 0.5) * 100)));
-          const bars = Math.round(val / 10);
-          valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + '  ' + val + '%';
-        } else if (setting.type === 'input') {
-          valueStr = (getSettingValue(setting) || '') + '';
-        } else if (setting.type === 'select') {
-          const currentVal = getSettingValue(setting);
-          const optionIndex = setting.options.indexOf(currentVal);
-          const safeIndex = optionIndex >= 0 ? optionIndex : 0;
-          valueStr = '< ' + (setting.optionLabels[safeIndex] || setting.options[safeIndex] || currentVal) + ' >';
-        }
-
-        const isDivider = setting.type === 'divider';
-        const label = setting.labelKey ? t(setting.labelKey) : setting.label;
-        const text = this.add.text(listX, listTop + index * spacing,
-          isDivider ? label : `${label}\n${valueStr}`, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: isDivider ? `${12 * uiScale}px` : `${14 * uiScale}px`,
-          color: isDivider ? '#666666' : (index === 0 ? '#00ffff' : '#888888'),
-          align: 'left',
-          lineSpacing: 2
-        }).setOrigin(0, 0.5).setDepth(1002);
-
-        settingTexts.push({ text, setting, index });
-      });
-    };
-
-    // Mostrar lista de ajustes de inmediato (luego se actualiza si hay valores async)
-    renderSettings();
-    initAsyncValues().then(() => updateVisuals()).catch(() => {});
+      if (s.type !== 'divider') {
+        txt.setInteractive({ useHandCursor: true });
+        txt.on('pointerover', () => { this.settingsSelectedIndex = i; updateVisuals(); });
+        txt.on('pointerdown', (ptr) => {
+          if (s.type === 'toggle') {
+            if (typeof s.toggle === 'function') { s.toggle(); updateVisuals(); Audio.playHit(); }
+          } else if (s.type === 'slider') {
+            const b = txt.getBounds();
+            const x = Math.max(0, Math.min(1, (ptr.x - b.left) / (b.width || 1)));
+            s.setValue(x);
+            updateVisuals();
+            Audio.playXPGain();
+          } else if (s.type === 'select') {
+            const v = getVal(s);
+            const idx = ((s.options || []).indexOf(v) + 1) % (s.options?.length || 1);
+            s.setValue(s.options[idx]);
+            updateVisuals();
+            Audio.playXPGain();
+          } else if (s.type === 'input') {
+            close();
+            this.showNameInput(false, () => {});
+          }
+        });
+      }
+      settingTexts.push({ text: txt, setting: s, index: i });
+    });
 
     const selector = this.add.text(listX - 20, listTop, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${18 * uiScale}px`,
-      color: '#ffff00'
+      color: '#00ffff',
+      fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
 
-    const helpText = this.add.text(cx, helpY, t('prompt.up_down_adjust'), {
+    const footerTop = overlayTop + boxH - 50;
+    const instructions = this.add.text(cx, footerTop, t('prompt.up_down_adjust'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${11 * uiScale}px`,
-      color: '#888888'
+      color: '#666666'
     }).setOrigin(0.5).setDepth(1002);
 
-    const closeHint = this.add.text(cx, closeY, t('prompt.esc_close'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${12 * uiScale}px`,
-      color: '#00aaff'
-    }).setOrigin(0.5).setDepth(1002);
-
-    const closeBtn = this.add.text(cx, closeY + 22, t('leaderboard.back'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${14 * uiScale}px`,
-      color: '#00ffff'
-    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
-    closeBtn.on('pointerdown', close);
-    closeBtn.on('pointerover', () => closeBtn.setColor('#ffffff'));
-    closeBtn.on('pointerout', () => closeBtn.setColor('#00ffff'));
-
-    // Update visuals
-    const updateVisuals = async () => {
-      // Refresh async values
-      for (const setting of settingsData) {
-        if (setting.getValue?.constructor?.name === 'AsyncFunction') {
-          asyncValues[setting.key] = await setting.getValue();
-        }
-      }
-
-      settingTexts.forEach((item, index) => {
-        let valueStr = '';
-        const isDivider = item.setting.type === 'divider';
-
-        if (isDivider) {
-          valueStr = '';
-        } else if (item.setting.type === 'toggle') {
-          valueStr = getSettingValue(item.setting) ? t('settings.on') : t('settings.off');
-        } else if (item.setting.type === 'slider') {
-          const raw = getSettingValue(item.setting);
-          const val = Math.min(100, Math.max(0, Math.round((typeof raw === 'number' ? raw : 0.5) * 100)));
-          const bars = Math.round(val / 10);
-          valueStr = '█'.repeat(bars) + '░'.repeat(10 - bars) + '  ' + val + '%';
-        } else if (item.setting.type === 'input') {
-          valueStr = (getSettingValue(item.setting) || '') + '';
-        } else if (item.setting.type === 'select') {
-          const currentVal = getSettingValue(item.setting);
-          const optionIndex = item.setting.options.indexOf(currentVal);
-          const safeIndex = optionIndex >= 0 ? optionIndex : 0;
-          valueStr = `< ${item.setting.optionLabels[safeIndex] || item.setting.options[safeIndex] || currentVal} >`;
-        }
-
-        const lbl = item.setting.labelKey ? t(item.setting.labelKey) : item.setting.label;
-        item.text.setText(isDivider ? lbl : `${lbl}\n${valueStr}`);
-        item.text.setColor(isDivider ? '#666666' : (index === this.settingsSelectedIndex ? '#00ffff' : '#888888'));
+    const updateVisuals = () => {
+      settingTexts.forEach((it, i) => {
+        const s = it.setting;
+        const lbl = s.labelKey ? t(s.labelKey) : (s.label || '');
+        it.text.setText(s.type === 'divider' ? lbl : `${lbl}\n${formatVal(s)}`);
+        it.text.setColor(s.type === 'divider' ? '#666666' : (i === this.settingsSelectedIndex ? '#ffffff' : '#aaaaaa'));
       });
-      selector.setY(listTop + this.settingsSelectedIndex * spacing);
-      // Hide selector on dividers
-      const currentSetting = settingsData[this.settingsSelectedIndex];
-      selector.setVisible(currentSetting?.type !== 'divider');
+      const cur = settingsData[this.settingsSelectedIndex];
+      const showSel = cur && cur.type !== 'divider';
+      selector.setVisible(showSel);
+      if (showSel) selector.setY(listTop + this.settingsSelectedIndex * spacing);
     };
 
-    // Input handlers
+    if (isElectron) {
+      Promise.all([
+        window.electronAPI.getSetting('windowMode').then(v => { electronCache.windowMode = v || 'floating'; }).catch(() => {}),
+        window.electronAPI.getSetting('alwaysOnTop').then(v => { electronCache.alwaysOnTop = !!v; }).catch(() => {})
+      ]).then(updateVisuals).catch(() => {});
+    }
+
     const moveUp = () => {
       do {
         this.settingsSelectedIndex--;
@@ -1900,101 +2389,75 @@ export default class TitleScene extends Phaser.Scene {
       Audio.playXPGain();
     };
 
-    const adjustLeft = async () => {
-      const item = settingsData[this.settingsSelectedIndex];
-      if (item.type === 'slider') {
-        item.setValue(Math.max(0, item.getValue() - 0.1));
-        updateVisuals();
-      } else if (item.type === 'select') {
-        const currentVal = getSettingValue(item);
-        const currentIndex = item.options.indexOf(currentVal);
-        const newIndex = currentIndex <= 0 ? item.options.length - 1 : currentIndex - 1;
-        await item.setValue(item.options[newIndex]);
-        asyncValues[item.key] = item.options[newIndex];
-        updateVisuals();
+    const adjustLeft = () => {
+      const s = settingsData[this.settingsSelectedIndex];
+      if (!s || s.type === 'divider') return;
+      if (s.type === 'slider') {
+        s.setValue(Math.max(0, (getVal(s) || 0.5) - 0.1));
+      } else if (s.type === 'select') {
+        const v = getVal(s);
+        const arr = s.options || [];
+        const idx = Math.max(0, arr.indexOf(v) - 1);
+        const newIdx = idx < 0 ? arr.length - 1 : idx;
+        s.setValue(arr[newIdx]);
         Audio.playXPGain();
       }
+      updateVisuals();
     };
 
-    const adjustRight = async () => {
-      const item = settingsData[this.settingsSelectedIndex];
-      if (item.type === 'slider') {
-        item.setValue(Math.min(1, item.getValue() + 0.1));
-        updateVisuals();
-      } else if (item.type === 'select') {
-        const currentVal = getSettingValue(item);
-        const currentIndex = item.options.indexOf(currentVal);
-        const newIndex = (currentIndex + 1) % item.options.length;
-        await item.setValue(item.options[newIndex]);
-        asyncValues[item.key] = item.options[newIndex];
-        updateVisuals();
+    const adjustRight = () => {
+      const s = settingsData[this.settingsSelectedIndex];
+      if (!s || s.type === 'divider') return;
+      if (s.type === 'slider') {
+        s.setValue(Math.min(1, (getVal(s) || 0.5) + 0.1));
+      } else if (s.type === 'select') {
+        const v = getVal(s);
+        const arr = s.options || [];
+        const idx = (arr.indexOf(v) + 1) % arr.length;
+        s.setValue(arr[idx]);
         Audio.playXPGain();
       }
+      updateVisuals();
     };
 
-    const select = async () => {
-      const item = settingsData[this.settingsSelectedIndex];
-      if (item.type === 'toggle') {
-        if (item.toggle.constructor.name === 'AsyncFunction') {
-          await item.toggle();
-          asyncValues[item.key] = await item.getValue();
-        } else {
-          item.toggle();
-        }
+    const select = () => {
+      const s = settingsData[this.settingsSelectedIndex];
+      if (!s || s.type === 'divider') return;
+      if (s.type === 'toggle') {
+        s.toggle?.();
         updateVisuals();
         Audio.playHit();
-      } else if (item.type === 'input') {
-        // Use in-game name input
+      } else if (s.type === 'input') {
         close();
-        this.showNameInput(false, () => {
-          // Settings will be saved by showNameInput
-        });
-      } else if (item.type === 'select') {
-        // No hacer nada en Enter: el valor ya se aplicó al usar flechas
+        this.showNameInput(false, () => {});
       }
     };
 
-    const escKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+    const onSettingsKeyDown = (e) => {
+      const k = (e.key || '').toLowerCase();
+      if (k === 'escape') { e.preventDefault(); close(); return; }
+      if (k === 'arrowup' || k === 'up' || k === 'w') { e.preventDefault(); moveUp(); return; }
+      if (k === 'arrowdown' || k === 'down' || k === 's') { e.preventDefault(); moveDown(); return; }
+      if (k === 'arrowleft' || k === 'left' || k === 'a') { e.preventDefault(); adjustLeft(); return; }
+      if (k === 'arrowright' || k === 'right' || k === 'd') { e.preventDefault(); adjustRight(); return; }
+      if (k === 'enter' || k === ' ') { e.preventDefault(); select(); return; }
+    };
 
     const close = () => {
       if (!this.settingsMenuOpen) return;
       this.settingsMenuOpen = false;
-      this.input.keyboard.off('keydown-UP', moveUp);
-      this.input.keyboard.off('keydown-DOWN', moveDown);
-      this.input.keyboard.off('keydown-W', moveUp);
-      this.input.keyboard.off('keydown-S', moveDown);
-      this.input.keyboard.off('keydown-LEFT', adjustLeft);
-      this.input.keyboard.off('keydown-RIGHT', adjustRight);
-      this.input.keyboard.off('keydown-A', adjustLeft);
-      this.input.keyboard.off('keydown-D', adjustRight);
-      this.input.keyboard.off('keydown-ENTER', select);
-      this.input.keyboard.off('keydown-SPACE', select);
-      escKey.off('down', onEscClose);
-
+      this.input.keyboard.off('keydown', onSettingsKeyDown);
       backdrop.destroy();
       overlay.destroy();
       title.destroy();
       selector.destroy();
-      helpText.destroy();
-      closeHint.destroy();
-      if (closeBtn && closeBtn.destroy) closeBtn.destroy();
-      settingTexts.forEach(item => item.text.destroy());
+      instructions.destroy();
+      settingTexts.forEach(it => it.text.destroy());
     };
 
-    const onEscClose = () => close();
-    this.input.keyboard.on('keydown-UP', moveUp);
-    this.input.keyboard.on('keydown-DOWN', moveDown);
-    this.input.keyboard.on('keydown-W', moveUp);
-    this.input.keyboard.on('keydown-S', moveDown);
-
+    this.input.keyboard.on('keydown', onSettingsKeyDown);
     backdrop.on('pointerdown', close);
-    this.input.keyboard.on('keydown-LEFT', adjustLeft);
-    this.input.keyboard.on('keydown-RIGHT', adjustRight);
-    this.input.keyboard.on('keydown-A', adjustLeft);
-    this.input.keyboard.on('keydown-D', adjustRight);
-    this.input.keyboard.on('keydown-ENTER', select);
-    this.input.keyboard.on('keydown-SPACE', select);
-    escKey.on('down', onEscClose);
+    overlay.on('pointerdown', close);
   }
 
   showNameInput(isFirstTime = false, callback = null) {
@@ -2146,31 +2609,46 @@ export default class TitleScene extends Phaser.Scene {
 
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
 
-    // Create overlay
-    const overlay = this.add.rectangle(cx, cy, 700, 500, 0x000000, 0.95);
+    // Backdrop (como Settings)
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
+
+    // Recuadro centrado (como Settings)
+    const boxW = 600;
+    const boxH = 540;
+    const overlayLeft = cx - boxW / 2;
+    const overlayTop = cy - boxH / 2;
+    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setDepth(1001).setInteractive({ useHandCursor: false });
 
-    const title = this.add.text(cx, 80, t('upgrades.title'), {
+    // Título dentro del recuadro
+    const titleY = overlayTop + 40;
+    const title = this.add.text(cx, titleY, t('upgrades.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
+      fontSize: `${28 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Currency display
-    const currencyText = this.add.text(cx, 115, `${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`, {
+    // Currency dentro del recuadro
+    const currencyY = overlayTop + 72;
+    const currencyText = this.add.text(cx, currencyY, `${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
+      fontSize: `${16 * uiScale}px`,
       color: '#ffd700'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Upgrade list (left-aligned, names padded so level bars align)
+    // Upgrade list dentro del recuadro (márgenes claros)
     const upgradeKeys = Object.keys(window.VIBE_UPGRADES.upgrades);
     const upgradeTexts = [];
-    const listX = 140;
-    const startY = 160;
-    const spacing = 42;
+    const listX = overlayLeft + 36;
+    const startY = overlayTop + 110;
+    const spacing = 40 * uiScale;
     const namePadLen = 14;
 
     upgradeKeys.forEach((key, index) => {
@@ -2189,11 +2667,11 @@ export default class TitleScene extends Phaser.Scene {
       const text = this.add.text(listX, startY + index * spacing,
         `${paddedName} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`, {
         fontFamily: '"Consolas", "Monaco", monospace',
-        fontSize: '12px',
+        fontSize: `${12 * uiScale}px`,
         color: index === 0 ? '#00ffff' : '#888888',
         align: 'left',
         lineSpacing: 2
-      }).setOrigin(0, 0.5);
+      }).setOrigin(0, 0.5).setDepth(1002);
 
       if (!canAfford && !maxed) {
         text.setColor(index === 0 ? '#ff6666' : '#666666');
@@ -2202,20 +2680,21 @@ export default class TitleScene extends Phaser.Scene {
       upgradeTexts.push({ text, key, canAfford, maxed });
     });
 
-    // Selector
-    const selector = this.add.text(120, startY, '>', {
+    // Selector (dentro del recuadro)
+    const selector = this.add.text(listX - 20, startY, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
+      fontSize: `${18 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    });
+    }).setOrigin(0.5).setDepth(1002);
 
-    // Instructions
-    const instructions = this.add.text(400, 530, t('prompt.up_down_purchase'), {
+    // Instructions dentro del recuadro (footer)
+    const footerTop = overlayTop + boxH - 52;
+    const instructions = this.add.text(cx, footerTop, t('prompt.up_down_purchase'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '11px',
+      fontSize: `${11 * uiScale}px`,
       color: '#666666'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
     // Update visuals function
     const updateVisuals = () => {
@@ -2277,16 +2756,18 @@ export default class TitleScene extends Phaser.Scene {
       }
     };
 
-    const close = () => {
-      // Cleanup
-      this.input.keyboard.off('keydown-UP', moveUp);
-      this.input.keyboard.off('keydown-DOWN', moveDown);
-      this.input.keyboard.off('keydown-W', moveUp);
-      this.input.keyboard.off('keydown-S', moveDown);
-      this.input.keyboard.off('keydown-ENTER', purchase);
-      this.input.keyboard.off('keydown-SPACE', purchase);
-      this.input.keyboard.off('keydown-ESC', close);
+    const onUpgradesKeyDown = (event) => {
+      const k = event.key?.toLowerCase?.() || event.key;
+      if (k === 'escape') close();
+      else if (k === 'arrowup' || k === 'up' || k === 'w') moveUp();
+      else if (k === 'arrowdown' || k === 'down' || k === 's') moveDown();
+      else if (k === 'enter' || k === ' ') { event.preventDefault(); purchase(); }
+    };
 
+    const close = () => {
+      this.input.keyboard.off('keydown', onUpgradesKeyDown);
+
+      backdrop.destroy();
       overlay.destroy();
       title.destroy();
       currencyText.destroy();
@@ -2297,14 +2778,8 @@ export default class TitleScene extends Phaser.Scene {
       this.upgradeMenuOpen = false;
     };
 
-    // Bind inputs
-    this.input.keyboard.on('keydown-UP', moveUp);
-    this.input.keyboard.on('keydown-DOWN', moveDown);
-    this.input.keyboard.on('keydown-W', moveUp);
-    this.input.keyboard.on('keydown-S', moveDown);
-    this.input.keyboard.on('keydown-ENTER', purchase);
-    this.input.keyboard.on('keydown-SPACE', purchase);
-    this.input.keyboard.on('keydown-ESC', close);
+    this.input.keyboard.on('keydown', onUpgradesKeyDown);
+    backdrop.on('pointerdown', close);
   }
 
   showWeapons() {
@@ -2672,12 +3147,15 @@ export default class TitleScene extends Phaser.Scene {
       Audio.playXPGain();
     };
 
+    const onWeaponsKeyDown = (event) => {
+      const k = event.key?.toLowerCase?.() || event.key;
+      if (k === 'escape') close();
+      else if (k === 'arrowleft' || k === 'left' || k === 'a') tabLeft();
+      else if (k === 'arrowright' || k === 'right' || k === 'd') tabRight();
+    };
+
     const close = () => {
-      this.input.keyboard.off('keydown-LEFT', tabLeft);
-      this.input.keyboard.off('keydown-RIGHT', tabRight);
-      this.input.keyboard.off('keydown-A', tabLeft);
-      this.input.keyboard.off('keydown-D', tabRight);
-      this.input.keyboard.off('keydown-ESC', close);
+      this.input.keyboard.off('keydown', onWeaponsKeyDown);
 
       clearContent();
       backdrop.destroy();
@@ -2689,11 +3167,148 @@ export default class TitleScene extends Phaser.Scene {
       this.weaponMenuOpen = false;
     };
 
+    this.input.keyboard.on('keydown', onWeaponsKeyDown);
     backdrop.on('pointerdown', close);
-    this.input.keyboard.on('keydown-LEFT', tabLeft);
-    this.input.keyboard.on('keydown-RIGHT', tabRight);
-    this.input.keyboard.on('keydown-A', tabLeft);
-    this.input.keyboard.on('keydown-D', tabRight);
-    this.input.keyboard.on('keydown-ESC', close);
+  }
+
+  showCharacterSelect() {
+    this.characterMenuOpen = true;
+    const CHAR_IDS = ['vibecoder', 'destroyer', 'swordsman'];
+    let selectedIndex = CHAR_IDS.indexOf(progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder');
+    if (selectedIndex < 0) selectedIndex = 0;
+
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const overlayW = Math.min(620, w - 40);
+    const overlayH = Math.min(560, h - 40);
+    const overlayLeft = cx - overlayW / 2;
+    const overlayTop = cy - overlayH / 2;
+
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
+
+    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
+    overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setDepth(1001).setInteractive({ useHandCursor: false });
+
+    const title = this.add.text(cx, overlayTop + 36, t('menu.CHARACTER'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${26 * uiScale}px`,
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(1002);
+
+    const spriteCenterX = cx;
+    // Nombre justo debajo del título PERSONAJE
+    const previewName = this.add.text(cx, overlayTop + 80 * uiScale, 'VibeCoder', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${20 * uiScale}px`,
+      color: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setDepth(1002);
+
+    // Robot centrado horizontal y suficientemente separado del borde inferior
+    const spriteCenterY = overlayTop + overlayH * 0.41;
+    const previewSprite = this.add.sprite(spriteCenterX, spriteCenterY, 'player', 0);
+    previewSprite.setScale(2.8 * uiScale).setDepth(1004).setVisible(true).setAlpha(1);
+
+    // Placeholder si las texturas no cargaron (ej. assets faltantes)
+    const placeholder = this.add.graphics();
+    placeholder.setDepth(1002.5);
+    const placeW = 80;
+    const placeH = 100;
+    placeholder.fillStyle(0x003333, 0.8);
+    placeholder.fillRoundedRect(spriteCenterX - placeW / 2, spriteCenterY - placeH / 2, placeW, placeH, 8);
+    placeholder.lineStyle(2, 0x00ffff, 0.6);
+    placeholder.strokeRoundedRect(spriteCenterX - placeW / 2, spriteCenterY - placeH / 2, placeW, placeH, 8);
+    const placeText = this.add.text(spriteCenterX, spriteCenterY, '?', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${32 * uiScale}px`,
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(1002.6);
+    placeholder.setVisible(false);
+    placeText.setVisible(false);
+
+    const arrowLeft = this.add.text(overlayLeft + 64, spriteCenterY, '◀', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${34 * uiScale}px`,
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
+    const arrowRight = this.add.text(overlayLeft + overlayW - 64, spriteCenterY, '▶', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${34 * uiScale}px`,
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
+
+    const updatePreview = () => {
+      const charId = CHAR_IDS[selectedIndex];
+      const fallbackChar = { name: 'VibeCoder', textureKey: 'player', animPrefix: 'player' };
+      const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS?.vibecoder || fallbackChar;
+      previewName.setText(char.name);
+      if (!this.textures.exists(char.textureKey)) {
+        previewSprite.setVisible(false);
+        placeholder.setVisible(true);
+        placeText.setVisible(true);
+        return;
+      }
+      placeholder.setVisible(false);
+      placeText.setVisible(false);
+      previewSprite.setVisible(true).setAlpha(1);
+      previewSprite.setTexture(char.textureKey, 0);
+      const idleKey = char.animPrefix + '-idle';
+      if (this.anims.exists(idleKey)) {
+        previewSprite.play(idleKey);
+      } else {
+        previewSprite.setFrame(0);
+      }
+    };
+    updatePreview();
+
+    const cycle = async (dir) => {
+      selectedIndex = (selectedIndex + dir + CHAR_IDS.length) % CHAR_IDS.length;
+      await selectCharacter(CHAR_IDS[selectedIndex]);
+      updatePreview();
+      this.refreshIdlePlayerSprite();
+      if (window.VIBE_SETTINGS?.sfxEnabled) Audio.playLevelUp();
+    };
+
+    arrowLeft.on('pointerdown', () => { cycle(-1); });
+    arrowRight.on('pointerdown', () => { cycle(1); });
+
+    const instructions = this.add.text(cx, overlayTop + overlayH - 44, t('prompt.arrows_esc'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${11 * uiScale}px`,
+      color: '#666666'
+    }).setOrigin(0.5).setDepth(1002);
+
+    const onCharKeyDown = (event) => {
+      const k = event.key?.toLowerCase?.() || event.key;
+      if (k === 'escape') close();
+      else if (k === 'arrowleft' || k === 'left' || k === 'a') { cycle(-1); }
+      else if (k === 'arrowright' || k === 'right' || k === 'd') { cycle(1); }
+    };
+
+    const close = () => {
+      this.input.keyboard.off('keydown', onCharKeyDown);
+      this.refreshIdlePlayerSprite();
+      backdrop.destroy();
+      overlay.destroy();
+      title.destroy();
+      previewSprite.destroy();
+      previewName.destroy();
+      placeholder.destroy();
+      placeText.destroy();
+      arrowLeft.destroy();
+      arrowRight.destroy();
+      instructions.destroy();
+      this.characterMenuOpen = false;
+    };
+
+    this.input.keyboard.on('keydown', onCharKeyDown);
+    backdrop.on('pointerdown', close);
   }
 }

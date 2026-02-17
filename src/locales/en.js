@@ -4,16 +4,41 @@
 export default {
   // Title & menu
   title: 'COSMIC CODER',
-  subtitle: 'CODE TO CONQUER',
-  version: 'V1 ZKGaming',
+  subtitle: 'SURVIVE THE STELLAR FRONTIER',
+  version: 'EXECUTE ORDER: SURVIVE();',
   menu: {
     CONTINUE: 'CONTINUE',
     START_GAME: 'START GAME',
+    ranked_badge: '(ZK Ranked)',
     UPGRADES: 'UPGRADES',
     WEAPONS: 'WEAPONS',
+    CHARACTER: 'CHARACTER',
     SETTINGS: 'SETTINGS',
     CONTROLS: 'CONTROLS',
-    LEADERBOARD: 'LEADERBOARD'
+    LEADERBOARD: 'LEADERBOARD',
+    DOCUMENTATION: 'DOCUMENTATION',
+    CREDITS: 'CREDITS'
+  },
+  documentation: {
+    title: 'DOCUMENTATION',
+    how_it_works: 'How everything works',
+    guide: 'Full guide (game + ZK)',
+    technical: 'Technical documentation',
+    zk_setup: 'ZK setup & proof guide',
+    back: '[ CLICK OUTSIDE OR ESC TO CLOSE ]'
+  },
+  credits: {
+    title: 'CREDITS',
+    developed_by: 'Developed by kL0REN',
+    x_twitter: 'X',
+    github: 'GitHub',
+    music_title: 'MUSIC',
+    menu_track: 'Arcade',
+    menu_author: 'Lucjo',
+    gameplay_track1: 'Galaxy Guppy',
+    gameplay_author1: 'ko0x',
+    gameplay_track2: 'Ember',
+    gameplay_author2: 'Kubbi'
   },
   leaderboard: {
     title: 'TOP PLAYERS',
@@ -21,8 +46,10 @@ export default {
     name: 'WALLET',
     wave: 'WAVE',
     score: 'SCORE',
-    empty: 'No entries yet. Play to rank!',
+    empty: 'No entries yet. Play a run, die, and your score will be submitted (need contract ID in .env).',
+    empty_short: 'No entries yet. Play to rank!',
     connect_hint: 'Connect wallet (Freighter) to appear on leaderboard',
+    submit_hint: 'On death you\'ll see "Submitting..." then "ZK RANKED" or "CASUAL" if contract is set.',
     back: '[ PRESS ANY KEY OR CLICK TO CLOSE ]'
   },
   prompt: {
@@ -34,7 +61,10 @@ export default {
     up_down_adjust: 'UP/DOWN: Select | LEFT/RIGHT: Adjust | ENTER: Toggle/Edit',
     settings_select: 'UP/DOWN: Select | ENTER: Toggle | ESC: Back',
     name_help: 'TYPE YOUR NAME | BACKSPACE TO DELETE | ENTER TO CONFIRM',
-    esc_cancel: '[ ESC TO CANCEL ]'
+    esc_cancel: '[ ESC TO CANCEL ]',
+    link_wallet: 'Connect your wallet',
+    zk_cta_hint: 'Competitive mode with verifiable on-chain cryptographic proof.',
+    arrows_esc: '[ LEFT/RIGHT: Change character | ESC: Close ]'
   },
   footer: {
     high_wave: 'HIGH WAVE',
@@ -66,6 +96,8 @@ export default {
     AUTO_MOVE: 'AUTO-MOVE',
     IMMORTAL_MODE: 'IMMORTAL MODE',
     MASTER_VOL: 'MASTER VOL',
+    MENU_MUSIC_VOL: 'MENU MUSIC VOL',
+    GAMEPLAY_MUSIC_VOL: 'GAMEPLAY MUSIC VOL',
     NAME: 'NAME',
     NOT_SET: '[NOT SET]',
     DESKTOP_APP: '── DESKTOP APP ──',
@@ -120,7 +152,10 @@ export default {
     equipped: '[EQUIPPED]',
     equip: '[EQUIP]',
     drop: '% DROP',
-    legendary_info: 'Legendary weapons persist forever once unlocked!'
+    legendary_info: 'Legendary weapons persist forever once unlocked!',
+    melee_info: 'Melee weapons: 15% drop chance from enemies.',
+    ranged_info: 'Ranged weapons drop from enemies during gameplay.',
+    tab_instructions: '[ ←/→: Switch tab | ESC: Close ]'
   },
   // Arena HUD
   pause: {
@@ -137,6 +172,13 @@ export default {
     weapon: 'WEAPON',
     stage: 'STAGE',
     hi_wave: 'HI-WAVE',
+    score: 'SCORE',
+    hp: 'HP',
+    enemies: 'ENEMIES',
+    mode_hunt: 'HUNT',
+    mode_evade: 'EVADE',
+    mode_idle: 'IDLE',
+    mode_manual: 'MANUAL',
     collected: 'COLLECTED',
     connecting: '⚡ CONNECTING... | M = MUSIC',
     live: '🟢 LIVE - XP FROM CODING | M = MUSIC',
@@ -159,6 +201,11 @@ export default {
     continue_btn: '[ CONTINUE ]',
     reborn_as: 'REBORN AS',
     bits_earned: 'BITS EARNED!',
+    submitting: 'Submitting to chain...',
+    submit_zk_ranked: '✓ ZK RANKED — Submitted to on-chain leaderboard',
+    submit_casual: '✓ CASUAL — Submitted to leaderboard',
+    submit_failed: '✗ Could not submit to chain',
+    leaderboard_hint: 'To appear on chain leaderboard: connect wallet and set VITE_SHADOW_ASCENSION_CONTRACT_ID in .env',
     xp_lost: 'XP LOST',
     immortal_respawn: '♾️ IMMORTAL RESPAWN',
     defeated: 'DEFEATED!',

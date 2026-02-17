@@ -1,139 +1,171 @@
-# Cosmic Coder — Full game and ZK guide
+# Cosmic Coder — Complete Guide
 
-**Version:** 0.7.x · Reference and usage documentation.
-
----
-
-## Part 1 — How the game works
-
-### 1.1 What is Cosmic Coder
-
-**Cosmic Coder** is a Vampire-Survivors-style survival game: you control a character in an arena, clear waves of enemies, level up, unlock weapons and upgrades, and try to last as many waves as possible. When you die, your run is recorded (locally and, if you have a wallet connected, on-chain). The game has two on-chain submission modes: **casual** (legacy) and **ranked** (with a ZK proof).
-
-- **Requirement to play:** You **must** link your **[Freighter](https://www.freighterapp.com/)** wallet on the title screen to play. The game requires a connected Stellar wallet (Freighter extension in the browser).
-- **Goal:** Survive as many waves as possible, accumulate XP (score), and appear on the leaderboard.
-- **Engine:** Phaser (browser); run logic runs off-chain. Only on death is the result sent to Stellar/Soroban contracts if configured.
+**Reference and usage documentation. Version 0.7.x**
 
 ---
 
-### 1.2 Controls and basic flow
+## 1. Introduction
 
-- **Movement:** WASD or arrow keys (or touch controls on mobile).
-- **Attack:** Automatic based on the equipped weapon; there is no fire button.
-- **Waves:** Every so often a new wave spawns with more and/or tougher enemies. The wave number (`wave`) increases (1, 2, 3, …).
-- **XP and score:** Enemies grant XP when killed; your **score** for the run is the **total XP** accumulated (used as *score* in the contract).
-- **Death:** When your health reaches 0, the run ends: local records are saved, submission to chain (casual or ranked) may occur, and you earn BITS (in-game currency) based on wave, kills, and XP.
+**Cosmic Coder** is a Vampire-Survivors-style survival game built on Phaser 3 and Stellar/Soroban. You control a character in a top-down arena, clear waves of enemies, level up, unlock weapons and upgrades, and attempt to survive as many waves as possible. When you die, your run is recorded locally and, if a wallet is connected and the contract is configured, on-chain. The game supports two on-chain modes: **casual** (basic rule check) and **ranked** (zero-knowledge proof verification).
+
+**Requirements:** A [Freighter](https://www.freighterapp.com/) wallet must be connected on the title screen to play and submit to chain.
 
 ---
 
-### 1.3 Waves, enemies, and stages
+## 2. Gameplay Fundamentals
 
-- **Waves:** Each wave increases difficulty: more base enemies per wave and enemy types that join the pool by `waveMin` (e.g. bugs from wave 0, glitch from 3, “memory-leak” from 5, etc.).
-- **Enemies:** Many types (bug, glitch, syntax-error, infinite-loop, segfault, dependency-hell, bosses, etc.) with different behaviours: chase, teleport, orbit, erratic, spawner, invisible, etc.
-- **Bosses:** Appear at fixed waves (e.g. Stack Overflow at 20, Null Pointer at 40, Memory Leak Prime at 60, Kernel Panic at 80). They give a lot of XP and are a difficulty spike.
-- **Stages:** The world has thematic stages that change the look by wave (Debug Zone, Memory Banks, Network Layer, Kernel Space, Cloud Cluster, Singularity). They are cosmetic only.
+### 2.1 Controls
 
----
+| Action | Input |
+|--------|-------|
+| Movement | WASD or Arrow keys |
+| Attack | Automatic (no fire button) |
+| Touch | Mobile supported |
 
-### 1.4 Weapons and upgrades
+### 2.2 Core Loop
 
-- **Weapons:** You start with a basic shot. During the run you can pick up weapons from enemies or crates: spread, pierce, orbital, rapid, homing, bounce, aoe, freeze, and special weapons (rmrf, sudo, forkbomb, sword, spear, boomerang, kunai, etc.). Each weapon has attack rate, damage, projectile count, and special effects.
-- **Upgrades:** Bought with BITS from the main menu (outside the run). They improve base stats (health, damage, speed, etc.) and apply to all future runs.
-- **Rebirth:** A “reset” system that unlocks more power in exchange for resetting progress; optional and advanced.
+1. **Start Game** — Connect Freighter; sign `start_match`. The contract registers your session with the Stellar Game Hub.
+2. **Play** — Waves spawn; enemies grant XP; weapons and upgrades drop. Score = total XP accumulated.
+3. **Death** — Run ends. If wallet and contract are configured, the client attempts an on-chain submission (casual or ranked).
+4. **Post-Run** — BITS are awarded; local and on-chain leaderboards are updated.
 
----
+### 2.3 Waves and Difficulty
 
-### 1.5 Score, death, and save
+- Each wave increases difficulty: more base enemies and higher scaling.
+- Enemy types join the pool at defined wave thresholds (`waveMin`).
+- Boss waves (e.g. 20, 40, 60, 80) spawn named bosses with higher HP and XP rewards.
 
-- **Score = total XP** for the run. This is the value sent to the contract as `score`.
-- **On death:**
-  - Local records are updated (max wave, max score).
-  - The entry is added to the local leaderboard.
-  - If a wallet is connected and the contract is configured, an on-chain submit is attempted:
-    - **Casual mode:** `submit_result(wave, score)` — the contract may check basic rules (e.g. `score >= wave * MIN_SCORE_PER_WAVE`).
-    - **Ranked mode (ZK):** If the prover is configured (`VITE_ZK_PROVER_URL`) and the run is **new** (you have `runSeed`), `run_hash` is computed, the proof is requested from the backend, and `submit_zk` is called with proof, VK, and public signals.
-  - BITS are awarded based on wave, kills, and XP.
-- **Save:** You can save the run and “Continue” from the menu; that restores position, wave, health, etc. If you **continue** a run, ZK flow is not used on death (no runSeed for a new run), so that death is submitted as casual if at all.
+### 2.4 Weapons
 
----
+- **Basic:** Single projectile; starting weapon.
+- **Collected:** spread, pierce, orbital, rapid, homing, bounce, aoe, freeze; special (rmrf, sudo, forkbomb, sword, spear, boomerang, kunai).
+- **Evolution:** Certain weapon combinations can evolve into stronger variants.
+- Each weapon has attack rate, damage, projectile count, and effects.
 
-### 1.6 Modes: casual vs ranked
+### 2.5 Upgrades (Permanent)
 
-| | Casual | Ranked (ZK) |
-|--|--------|-------------|
-| **What is sent** | `submit_result(wave, score)` | `submit_zk(proof, vk, pub_signals, …)` |
-| **On-chain check** | Basic rules (score, wave) | Groth16 proof verification |
-| **When used** | No ZK prover or “Continue” run | **New** run + prover configured + contract with verifier |
-| **Leaderboard** | Legacy (wave + score) | Per season (season_id), score only |
+Purchased with BITS in the main menu. Improve base stats (health, damage, speed, attack rate, XP gain, crit chance, duration). Apply to all future runs.
 
-For **ranked** you need: (1) connected wallet, (2) contract (Shadow Ascension) configured with verifier, (3) backend prover (`VITE_ZK_PROVER_URL`), and (4) start a **new** run (not “Continue”) so `runSeed` exists and the proof can be generated and verified.
+### 2.6 Rebirth
+
+Optional prestige system. Reset progress in exchange for permanent multipliers. Advanced feature.
 
 ---
 
-## Part 2 — How ZK works (in depth)
+## 3. Score and On-Chain Submission
 
-### 2.1 Why we use ZK in the game
+### 3.1 Score Definition
 
-In a game that runs in the browser, the server/contract cannot “see” your run. If you only sent “I reached wave 50 with 100,000 points”, anyone could lie. With **zero-knowledge (ZK)**:
+**Score = total XP** accumulated in the run. This is the value sent to the contract as `score`. The contract uses it for leaderboard ranking and validation.
 
-- You **prove** that you know data (wave, score, run_hash, nonce, season_id) that satisfy the circuit **without revealing** how you played step by step.
-- The **contract** only receives a **proof** and the **public signals** (those numbers). It verifies the proof with a **verification key (VK)**. If the pairing equation holds, it accepts that the run is valid for that score/wave/run_hash/nonce/season.
-- So the on-chain ranking does not rely on trusting the client: the mathematical proof guarantees that the result is consistent with the circuit (same run_hash, score, wave, nonce, season_id).
+### 3.2 Validation Rule
 
----
+Both the client and the contract enforce:
 
-### 2.2 What the “proof” and circuit actually are
+**score ≥ wave × MIN_SCORE_PER_WAVE** (default 10 per wave)
 
-- **Circuit (Circom):** A program that defines a “statement”: given some **private inputs** and **public outputs**, the circuit checks relations between them. In Cosmic Coder, the circuit `GameRun.circom` exposes as **public outputs**:
-  - `run_hash_hi`, `run_hash_lo` (run commitment),
-  - `score`, `wave`, `nonce`, `season_id`.
-- **Proof (Groth16):** A short certificate (three group elements: a, b, c) that proves “I ran the circuit with these inputs and got these public outputs”. Anyone with the **verification key (VK)** can check on-chain that the proof matches those public signals **without** re-running the circuit.
-- **On-chain verification:** The **Groth16 verifier** contract receives (VK, proof, pub_signals), computes the linear combination `vk_x` from the public signals, and checks the pairing equation. If it holds, it returns “valid”; the policy contract (Shadow Ascension) then marks the nonce as used, updates the season leaderboard, and emits the event.
+This prevents submissions with unreasonably low score for the wave reached. For example: wave 5 requires at least 50 score; wave 10 requires at least 100.
 
----
+### 3.3 Casual vs Ranked
 
-### 2.3 Full ranked (ZK) flow
+| Mode | When Used | What Is Sent | On-Chain Verification |
+|------|-----------|--------------|------------------------|
+| **Casual** | No ZK prover, or "Continue" run | `submit_result(wave, score)` | Rule check: score ≥ wave × 10 |
+| **Ranked** | New run + prover configured + verifier contract | `submit_zk(proof, vk, pub_signals, …)` | Groth16 proof verification |
 
-1. **Run start (new):** The client generates a random **runSeed** and keeps it in memory for that run.
-2. **You play:** Waves, enemies, XP, etc. (all off-chain).
-3. **Death:** The client computes:
-   - `run_hash = H(player || wave || score || runSeed || timestamp)` (SHA-256).
-   - Validates that (wave, score) satisfy game rules.
-4. **Proof request (option B — backend):** The client calls the backend with `run_hash_hex`, `score`, `wave`, `nonce`, `season_id`. The backend writes `input.json`, runs the prover (snarkjs), and returns `contract_proof.json` (proof + VK + pub_signals in contract format).
-5. **On-chain submit:** The client signs and calls `submit_zk` on the Shadow Ascension contract with:
-   - proof, VK, pub_signals,
-   - nonce, run_hash (32 bytes), season_id, score, wave,
-   - authorized as `player`.
-6. **In the contract:**
-   - It checks that the verifier is set, that the VK has the right shape (`ic.len() == pub_signals.len() + 1`), and that score > 0 and wave > 0.
-   - It checks anti-replay: if (player, nonce, season_id) is already used, it returns `Replay`.
-   - It calls the **Groth16 verifier** with (VK, proof, pub_signals). If it returns `true`, it marks the nonce as used, updates the season leaderboard, calls the Game Hub `end_game`, and emits `zk_run_submitted`.
-
-The entire ranked flow is tied: same run_hash/score/wave/nonce/season in the proof and in the contract, and the proof is only valid for those values.
+**For ranked:** Start a **new** run (not "Continue"). The run needs a `runSeed` generated at start; "Continue" runs do not have a fresh runSeed and therefore cannot produce a ZK proof.
 
 ---
 
-### 2.4 Run_hash and binding
+## 4. Zero-Knowledge (ZK) in Cosmic Coder
 
-- **run_hash** is the run commitment: it ties together player, wave, score, run seed, and timestamp. The circuit does not “recompute” run_hash in detail; the public signals include run_hash_hi and run_hash_lo so the contract and proof are bound to the same commitment.
-- On the client, `run_hash` is computed with `computeGameHash(playerAddress, wave, score, runSeed, timestamp)`. The backend generates the proof with that run_hash (and the other inputs); the contract receives the same run_hash in `submit_zk` for consistency.
+### 4.1 Why ZK?
+
+The game runs in the browser. The contract cannot observe your run. If the client only sent "I reached wave 50 with 100,000 points", anyone could submit false data. **Zero-knowledge proofs** allow the client to prove that it knows inputs satisfying a circuit (valid run_hash, score, wave) **without** revealing the private execution path.
+
+**Security property:** The contract does not trust the client. Acceptance depends solely on cryptographic verification of the proof.
+
+### 4.2 Groth16 and BN254
+
+- **Groth16:** zk-SNARK with constant-size proofs and verification keys. Widely used (e.g. Ethereum); mature tooling (Circom, snarkjs).
+- **BN254:** Elliptic curve used for Groth16 in Cosmic Coder. Stellar/Soroban supports BN254 via [CAP-0074](https://stellar.github.io/stellar-protocol/master/core/cap-0074.html).
+
+### 4.3 Circuit and Proof
+
+- **Circuit (Circom):** Defines the statement. Public outputs: `run_hash_hi`, `run_hash_lo`, `score`, `wave`, `nonce`, `season_id`.
+- **Proof (Groth16):** Short certificate (three group elements) proving "I ran the circuit with these inputs and got these outputs".
+- **Verification:** The Groth16 verifier contract checks the pairing equation. If it holds, the policy contract accepts and updates the leaderboard.
+
+### 4.4 Run Hash
+
+`run_hash = H(player || wave || score || runSeed || timestamp)` (SHA-256)
+
+- **runSeed:** Random value generated at run start; kept in memory for that run only.
+- **Binding:** The proof binds to this run_hash; tampering with score or wave invalidates the proof.
+
+### 4.5 Anti-Replay
+
+- Each ranked submit uses a unique **nonce** (e.g. timestamp).
+- The contract stores **ReplayKey = (player, nonce, season_id)**.
+- Duplicate submits with the same triple return `Replay`; the verifier is not invoked.
+- The nonce is a public signal of the circuit; the proof cannot be reused with another nonce without generating a new proof.
+
+### 4.6 Full Ranked Flow
+
+1. New run start → Client generates `runSeed`; stores in memory.
+2. Play → Waves, enemies, XP (all off-chain).
+3. Death → Client computes `run_hash`; validates (wave, score).
+4. Proof request → Client calls backend `POST /zk/prove` with run_hash_hex, score, wave, nonce, season_id.
+5. Backend → Runs snarkjs Groth16 prover; returns contract_proof.json.
+6. Submit → Client signs and calls `submit_zk` on Shadow Ascension with proof, VK, pub_signals, nonce, run_hash, season_id, score, wave.
+7. Contract → Anti-replay check; invokes Groth16 verifier; on success, updates leaderboard, calls Game Hub `end_game`, emits `zk_run_submitted`.
 
 ---
 
-### 2.5 Anti-replay and nonce
+## 5. Stellar and Soroban
 
-- Each ranked submit uses a **nonce** (e.g. timestamp). The contract stores `ReplayKey = (player, nonce, season_id)`. If you submit again with the same (player, nonce, season_id), the contract returns `Replay` and does not call the verifier.
-- The proof includes the nonce as a public signal; you cannot reuse the same proof with a different nonce without generating a new proof. This prevents submitting the same run multiple times to inflate the leaderboard.
+### 5.1 Stellar Network
+
+[Stellar](https://stellar.org) is a public blockchain for fast, low-cost payments. [Soroban](https://soroban.stellar.org) is Stellar's smart contract platform.
+
+### 5.2 Freighter Wallet
+
+[Freighter](https://www.freighterapp.com/) is a Stellar wallet extension. Used for connection, signing `start_match` and `submit_zk`/`submit_result`, and authorization of all on-chain actions.
+
+### 5.3 Game Hub Integration
+
+The Stellar Game Hub manages session lifecycle. Shadow Ascension calls `start_game` on match start and `end_game` on match end, ensuring compliance with the Stellar Game Studio standard.
+
+### 5.4 Testnet
+
+The game targets Stellar Testnet for development and judging.
 
 ---
 
-### 2.6 Quick technical summary
+## 6. Contracts Overview
 
-- **Circuit:** 6 public outputs (run_hash hi/lo, score, wave, nonce, season_id). VK with `ic` of length 7.
-- **Proof:** Groth16 (a, b, c); verification with BN254 on Soroban.
-- **Contracts:** `zk_types` (shared types), `groth16_verifier` (proof verification only), `shadow_ascension` (policy: replay, leaderboard, events, Hub).
-- **Detailed technical docs:** See `TECHNICAL_DOCUMENTATION.md` and `ZK_REAL_SETUP.md` (requirements, circuit build, scripts, option B, checklist).
+| Contract | Role |
+|----------|------|
+| **shadow_ascension** | Policy: start_match, submit_result, submit_zk, get_leaderboard. Replay, leaderboard, Hub calls. |
+| **groth16_verifier** | Stateless BN254 proof verification. |
+| **zk_types** | Shared ZK types and errors. |
+
+**Main functions:**
+
+- **start_match(player)** — Registers session; calls Hub start_game.
+- **submit_result(player, wave, score)** — Casual submit; rule check; calls Hub end_game.
+- **submit_zk(...)** — Ranked submit; anti-replay; invokes verifier; updates leaderboard; calls Hub end_game.
+- **get_leaderboard(season_id)** — Returns ranked entries for that season.
 
 ---
 
-*End of guide. For implementation details and contract references, use the technical documentation and ZK guide links above.*
+## 7. Further Documentation
+
+- **HOW_IT_WORKS_en.md** — Complete technical documentation.
+- **TECHNICAL_DOCUMENTATION.md** — Formal reference (circuit, VK, pairing, security).
+- **ZK_AND_BALANCE.md** — ZK flow, anti-replay, validation rules.
+- **ZK_REAL_SETUP.md** — Requirements, circuit build, scripts, checklist.
+
+---
+
+*Cosmic Coder — Complete Guide · Version 0.7.x*

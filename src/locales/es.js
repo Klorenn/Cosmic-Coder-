@@ -3,16 +3,41 @@
  */
 export default {
   title: 'CODIFICADOR CÓSMICO',
-  subtitle: 'PROGRAMA PARA CONQUISTAR',
-  version: 'V1 ZKGaming',
+  subtitle: 'SOBREVIVE LA FRONTERA ESTELAR',
+  version: 'EXECUTE ORDER: SURVIVE();',
   menu: {
     CONTINUE: 'CONTINUAR',
     START_GAME: 'EMPEZAR PARTIDA',
+    ranked_badge: '(ZK Ranked)',
     UPGRADES: 'MEJORAS',
     WEAPONS: 'ARMAS',
+    CHARACTER: 'PERSONAJE',
     SETTINGS: 'AJUSTES',
     CONTROLS: 'CONTROLES',
-    LEADERBOARD: 'RANKING'
+    LEADERBOARD: 'RANKING',
+    DOCUMENTATION: 'DOCUMENTACIÓN',
+    CREDITS: 'CRÉDITOS'
+  },
+  documentation: {
+    title: 'DOCUMENTACIÓN',
+    how_it_works: 'Cómo funciona todo',
+    guide: 'Guía completa (juego + ZK)',
+    technical: 'Documentación técnica',
+    zk_setup: 'ZK: circuito y proof',
+    back: '[ CLIC FUERA O ESC PARA CERRAR ]'
+  },
+  credits: {
+    title: 'CRÉDITOS',
+    developed_by: 'Desarrollado por kL0REN',
+    x_twitter: 'X',
+    github: 'GitHub',
+    music_title: 'MÚSICA',
+    menu_track: 'Arcade',
+    menu_author: 'Lucjo',
+    gameplay_track1: 'Galaxy Guppy',
+    gameplay_author1: 'ko0x',
+    gameplay_track2: 'Ember',
+    gameplay_author2: 'Kubbi'
   },
   leaderboard: {
     title: 'MEJORES JUGADORES',
@@ -20,8 +45,10 @@ export default {
     name: 'WALLET',
     wave: 'OLA',
     score: 'PUNTOS',
-    empty: 'Aún no hay partidas. ¡Juega para aparecer!',
+    empty: 'Aún no hay partidas. Juega, muere y tu puntuación se enviará (necesitas contract ID en .env).',
+    empty_short: 'Aún no hay partidas. ¡Juega para aparecer!',
     connect_hint: 'Conecta tu wallet (Freighter) para aparecer en el ranking',
+    submit_hint: 'Al morir verás "Enviando..." y luego "ZK RANKED" o "CASUAL" si el contrato está configurado.',
     back: '[ PULSA CUALQUIER TECLA O CLIC PARA CERRAR ]'
   },
   prompt: {
@@ -33,7 +60,10 @@ export default {
     up_down_adjust: 'ARRIBA/ABAJO: Seleccionar | IZQ/DER: Ajustar | ENTER: Activar/Editar',
     settings_select: 'ARRIBA/ABAJO: Seleccionar | ENTER: Activar | ESC: Volver',
     name_help: 'ESCRIBE TU NOMBRE | RETROCESO: Borrar | ENTER: Confirmar',
-    esc_cancel: '[ ESC PARA CANCELAR ]'
+    esc_cancel: '[ ESC PARA CANCELAR ]',
+    link_wallet: 'Vincula tu wallet',
+    zk_cta_hint: 'Modo competitivo con prueba criptográfica verificable on-chain.',
+    arrows_esc: '[ IZQ/DER: Cambiar personaje | ESC: Cerrar ]'
   },
   footer: {
     high_wave: 'OLA MÁX',
@@ -65,6 +95,8 @@ export default {
     AUTO_MOVE: 'AUTO-MOVER',
     IMMORTAL_MODE: 'MODO INMORTAL',
     MASTER_VOL: 'VOLUMEN',
+    MENU_MUSIC_VOL: 'VOL MÚSICA MENÚ',
+    GAMEPLAY_MUSIC_VOL: 'VOL MÚSICA JUEGO',
     NAME: 'NOMBRE',
     NOT_SET: '[SIN ESTABLECER]',
     DESKTOP_APP: '── APP ESCRITORIO ──',
@@ -119,7 +151,10 @@ export default {
     equipped: '[EQUIPADA]',
     equip: '[EQUIPAR]',
     drop: '% DROP',
-    legendary_info: '¡Las armas legendarias se desbloquean para siempre!'
+    legendary_info: '¡Las armas legendarias se desbloquean para siempre!',
+    melee_info: 'Armas cuerpo a cuerpo: 15% de drop de enemigos.',
+    ranged_info: 'Armas a distancia: se obtienen de enemigos en partida.',
+    tab_instructions: '[ ←/→: Cambiar pestaña | ESC: Cerrar ]'
   },
   pause: {
     resume: 'REANUDAR',
@@ -135,6 +170,13 @@ export default {
     weapon: 'ARMA',
     stage: 'FASE',
     hi_wave: 'OLA-MÁX',
+    score: 'PUNTOS',
+    hp: 'VIDA',
+    enemies: 'ENEMIGOS',
+    mode_hunt: 'CAZA',
+    mode_evade: 'HUIR',
+    mode_idle: 'IDLE',
+    mode_manual: 'MANUAL',
     collected: 'RECOGIDAS',
     connecting: '⚡ CONECTANDO... | M = MÚSICA',
     live: '🟢 EN VIVO - XP AL PROGRAMAR | M = MÚSICA',
@@ -157,6 +199,11 @@ export default {
     continue_btn: '[ CONTINUAR ]',
     reborn_as: 'RENACIDO COMO',
     bits_earned: '¡BITS GANADOS!',
+    submitting: 'Enviando a la cadena...',
+    submit_zk_ranked: '✓ ZK RANKED — Enviado al ranking on-chain',
+    submit_casual: '✓ CASUAL — Enviado al ranking',
+    submit_failed: '✗ No se pudo enviar a la cadena',
+    leaderboard_hint: 'Para salir en el ranking on-chain: conecta wallet y pon VITE_SHADOW_ASCENSION_CONTRACT_ID en .env',
     xp_lost: 'XP PERDIDOS',
     immortal_respawn: '♾️ REVIVIR INMORTAL',
     defeated: '¡DERROTADO!',

@@ -41,6 +41,15 @@ export default class LeaderboardManager {
     }
   }
 
+  /** Borra el leaderboard local (solo localStorage). El on-chain no se modifica. */
+  static reset() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch (e) {
+      console.warn('Leaderboard reset failed:', e);
+    }
+  }
+
   /**
    * Add entry locally (fallback when no wallet)
    */

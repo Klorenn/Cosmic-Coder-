@@ -1,7 +1,9 @@
 // Cosmic Coder - ZK run attestation (BN254 / Groth16).
 // Binds: run_hash (hi/lo), score, wave, nonce, season_id.
-// Public inputs commit these values; contract enforces score/wave > 0 and replay.
+// Enforces: score >= wave * MIN_SCORE_PER_WAVE (10).
 pragma circom 2.1.4;
+
+include "../node_modules/circomlib/circuits/comparators.circom";
 
 template GameRun() {
     signal input run_hash_hi;  // high 128 bits of run_hash
@@ -11,10 +13,13 @@ template GameRun() {
     signal input nonce;       // u64
     signal input season_id;   // u32
 
-    // One constraint so the circuit is valid; public inputs bind the run data
-    signal one;
-    one <== 1;
-    1 === one;
+    // Enforce game rule: score >= wave * 10 (MIN_SCORE_PER_WAVE)
+    signal minScore;
+    minScore <== wave * 10;
+    component gte = GreaterEqThan(32);
+    gte.in[0] <== score;
+    gte.in[1] <== minScore;
+    gte.out === 1;
 
     // Expose as public outputs so verifier gets 6 pub signals (run_hash_hi, run_hash_lo, score, wave, nonce, season_id)
     signal output run_hash_hi_out <== run_hash_hi;

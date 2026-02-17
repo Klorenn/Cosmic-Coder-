@@ -2,3 +2,11 @@ node_modules/
 dist/
 .DS_Store
 *.log
+.env
+circuits/build/
+circuits/input.json
+circuits/*.sym
+contracts/target/
+contracts/*/target/
+**/test_snapshots/
+*.code-workspace

@@ -1,0 +1,25 @@
+# ZK Prover server for Cosmic Coder (POST /zk/prove).
+# Requires circuits/build/ with GameRun_final.zkey and GameRun_js/ (commit them or build in CI).
+FROM node:20-bookworm-slim
+
+WORKDIR /app
+
+# Install snarkjs for proof generation (used by scripts/zk/generate_proof.js)
+RUN npm install -g snarkjs
+
+# Copy package files for install
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+
+# Server and ZK scripts + pre-built circuit
+COPY server ./server
+COPY scripts ./scripts
+COPY circuits ./circuits
+
+# Ensure circuits/build exists (must contain GameRun_final.zkey, GameRun_js/)
+RUN test -f circuits/build/GameRun_final.zkey || (echo "Missing circuits/build/GameRun_final.zkey. Run npm run zk:build locally and commit circuits/build/." && exit 1)
+
+EXPOSE 3333
+
+ENV NODE_ENV=production
+CMD ["node", "server/index.js"]

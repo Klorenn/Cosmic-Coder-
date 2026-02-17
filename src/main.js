@@ -4,6 +4,13 @@ import TitleScene from './scenes/TitleScene.js';
 import ArenaScene from './scenes/ArenaScene.js';
 import { connectToXPServer, isConnected } from './utils/socket.js';
 import RebirthManager from './systems/RebirthManager.js';
+import { persistIfWalletConnected, progressStore } from './utils/walletProgressService.js';
+
+// Sync selected character from progressStore on startup
+window.VIBE_SELECTED_CHARACTER = progressStore.selectedCharacter || 'vibecoder';
+
+// Persist progress to API when wallet connected (called by VIBE_UPGRADES.save, VIBE_LEGENDARIES.save)
+window.walletProgressPersist = () => { persistIfWalletConnected(); };
 
 const config = {
   type: Phaser.AUTO,
@@ -42,35 +49,26 @@ window.VIBE_UPGRADES = {
     weaponDuration: { name: 'DURATION+', desc: '+20% weapon duration per level', maxLevel: 5, costBase: 300, costScale: 1.7, effect: 0.2 }
   },
 
-  // Current upgrade levels (loaded from localStorage)
+  // Current upgrade levels (loaded from wallet-backed API when connected)
   levels: {},
 
   // Lifetime currency for upgrades
   currency: 0,
 
-  // Load from localStorage
-  load() {
-    const saved = localStorage.getItem('vibeCoderUpgrades');
-    if (saved) {
-      const data = JSON.parse(saved);
-      this.levels = data.levels || {};
-      this.currency = data.currency || 0;
-    } else {
-      this.levels = {};
-      this.currency = 0;
-    }
-    // Initialize missing upgrade levels
+  // Initialize levels (empty until wallet connects and loads from API)
+  loadDefaults() {
+    this.levels = {};
+    this.currency = 0;
     for (const key of Object.keys(this.upgrades)) {
-      if (this.levels[key] === undefined) this.levels[key] = 0;
+      this.levels[key] = 0;
     }
   },
 
-  // Save to localStorage
+  // Save: persist to wallet API when connected (no localStorage)
   save() {
-    localStorage.setItem('vibeCoderUpgrades', JSON.stringify({
-      levels: this.levels,
-      currency: this.currency
-    }));
+    if (typeof window !== 'undefined' && window.walletProgressPersist) {
+      window.walletProgressPersist();
+    }
   },
 
   // Get cost for next level of an upgrade
@@ -107,8 +105,8 @@ window.VIBE_UPGRADES = {
   }
 };
 
-// Load upgrades on startup
-window.VIBE_UPGRADES.load();
+// Initialize upgrades (empty until wallet connects and loads from API)
+window.VIBE_UPGRADES.loadDefaults();
 
 // Legendary weapons - permanent unlocks that persist forever
 window.VIBE_LEGENDARIES = {
@@ -149,26 +147,21 @@ window.VIBE_LEGENDARIES = {
     }
   },
 
-  // Unlocked legendaries (persisted)
+  // Unlocked legendaries (loaded from wallet API when connected)
   unlocked: [],
 
   // Currently equipped legendary (null if none)
   equipped: null,
 
-  load() {
-    const saved = localStorage.getItem('vibeCoderLegendaries');
-    if (saved) {
-      const data = JSON.parse(saved);
-      this.unlocked = data.unlocked || [];
-      this.equipped = data.equipped || null;
-    }
+  loadDefaults() {
+    this.unlocked = [];
+    this.equipped = null;
   },
 
   save() {
-    localStorage.setItem('vibeCoderLegendaries', JSON.stringify({
-      unlocked: this.unlocked,
-      equipped: this.equipped
-    }));
+    if (typeof window !== 'undefined' && window.walletProgressPersist) {
+      window.walletProgressPersist();
+    }
   },
 
   unlock(weaponKey) {
@@ -216,8 +209,17 @@ window.VIBE_LEGENDARIES = {
   }
 };
 
-// Load legendaries on startup
-window.VIBE_LEGENDARIES.load();
+// Initialize legendaries (empty until wallet connects and loads from API)
+window.VIBE_LEGENDARIES.loadDefaults();
+
+// Character selector - VibeCoder (default), Destroyer, Swordsman
+window.VIBE_CHARACTERS = {
+  vibecoder: { name: 'VibeCoder', textureKey: 'player', animPrefix: 'player' },
+  destroyer: { name: 'Destroyer', textureKey: 'player-destroyer', animPrefix: 'player-destroyer' },
+  swordsman: { name: 'Swordsman', textureKey: 'player-swordsman', animPrefix: 'player-swordsman' }
+};
+// Selected character id (set by wallet progress or default)
+window.VIBE_SELECTED_CHARACTER = 'vibecoder';
 
 // Melee weapons (non-legendary, drop normally)
 window.VIBE_MELEE = {
@@ -234,7 +236,8 @@ window.VIBE_SETTINGS = {
   musicEnabled: true,     // Background music
   masterVolume: 0.7,      // Master volume (0-1)
   sfxVolume: 0.8,         // SFX volume (0-1)
-  musicVolume: 0.5,       // Music volume (0-1)
+  menuMusicVolume: 0.5,   // Menu music (Arcade) volume (0-1)
+  gameplayMusicVolume: 0.5, // Gameplay music (Galaxy Guppy) volume (0-1)
   playerName: '',         // Player name for personalization
   immortalMode: false,   // Respawn instead of game over (accessibility)
   xpPenaltyOnDeath: 0.5,  // 50% XP penalty when respawning in immortal mode
@@ -242,6 +245,7 @@ window.VIBE_SETTINGS = {
 
   load() {
     const saved = localStorage.getItem('vibeCoderSettings');
+    // Sin datos guardados: idioma por defecto inglés (first open = English)
     if (saved) {
       const data = JSON.parse(saved);
       this.autoMove = data.autoMove !== undefined ? data.autoMove : true;
@@ -249,7 +253,9 @@ window.VIBE_SETTINGS = {
       this.musicEnabled = data.musicEnabled !== undefined ? data.musicEnabled : true;
       this.masterVolume = data.masterVolume !== undefined ? data.masterVolume : 0.7;
       this.sfxVolume = data.sfxVolume !== undefined ? data.sfxVolume : 0.8;
-      this.musicVolume = data.musicVolume !== undefined ? data.musicVolume : 0.5;
+      const oldMusicVol = data.musicVolume !== undefined ? data.musicVolume : 0.5;
+      this.menuMusicVolume = data.menuMusicVolume !== undefined ? data.menuMusicVolume : oldMusicVol;
+      this.gameplayMusicVolume = data.gameplayMusicVolume !== undefined ? data.gameplayMusicVolume : oldMusicVol;
       this.playerName = data.playerName || '';
       this.immortalMode = data.immortalMode !== undefined ? data.immortalMode : false;
       this.xpPenaltyOnDeath = data.xpPenaltyOnDeath !== undefined ? data.xpPenaltyOnDeath : 0.5;
@@ -264,7 +270,8 @@ window.VIBE_SETTINGS = {
       musicEnabled: this.musicEnabled,
       masterVolume: this.masterVolume,
       sfxVolume: this.sfxVolume,
-      musicVolume: this.musicVolume,
+      menuMusicVolume: this.menuMusicVolume,
+      gameplayMusicVolume: this.gameplayMusicVolume,
       playerName: this.playerName,
       immortalMode: this.immortalMode,
       xpPenaltyOnDeath: this.xpPenaltyOnDeath,
@@ -284,7 +291,8 @@ window.VIBE_SETTINGS = {
   setVolume(type, value) {
     if (type === 'master') this.masterVolume = Math.max(0, Math.min(1, value));
     if (type === 'sfx') this.sfxVolume = Math.max(0, Math.min(1, value));
-    if (type === 'music') this.musicVolume = Math.max(0, Math.min(1, value));
+    if (type === 'menuMusic') this.menuMusicVolume = Math.max(0, Math.min(1, value));
+    if (type === 'gameplayMusic') this.gameplayMusicVolume = Math.max(0, Math.min(1, value));
     this.save();
   },
 
@@ -298,7 +306,13 @@ window.VIBE_SETTINGS = {
   },
 
   getEffectiveMusicVolume() {
-    return this.musicEnabled ? this.masterVolume * this.musicVolume : 0;
+    return this.musicEnabled ? this.masterVolume * this.menuMusicVolume : 0;
+  },
+  getEffectiveMenuMusicVolume() {
+    return this.musicEnabled ? this.masterVolume * this.menuMusicVolume : 0;
+  },
+  getEffectiveGameplayMusicVolume() {
+    return this.musicEnabled ? this.masterVolume * this.gameplayMusicVolume : 0;
   }
 };
 

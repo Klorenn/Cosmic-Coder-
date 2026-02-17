@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Build GameRun circuit: compile R1CS + WASM, then Groth16 trusted setup.
-# Requires: circom, snarkjs, node.
+# Requires: circom 2.x, snarkjs, node. Prefer cargo-installed circom: PATH="$HOME/.cargo/bin:$PATH"
 set -e
+export PATH="${HOME}/.cargo/bin:${PATH}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CIRCUITS_DIR="$ROOT/circuits"
@@ -13,7 +14,12 @@ mkdir -p "$BUILD_DIR"
 cd "$CIRCUITS_DIR"
 
 if ! command -v circom &>/dev/null; then
-  echo "Install circom: https://docs.circom.io/getting-started/installation/"
+  echo "Install circom 2.x: https://docs.circom.io/getting-started/installation/"
+  exit 1
+fi
+# GameRun.circom requires circom 2.x (pragma circom 2.1.4). circom 0.5.x will fail with parse errors.
+if circom --version 2>/dev/null | head -1 | grep -qE '^0\.'; then
+  echo "This circuit requires circom 2.x. You have circom 0.x. Install from: https://docs.circom.io/getting-started/installation/"
   exit 1
 fi
 if ! command -v snarkjs &>/dev/null; then

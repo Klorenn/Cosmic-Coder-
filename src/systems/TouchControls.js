@@ -37,6 +37,13 @@ export default class TouchControls {
 
     this.joystickThumb = this.scene.add.circle(joyX, joyY, thumbRadius, 0x00ffff, 0.6).setScrollFactor(0).setDepth(1001);
 
+    // Label "MOVE" under joystick for accessibility / Indicador táctil
+    this.joystickLabel = this.scene.add.text(joyX, joyY + radius + 14, 'MOVE', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${10 * uiScale}px`,
+      color: 'rgba(0, 255, 255, 0.9)'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+
     // Botón de pausa en esquina inferior derecha
     const pauseX = this.scene.scale.width - padding;
     const pauseY = bottomY;
@@ -44,10 +51,16 @@ export default class TouchControls {
     this.pauseButton = this.scene.add.circle(pauseX, pauseY, 38 * uiScale, 0x000000, 0.45).setScrollFactor(0).setDepth(1000);
     this.pauseButton.setStrokeStyle(2, 0xff00ff, 0.9);
 
-    this.pauseLabel = this.scene.add.text(pauseX, pauseY, 'II', {
+    this.pauseLabel = this.scene.add.text(pauseX, pauseY - 2, 'II', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${22 * uiScale}px`,
       color: '#ff00ff'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+
+    this.pauseTextLabel = this.scene.add.text(pauseX, pauseY + 38 * uiScale + 12, 'PAUSE', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${10 * uiScale}px`,
+      color: 'rgba(255, 0, 255, 0.9)'
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     this.scene.input.on('pointerdown', this.handlePointerDown, this);
@@ -62,18 +75,25 @@ export default class TouchControls {
     this.scene.input.off('pointerup', this.handlePointerUp, this);
     this.joystickBase?.destroy();
     this.joystickThumb?.destroy();
+    this.joystickLabel?.destroy();
     this.pauseButton?.destroy();
     this.pauseLabel?.destroy();
+    this.pauseTextLabel?.destroy();
   }
 
   handlePointerDown(pointer) {
     if (!this.enabled) return;
     const { x, y } = pointer;
 
-    // ¿Toca botón de pausa?
-    if (this.pauseButton && Phaser.Geom.Circle.Contains(this.pauseButton.geom, x, y)) {
-      this.actionPause = true;
-      return;
+    // ¿Toca botón de pausa? (Phaser 3 circle = Ellipse; hit test por distancia)
+    if (this.pauseButton) {
+      const r = (this.pauseButton.width || this.pauseButton.radius || 38) / 2;
+      const dx = x - this.pauseButton.x;
+      const dy = y - this.pauseButton.y;
+      if (dx * dx + dy * dy <= r * r) {
+        this.actionPause = true;
+        return;
+      }
     }
 
     // Joystick: solo un pointer activo
@@ -107,8 +127,8 @@ export default class TouchControls {
     if (!this.joystickBase || !this.joystickThumb) return;
     const dx = pointer.x - this.joystickBase.x;
     const dy = pointer.y - this.joystickBase.y;
-
-    const maxDist = this.joystickBase.radius * 0.85;
+    const baseRadius = (this.joystickBase.width != null ? this.joystickBase.width / 2 : this.joystickBase.radius) || 60;
+    const maxDist = baseRadius * 0.85;
     const dist = Math.min(Math.sqrt(dx * dx + dy * dy), maxDist);
     const angle = Math.atan2(dy, dx);
 

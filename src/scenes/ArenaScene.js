@@ -6,15 +6,17 @@ import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import MapManager from '../systems/MapManager.js';
 import TouchControls from '../systems/TouchControls.js';
-import { getUIScale, getCameraZoom } from '../utils/layout.js';
+import { getUIScale, getCameraZoom, getHudLayout } from '../utils/layout.js';
 import RunModifiers from '../systems/RunModifiers.js';
 import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
 import LeaderboardManager from '../systems/LeaderboardManager.js';
 import { t } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
+import { progressStore, saveProgressToWallet, persistIfWalletConnected } from '../utils/walletProgressService.js';
 import * as gameClient from '../contracts/gameClient.js';
-import { validateGameRules } from '../zk/gameProof.js';
+import { validateGameRules, computeGameHash, generateRunSeed } from '../zk/gameProof.js';
+import * as BALANCE from '../config/balance.js';
 
 export default class ArenaScene extends Phaser.Scene {
   constructor() {
@@ -33,12 +35,12 @@ export default class ArenaScene extends Phaser.Scene {
     this.cursors = null;
     this.wasd = null;
 
-    // Player stats (scale with level) - daño moderado para que las olas altas cuesten más
+    // Player stats (scale with level) - menos vida, menos disparos base
     this.baseStats = {
       speed: 200,
-      attackRate: 300, // ms between attacks
-      attackDamage: 16, // un poco menos para alargar combate en olas altas
-      maxHealth: 200
+      attackRate: 480, // ms between attacks (más lento = menos disparos)
+      attackDamage: 16,
+      maxHealth: 100
     };
 
     // Invincibility after hit
@@ -47,12 +49,17 @@ export default class ArenaScene extends Phaser.Scene {
     // Wave system
     this.waveNumber = 1;
     // Más enemigos base por ola para que escale más agresivo
-    this.enemiesPerWave = 22;
+    this.enemiesPerWave = 52; // base 22 + 30 extra mobs en todas las waves
     this.spawnTimer = null;
     this.waveTimer = null;
 
     // Combat
     this.lastAttackTime = 0;
+    this.playerDead = false; // Guard: evita múltiples playerDeath() que explotan el PC
+
+    // AFK detection: last time player gave input (movement / key / pointer). Used for regen and difficulty.
+    this.lastInputTime = 0;
+    this.lastRegenTime = 0;
 
     // Current weapon (default: basic)
     this.currentWeapon = {
@@ -62,7 +69,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Weapon definitions
     this.weaponTypes = {
-      basic: { attackRate: 1, damage: 1, projectiles: 1, pierce: false, color: 0x00ffff },
+      basic: { attackRate: 0.6, damage: 1, projectiles: 1, pierce: false, color: 0x00ffff },
       spread: { attackRate: 1, damage: 0.7, projectiles: 5, pierce: false, color: 0xff9900 },
       pierce: { attackRate: 0.8, damage: 1.5, projectiles: 1, pierce: true, color: 0x0099ff },
       orbital: { attackRate: 0, damage: 2, projectiles: 0, pierce: true, color: 0xaa44ff },
@@ -89,7 +96,7 @@ export default class ArenaScene extends Phaser.Scene {
         name: 'STACK OVERFLOW',
         health: 2000,
         speed: 30,
-        damage: 15,
+        damage: 25,
         xpValue: 500,
         wave: 20,
         color: 0x00ff00,
@@ -99,7 +106,7 @@ export default class ArenaScene extends Phaser.Scene {
         name: 'NULL POINTER',
         health: 3500,
         speed: 60,
-        damage: 20,
+        damage: 30,
         xpValue: 1000,
         wave: 40,
         color: 0xff00ff,
@@ -109,7 +116,7 @@ export default class ArenaScene extends Phaser.Scene {
         name: 'MEMORY LEAK PRIME',
         health: 5000,
         speed: 20,
-        damage: 25,
+        damage: 35,
         xpValue: 1500,
         wave: 60,
         color: 0xaa00ff,
@@ -119,7 +126,7 @@ export default class ArenaScene extends Phaser.Scene {
         name: 'KERNEL PANIC',
         health: 8000,
         speed: 40,
-        damage: 35,
+        damage: 45,
         xpValue: 3000,
         wave: 80,
         color: 0xff0000,
@@ -166,31 +173,31 @@ export default class ArenaScene extends Phaser.Scene {
     // texture: Phaser texture key (defaults to enemy type name if omitted)
     this.enemyTypes = {
       // Original enemies – buffeados para que peguen más duro
-      bug: { health: 24, speed: 45, damage: 4, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 6 }, // base trash mob
-      glitch: { health: 45, speed: 75, damage: 7, xpValue: 15, behavior: 'chase', waveMin: 3, spawnWeight: 2 },
-      'memory-leak': { health: 90, speed: 28, damage: 14, xpValue: 30, behavior: 'chase', waveMin: 5 },
-      'syntax-error': { health: 18, speed: 110, damage: 3, xpValue: 10, behavior: 'teleport', teleportCooldown: 2800, waveMin: 8, spawnWeight: 2 },
-      'infinite-loop': { health: 60, speed: 55, damage: 6, xpValue: 20, behavior: 'orbit', orbitRadius: 120, waveMin: 12 },
-      'race-condition': { health: 40, speed: 70, damage: 8, xpValue: 25, behavior: 'erratic', speedVariance: 90, waveMin: 15 },
+      bug: { health: 24, speed: 45, damage: 14, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 6 }, // base trash mob
+      glitch: { health: 45, speed: 75, damage: 17, xpValue: 15, behavior: 'chase', waveMin: 3, spawnWeight: 2 },
+      'memory-leak': { health: 90, speed: 28, damage: 24, xpValue: 30, behavior: 'chase', waveMin: 5 },
+      'syntax-error': { health: 18, speed: 110, damage: 13, xpValue: 10, behavior: 'teleport', teleportCooldown: 2800, waveMin: 8, spawnWeight: 2 },
+      'infinite-loop': { health: 60, speed: 55, damage: 16, xpValue: 20, behavior: 'orbit', orbitRadius: 120, waveMin: 12 },
+      'race-condition': { health: 40, speed: 70, damage: 18, xpValue: 25, behavior: 'erratic', speedVariance: 90, waveMin: 15 },
 
       // Coding-themed enemies
-      'segfault': { health: 12, speed: 0, damage: 999, xpValue: 50, behavior: 'deathzone', lifespan: 8000, waveMin: 30, texture: 'enemy-segfault' },
-      'dependency-hell': { health: 120, speed: 32, damage: 8, xpValue: 80, behavior: 'spawner', spawnInterval: 2700, maxMinions: 5, waveMin: 35, texture: 'enemy-dependency-hell' },
-      'stack-overflow': { health: 150, speed: 38, damage: 10, xpValue: 100, behavior: 'grow', growRate: 0.0012, waveMin: 25, texture: 'enemy-stack-overflow' },
+      'segfault': { health: 12, speed: 0, damage: 1009, xpValue: 50, behavior: 'deathzone', lifespan: 8000, waveMin: 30, texture: 'enemy-segfault' },
+      'dependency-hell': { health: 120, speed: 32, damage: 18, xpValue: 80, behavior: 'spawner', spawnInterval: 2700, maxMinions: 5, waveMin: 35, texture: 'enemy-dependency-hell' },
+      'stack-overflow': { health: 150, speed: 38, damage: 20, xpValue: 100, behavior: 'grow', growRate: 0.0012, waveMin: 25, texture: 'enemy-stack-overflow' },
 
       // AI-themed enemies
-      'hallucination': { health: 1, speed: 55, damage: 0, xpValue: 1, behavior: 'fake', waveMin: 20, spawnWeight: 2, texture: 'enemy-hallucination' },
-      'token-overflow': { health: 60, speed: 50, damage: 7, xpValue: 40, behavior: 'growDamage', growRate: 0.0007, waveMin: 25, texture: 'enemy-token-overflow' },
-      'context-loss': { health: 70, speed: 65, damage: 9, xpValue: 60, behavior: 'contextLoss', teleportCooldown: 2400, wanderChance: 0.35, waveMin: 30, texture: 'enemy-context-loss' },
-      'prompt-injection': { health: 85, speed: 45, damage: 7, xpValue: 100, behavior: 'hijack', hijackDuration: 5500, hijackCooldown: 9000, waveMin: 40, texture: 'enemy-prompt-injection' },
+      'hallucination': { health: 1, speed: 55, damage: 10, xpValue: 1, behavior: 'fake', waveMin: 20, spawnWeight: 2, texture: 'enemy-hallucination' },
+      'token-overflow': { health: 60, speed: 50, damage: 17, xpValue: 40, behavior: 'growDamage', growRate: 0.0007, waveMin: 25, texture: 'enemy-token-overflow' },
+      'context-loss': { health: 70, speed: 65, damage: 19, xpValue: 60, behavior: 'contextLoss', teleportCooldown: 2400, wanderChance: 0.35, waveMin: 30, texture: 'enemy-context-loss' },
+      'prompt-injection': { health: 85, speed: 45, damage: 17, xpValue: 100, behavior: 'hijack', hijackDuration: 5500, hijackCooldown: 9000, waveMin: 40, texture: 'enemy-prompt-injection' },
 
       // v2 enemies (Mixed AI + Coding)
-      '404-not-found': { health: 35, speed: 60, damage: 5, xpValue: 20, behavior: 'invisible', waveMin: 18, texture: 'enemy-404-not-found' },
-      'cors-error': { health: 50, speed: 0, damage: 10, xpValue: 30, behavior: 'blocker', blockDuration: 6000, waveMin: 22, texture: 'enemy-cors-error' },
-      'type-error': { health: 45, speed: 55, damage: 7, xpValue: 25, behavior: 'morph', morphInterval: 2800, waveMin: 28, texture: 'enemy-type-error' },
-      'git-conflict': { health: 65, speed: 45, damage: 6, xpValue: 35, behavior: 'split', waveMin: 32, texture: 'enemy-git-conflict' },
-      'overfitting': { health: 75, speed: 70, damage: 8, xpValue: 45, behavior: 'predict', waveMin: 38, texture: 'enemy-overfitting' },
-      'mode-collapse': { health: 95, speed: 38, damage: 9, xpValue: 60, behavior: 'clone', cloneCooldown: 7500, cloneRadius: 130, waveMin: 45, texture: 'enemy-mode-collapse' }
+      '404-not-found': { health: 35, speed: 60, damage: 15, xpValue: 20, behavior: 'invisible', waveMin: 18, texture: 'enemy-404-not-found' },
+      'cors-error': { health: 50, speed: 0, damage: 20, xpValue: 30, behavior: 'blocker', blockDuration: 6000, waveMin: 22, texture: 'enemy-cors-error' },
+      'type-error': { health: 45, speed: 55, damage: 17, xpValue: 25, behavior: 'morph', morphInterval: 2800, waveMin: 28, texture: 'enemy-type-error' },
+      'git-conflict': { health: 65, speed: 45, damage: 16, xpValue: 35, behavior: 'split', waveMin: 32, texture: 'enemy-git-conflict' },
+      'overfitting': { health: 75, speed: 70, damage: 18, xpValue: 45, behavior: 'predict', waveMin: 38, texture: 'enemy-overfitting' },
+      'mode-collapse': { health: 95, speed: 38, damage: 19, xpValue: 60, behavior: 'clone', cloneCooldown: 7500, cloneRadius: 130, waveMin: 45, texture: 'enemy-mode-collapse' }
     };
 
     // Mini-boss definitions (appear at waves 10, 30, 50...)
@@ -199,7 +206,7 @@ export default class ArenaScene extends Phaser.Scene {
         name: 'DEADLOCK',
         health: 500,
         speed: 35,
-        damage: 12,
+        damage: 22,
         xpValue: 150,
         color: 0xff6600,
         ability: 'freeze'
@@ -225,9 +232,9 @@ export default class ArenaScene extends Phaser.Scene {
     // Collected weapon types for evolution
     this.collectedWeapons = new Set(['basic']);
 
-    // High score tracking
-    this.highScore = parseInt(localStorage.getItem('vibeCoderHighScore') || '0');
-    this.highWave = parseInt(localStorage.getItem('vibeCoderHighWave') || '0');
+    // High score tracking (wallet-backed via progressStore)
+    this.highScore = progressStore.highScore;
+    this.highWave = progressStore.highWave;
 
     // Pause state
     this.isPaused = false;
@@ -274,10 +281,16 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   create() {
+    // Gameplay music mode — cambiar música del menú a gameplay al entrar
+    Audio.setMusicMode('gameplay');
+    if (window.VIBE_SETTINGS?.musicEnabled) {
+      Audio.startGameplayMusic();
+    }
+
     // Set up larger world bounds for exploration
     this.physics.world.setBounds(0, 0, this.worldWidth, this.worldHeight);
 
-    // Create tiled background
+    // Create tiled background (also starts gameplay music via setTrack)
     this.createBackground();
 
     // UI scale based on current resolution
@@ -395,6 +408,9 @@ export default class ArenaScene extends Phaser.Scene {
     // Initialize EventManager
     this.eventManager = new EventManager(this);
 
+    // Run seed for ranked (ZK) submit: bind run_hash to this run (siempre para que submit ZK funcione al morir)
+    this.runSeed = generateRunSeed();
+
     // Initialize ShrineManager
     this.shrineManager = new ShrineManager(this);
     this.shrineManager.init();
@@ -417,15 +433,16 @@ export default class ArenaScene extends Phaser.Scene {
       this.modifierEffects = RunModifiers.getCombinedEffects(this.activeModifiers);
     }
 
-    // Initialize audio on first interaction
-    this.input.on('pointerdown', () => {
+    // Initialize audio on first interaction + AFK reset on any input
+    this.lastInputTime = this.time.now;
+    this.lastRegenTime = this.time.now;
+    const markActive = () => {
+      this.lastInputTime = this.time.now;
       Audio.initAudio();
       Audio.resumeAudio();
-    });
-    this.input.keyboard.on('keydown', () => {
-      Audio.initAudio();
-      Audio.resumeAudio();
-    });
+    };
+    this.input.on('pointerdown', markActive);
+    this.input.keyboard.on('keydown', markActive);
 
     // Music toggle - press M
     this.input.keyboard.on('keydown-M', () => {
@@ -669,10 +686,15 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   createPlayer() {
+    // Use selected character (VibeCoder, Destroyer, Swordsman)
+    const charId = progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
+    const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS.vibecoder;
+    this.playerAnimPrefix = char.animPrefix;
+
     // Create player at center of the larger world
-    this.player = this.physics.add.sprite(this.worldWidth / 2, this.worldHeight / 2, 'player');
+    this.player = this.physics.add.sprite(this.worldWidth / 2, this.worldHeight / 2, char.textureKey);
     this.player.setCollideWorldBounds(true);
-    this.player.setScale(0.7 * this.uiScale); // Más grande en resoluciones altas
+    this.player.setScale(0.85 * this.uiScale); // Más grande y visible en arena
 
     // Player health
     this.player.health = this.getStats().maxHealth;
@@ -795,10 +817,12 @@ export default class ArenaScene extends Phaser.Scene {
     const baseDamage = this.baseStats.attackDamage + (level * 3); // menos escalado para no one-shot en olas altas
     const baseHealth = this.baseStats.maxHealth + (level * 20);
 
+    // Nerfeo global de daño (balance.js): -20% para evitar instakill / Global weapon damage nerf
+    const weaponNerf = BALANCE.WEAPON_DAMAGE_NERF;
     return {
       speed: Math.floor(baseSpeed * speedBonus * rebirthMultiplier),
-      attackRate: Math.max(50, Math.floor(baseAttackRate / (attackRateBonus * rebirthMultiplier))), // lower is faster
-      attackDamage: Math.floor(baseDamage * damageBonus * rebirthMultiplier * modDamageMult * shrineDamageMult),
+      attackRate: Math.max(50, Math.floor(baseAttackRate / (attackRateBonus * rebirthMultiplier))),
+      attackDamage: Math.floor(baseDamage * damageBonus * rebirthMultiplier * modDamageMult * shrineDamageMult * weaponNerf),
       maxHealth: Math.floor(baseHealth * healthBonus * rebirthMultiplier * modHealthMult)
     };
   }
@@ -807,6 +831,37 @@ export default class ArenaScene extends Phaser.Scene {
     const upgrades = window.VIBE_UPGRADES || { getBonus: () => 1 };
     const critBonus = (upgrades.getBonus('critChance') - 1); // convert 1.x to 0.x
     return 0.1 + critBonus; // base 10% + upgrade bonus
+  }
+
+  /** AFK = no input for AFK_THRESHOLD_MS. Used for regen (none when AFK) and spawn/damage penalty. */
+  isAFK() {
+    return this.time.now - this.lastInputTime >= BALANCE.AFK_THRESHOLD_MS;
+  }
+
+  /** Color por peligrosidad del enemigo (daño base). Verde = bajo, amarillo = medio, rojo = alto. */
+  getEnemyDangerTint(damage) {
+    if (damage <= 8) return 0x88ff88;
+    if (damage <= 20) return 0xffff88;
+    return 0xff8888;
+  }
+
+  /** Tooltip para arma: daño, tasa, efectos. / Weapon tooltip for accessibility. */
+  getWeaponTooltip(weaponType) {
+    let w = this.weaponTypes[weaponType];
+    if (!w && this.evolutionRecipes) {
+      for (const recipe of Object.values(this.evolutionRecipes)) {
+        if (recipe.result === weaponType) { w = recipe; break; }
+      }
+    }
+    w = w || this.weaponTypes.basic;
+    if (!w) return '';
+    const dmg = (w.damage || 1).toFixed(1);
+    const speed = (w.attackRate || 1).toFixed(1);
+    let s = `Dmg: ${dmg}x | Speed: ${speed}x`;
+    if (w.projectiles > 1) s += ` | ${w.projectiles} proj`;
+    if (w.pierce) s += ' | Pierce';
+    if (w.special) s += ` | ${w.special}`;
+    return s;
   }
 
   getWeaponDurationBonus() {
@@ -985,71 +1040,132 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   createHUD() {
+    this.hudLayout = getHudLayout(this);
+    const L = this.hudLayout;
+    const HUD_DEPTH = 500;
+    const font = () => ({ fontFamily: '"Segoe UI", system-ui, sans-serif' });
+
     // XP Bar background
     this.xpBarBg = this.add.graphics();
     this.xpBarBg.fillStyle(0x333333, 0.8);
-    this.xpBarBg.fillRect(10, 10, 200, 20);
-    this.xpBarBg.setScrollFactor(0);
+    this.xpBarBg.fillRect(L.leftX, L.xpY, L.barW, L.barH);
+    this.xpBarBg.setScrollFactor(0).setDepth(HUD_DEPTH);
 
     // XP Bar fill
     this.xpBar = this.add.graphics();
-    this.xpBar.setScrollFactor(0);
+    this.xpBar.setScrollFactor(0).setDepth(HUD_DEPTH);
 
-    // Health bar background
+    // HP label — Barra de vida visible
+    this.hpLabelText = this.add.text(L.leftX, L.hpY - 2, t('hud.hp'), {
+      ...font(),
+      fontSize: `${L.fontSize.small}px`,
+      color: '#00ff00',
+      fontStyle: 'bold'
+    }).setScrollFactor(0).setDepth(HUD_DEPTH);
+
+    // Health bar background + border
     this.healthBarBg = this.add.graphics();
     this.healthBarBg.fillStyle(0x333333, 0.8);
-    this.healthBarBg.fillRect(10, 35, 200, 15);
-    this.healthBarBg.setScrollFactor(0);
+    this.healthBarBg.fillRect(L.leftX, L.hpY, L.barW, L.barHp);
+    this.healthBarBg.lineStyle(1, 0x00ff00, 0.6);
+    this.healthBarBg.strokeRect(L.leftX, L.hpY, L.barW, L.barHp);
+    this.healthBarBg.setScrollFactor(0).setDepth(HUD_DEPTH);
 
     // Health bar fill
     this.healthBar = this.add.graphics();
-    this.healthBar.setScrollFactor(0);
+    this.healthBar.setScrollFactor(0).setDepth(HUD_DEPTH);
 
     // Level text
-    this.levelText = this.add.text(10, 55, `${t('hud.lvl')} 1`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
+    this.levelText = this.add.text(L.leftX, L.leftTextY, `${t('hud.lvl')} 1`, {
+      ...font(),
+      fontSize: `${L.fontSize.large}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setScrollFactor(0);
+    }).setScrollFactor(0).setDepth(HUD_DEPTH);
 
     // XP text
-    this.xpText = this.add.text(10, 75, `${t('hud.xp')}: 0 / 100`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
+    this.xpText = this.add.text(L.leftX, L.leftTextY + L.lineH, `${t('hud.xp')}: 0 / 100`, {
+      ...font(),
+      fontSize: `${L.fontSize.normal}px`,
       color: '#aaaaaa'
-    }).setScrollFactor(0);
+    }).setScrollFactor(0).setDepth(HUD_DEPTH);
 
-    // Wave text
-    this.waveText = this.add.text(700, 10, `${t('hud.wave')} 1`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
+    // Right column: wave, enemies, score, kills, stage, hi_wave
+    let ry = L.rightTopY;
+    this.waveText = this.add.text(L.rightX, ry, `${t('hud.wave')} 1`, {
+      ...font(),
+      fontSize: `${L.fontSize.large}px`,
       color: '#ff00ff',
       fontStyle: 'bold'
-    }).setOrigin(1, 0).setScrollFactor(0);
-
-    // Kills text
-    this.killsText = this.add.text(700, 30, `${t('hud.kills')}: 0`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
-      color: '#aaaaaa'
-    }).setOrigin(1, 0).setScrollFactor(0);
-
-    // Current weapon indicator
-    this.weaponText = this.add.text(10, 95, `${t('hud.weapon')}: BASIC`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
+    ry += L.lineH;
+    this.enemiesCountText = this.add.text(L.rightX, ry, `${t('hud.enemies')}: 0`, {
+      ...font(),
+      fontSize: `${L.fontSize.normal}px`,
+      color: '#ffaa00'
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
+    ry += L.lineH;
+    this.scoreText = this.add.text(L.rightX, ry, `${t('hud.score')}: 0`, {
+      ...font(),
+      fontSize: `${L.fontSize.normal}px`,
       color: '#00ffff'
-    }).setScrollFactor(0);
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
+    ry += L.lineH;
+    this.killsText = this.add.text(L.rightX, ry, `${t('hud.kills')}: 0`, {
+      ...font(),
+      fontSize: `${L.fontSize.normal}px`,
+      color: '#aaaaaa'
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
+    ry += L.lineH;
+    this.stageText = this.add.text(L.rightX, ry, `${t('hud.stage')}: ${t('stages.debug_zone')}`, {
+      ...font(),
+      fontSize: `${L.fontSize.small}px`,
+      color: '#00ffff'
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
+    ry += L.lineH;
+    this.highScoreText = this.add.text(L.rightX, ry, `${t('hud.hi_wave')}: ${this.highWave}`, {
+      ...font(),
+      fontSize: `${L.fontSize.small}px`,
+      color: '#ffd700'
+    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
 
-    // Connection status
-    this.connectionText = this.add.text(400, 580, t('hud.connecting'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
+    // Mode indicator — centro, debajo de las barras para no solaparse
+    this.modeIndicatorText = this.add.text(L.centerX, L.modeY, t('hud.mode_manual'), {
+      ...font(),
+      fontSize: `${L.fontSize.normal}px`,
+      color: '#888888',
+      fontStyle: 'bold'
+    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
+
+    // Weapon + tooltip (izquierda, debajo de XP text)
+    const weaponY = L.leftTextY + L.lineH * 2;
+    this.weaponText = this.add.text(L.leftX, weaponY, `${t('hud.weapon')}: BASIC`, {
+      ...font(),
+      fontSize: `${L.fontSize.normal}px`,
+      color: '#00ffff'
+    }).setScrollFactor(0).setDepth(HUD_DEPTH);
+    this.weaponTooltipText = this.add.text(L.leftX, weaponY + L.lineH, '', {
+      ...font(),
+      fontSize: `${L.fontSize.small}px`,
+      color: '#aaaaaa'
+    }).setScrollFactor(0).setDepth(HUD_DEPTH).setVisible(false);
+    this.weaponText.setInteractive({ useHandCursor: true });
+    this.weaponText.on('pointerover', () => {
+      const tip = this.getWeaponTooltip(this.currentWeapon?.type || 'basic');
+      if (tip) {
+        this.weaponTooltipText.setText(tip);
+        this.weaponTooltipText.setVisible(true);
+      }
+    });
+    this.weaponText.on('pointerout', () => this.weaponTooltipText.setVisible(false));
+
+    // Connection status — oculto (sin indicador OFFLINE/LIVE/SPACE FOR XP)
+    this.connectionText = this.add.text(L.centerX, L.connectionY, '', {
+      ...font(),
+      fontSize: `${L.fontSize.normal}px`,
       color: '#ffff00'
-    }).setOrigin(0.5).setScrollFactor(0);
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(HUD_DEPTH).setVisible(false);
 
-    // Listen for connection events (store refs for cleanup)
     this.xpServerConnectedHandler = () => {
       this.connectionText.setText(t('hud.live'));
       this.connectionText.setColor('#00ff00');
@@ -1061,76 +1177,82 @@ export default class ArenaScene extends Phaser.Scene {
     window.addEventListener('xpserver-connected', this.xpServerConnectedHandler);
     window.addEventListener('xpserver-disconnected', this.xpServerDisconnectedHandler);
 
-    // Check if already connected (connection may have happened before scene started)
     if (isConnected()) {
       this.connectionText.setText(t('hud.live'));
       this.connectionText.setColor('#00ff00');
     }
 
-    // Stage text
-    this.stageText = this.add.text(700, 50, `${t('hud.stage')}: ${t('stages.debug_zone')}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
-      color: '#00ffff'
-    }).setOrigin(1, 0).setScrollFactor(0);
-
-    // High score display
-    this.highScoreText = this.add.text(700, 70, `${t('hud.hi_wave')}: ${this.highWave}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
-      color: '#ffd700'
-    }).setOrigin(1, 0).setScrollFactor(0);
-
-    // Collected weapons display (for evolution tracking)
-    this.weaponsCollectedText = this.add.text(10, 115, `${t('hud.collected')}: basic`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
+    // Collected weapons (izquierda, debajo del weapon)
+    this.weaponsCollectedText = this.add.text(L.leftX, weaponY + L.lineH * 2, `${t('hud.collected')}: basic`, {
+      ...font(),
+      fontSize: `${L.fontSize.small}px`,
       color: '#888888'
-    }).setScrollFactor(0);
+    }).setScrollFactor(0).setDepth(HUD_DEPTH);
 
-    // Boss health bar (hidden by default)
+    // Boss health bar (centrado abajo)
     this.bossHealthBarBg = this.add.graphics();
     this.bossHealthBarBg.fillStyle(0x333333, 0.8);
-    this.bossHealthBarBg.fillRect(200, 560, 400, 25);
+    this.bossHealthBarBg.fillRect(L.bossBarX, L.bossBarY, L.bossBarW, L.bossBarH);
     this.bossHealthBarBg.setVisible(false);
-    this.bossHealthBarBg.setScrollFactor(0);
+    this.bossHealthBarBg.setScrollFactor(0).setDepth(HUD_DEPTH);
 
     this.bossHealthBar = this.add.graphics();
     this.bossHealthBar.setVisible(false);
-    this.bossHealthBar.setScrollFactor(0);
+    this.bossHealthBar.setScrollFactor(0).setDepth(HUD_DEPTH);
 
-    this.bossNameText = this.add.text(400, 545, '', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '14px',
+    this.bossNameText = this.add.text(L.centerX, L.bossNameY, '', {
+      ...font(),
+      fontSize: `${L.fontSize.medium}px`,
       color: '#ff0000',
       fontStyle: 'bold'
-    }).setOrigin(0.5).setScrollFactor(0);
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(HUD_DEPTH);
     this.bossNameText.setVisible(false);
 
     this.updateHUD();
   }
 
+  /**
+   * Actualiza toda la información del HUD (vida, XP, oleada, enemigos, puntuación, modo).
+   * Se llama cada frame y en eventos (daño, level up, etc.).
+   * Cómo conectar eventos al HUD:
+   * - Tras daño al jugador: this.updateHUD() (ya en playerHit) + this.cameras.main.flash() para impacto.
+   * - Tras daño a enemigo: this.showDamageNumber(enemy.x, enemy.y, damage, isCrit).
+   * - Eventos importantes: this.showEventPopUp(t('game.wave_cleared'), 'Wave 5', 1500).
+   */
   updateHUD() {
     const state = window.VIBE_CODER;
+    const L = this.hudLayout || getHudLayout(this);
     const xpNeeded = state.xpForLevel(state.level);
     const xpPercent = state.xp / xpNeeded;
 
     // Update XP bar
     this.xpBar.clear();
     this.xpBar.fillStyle(0x00ffff, 1);
-    this.xpBar.fillRect(10, 10, 200 * xpPercent, 20);
+    this.xpBar.fillRect(L.leftX, L.xpY, L.barW * xpPercent, L.barH);
 
     // Update health bar
     const healthPercent = this.player.health / this.player.maxHealth;
     this.healthBar.clear();
     this.healthBar.fillStyle(healthPercent > 0.3 ? 0x00ff00 : 0xff0000, 1);
-    this.healthBar.fillRect(10, 35, 200 * healthPercent, 15);
+    this.healthBar.fillRect(L.leftX, L.hpY, L.barW * healthPercent, L.barHp);
 
     // Update text
     this.levelText.setText(`${t('hud.lvl')} ${state.level}`);
     this.xpText.setText(`${t('hud.xp')}: ${state.xp} / ${xpNeeded}`);
     this.killsText.setText(`${t('hud.kills')}: ${state.kills}`);
     this.waveText.setText(`${t('hud.wave')} ${this.waveNumber}`);
+    // Enemies remaining on screen / Enemigos en pantalla
+    const enemyCount = this.enemies ? this.enemies.countActive() : 0;
+    if (this.enemiesCountText) this.enemiesCountText.setText(`${t('hud.enemies')}: ${enemyCount}`);
+    // Score = total XP
+    if (this.scoreText) this.scoreText.setText(`${t('hud.score')}: ${state.totalXP}`);
+    // Mode indicator (set in update from hudMode)
+    const modeKey = (this.hudMode === 'hunt' && 'mode_hunt') || (this.hudMode === 'evade' && 'mode_evade') || (this.hudMode === 'idle' && 'mode_idle') || 'mode_manual';
+    if (this.modeIndicatorText) {
+      this.modeIndicatorText.setText(t('hud.' + modeKey));
+      const modeColor = this.hudMode === 'evade' ? '#ff6600' : this.hudMode === 'hunt' ? '#00ff88' : this.hudMode === 'idle' ? '#888888' : '#00aaff';
+      this.modeIndicatorText.setColor(modeColor);
+    }
 
     // Update weapon text — colors derived from weaponTypes/evolutionRecipes (single source of truth)
     const weaponLabel = this.currentWeapon.isEvolved ? `★${this.currentWeapon.type.toUpperCase()}★` : this.currentWeapon.type.toUpperCase();
@@ -1162,7 +1284,7 @@ export default class ArenaScene extends Phaser.Scene {
       const bossHealthPercent = this.currentBoss.health / this.currentBoss.maxHealth;
       this.bossHealthBar.clear();
       this.bossHealthBar.fillStyle(this.currentBoss.bossColor, 1);
-      this.bossHealthBar.fillRect(200, 560, 400 * bossHealthPercent, 25);
+      this.bossHealthBar.fillRect(L.bossBarX, L.bossBarY, L.bossBarW * bossHealthPercent, L.bossBarH);
 
       this.bossNameText.setText(`⚠ ${this.currentBoss.bossName} ⚠`); // bossName may be translated elsewhere
       this.bossNameText.setColor(this.hexToColorStr(this.currentBoss.bossColor));
@@ -1268,42 +1390,48 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   /**
-   * Show modifier announcement at run start
+   * Show modifier announcement at run start — centrado en pantalla, tamaño legible
    */
   showModifierAnnouncement() {
     if (!this.activeModifiers || this.activeModifiers.length === 0) return;
 
     const mod = this.activeModifiers[0];
+    const w = this.scale?.width ?? 800;
+    const h = this.scale?.height ?? 720;
+    const centerX = w / 2;
+    const centerY = h / 2;
 
-    // Create banner container
-    const banner = this.add.container(400, 100).setScrollFactor(0).setDepth(1000);
+    // Create banner container — centro de la pantalla
+    const banner = this.add.container(centerX, centerY).setScrollFactor(0).setDepth(1000);
 
-    // Background
-    const bg = this.add.rectangle(0, 0, 350, 60, 0x000000, 0.9);
-    bg.setStrokeStyle(3, mod.color);
+    // Background — más grande para leer bien (no excesivo)
+    const boxW = 420;
+    const boxH = 88;
+    const bg = this.add.rectangle(0, 0, boxW, boxH, 0x000000, 0.92);
+    bg.setStrokeStyle(4, mod.color);
 
-    // Modifier text
-    const modText = this.add.text(0, -10, `${mod.icon} ${mod.name}`, {
+    // Modifier text — título más grande
+    const modText = this.add.text(0, -18, `${mod.icon} ${mod.name}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '20px',
+      fontSize: '26px',
       color: this.hexToColorStr(mod.color),
       fontStyle: 'bold'
     }).setOrigin(0.5);
 
-    // Description
-    const descText = this.add.text(0, 15, mod.desc, {
+    // Description — descripción legible
+    const descText = this.add.text(0, 18, mod.desc, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
-      color: '#aaaaaa'
+      fontSize: '15px',
+      color: '#cccccc'
     }).setOrigin(0.5);
 
     banner.add([bg, modText, descText]);
 
-    // Animate in
-    banner.y = -60;
+    // Animate in (desde arriba al centro)
+    banner.y = centerY - 120;
     this.tweens.add({
       targets: banner,
-      y: 100,
+      y: centerY,
       duration: 500,
       ease: 'Back.easeOut'
     });
@@ -1312,7 +1440,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.time.delayedCall(4000, () => {
       this.tweens.add({
         targets: banner,
-        y: -60,
+        y: centerY - 120,
         alpha: 0,
         duration: 500,
         onComplete: () => banner.destroy()
@@ -1351,21 +1479,20 @@ export default class ArenaScene extends Phaser.Scene {
       this.eventManager.tryTriggerEvent(this.waveNumber);
     }
 
-    // Spawn enemies over time — olas altas se convierten en bullet hell
+    // Spawn enemies over time — balance.js: wave scale and spawn delay
     let spawned = 0;
     let waveScale;
     if (this.waveNumber < 10) {
-      waveScale = this.waveNumber * 2.5;
+      waveScale = this.waveNumber * BALANCE.WAVE_SCALE_EARLY;
     } else if (this.waveNumber < 25) {
-      waveScale = this.waveNumber * 4;
+      waveScale = this.waveNumber * BALANCE.WAVE_SCALE_MID;
     } else {
-      waveScale = this.waveNumber * 6;
+      waveScale = this.waveNumber * BALANCE.WAVE_SCALE_LATE;
     }
-    // MUCHOS enemigos en olas altas, pero con un cap razonable
-    const toSpawn = Math.min(this.enemiesPerWave + Math.floor(waveScale), 150);
-    const spawnDelay = this.waveNumber >= 8
-      ? Math.max(220, 900 - this.waveNumber * 30) // spawnea muy rápido en olas altas
-      : 900;
+    const toSpawn = Math.min(this.enemiesPerWave + Math.floor(waveScale), BALANCE.SPAWN_CAP);
+    let spawnDelay = this.waveNumber >= 8
+      ? Math.max(BALANCE.SPAWN_DELAY_MIN, BALANCE.SPAWN_DELAY_BASE - this.waveNumber * BALANCE.SPAWN_DELAY_PER_WAVE)
+      : BALANCE.SPAWN_DELAY_BASE;
 
     this.spawnTimer = this.time.addEvent({
       delay: spawnDelay,
@@ -1385,10 +1512,13 @@ export default class ArenaScene extends Phaser.Scene {
       loop: true
     });
 
-    // Update high wave record
+    // Update high wave record (wallet-backed)
     if (this.waveNumber > this.highWave) {
       this.highWave = this.waveNumber;
-      localStorage.setItem('vibeCoderHighWave', this.highWave.toString());
+      progressStore.highWave = this.highWave;
+      stellarWallet.getAddress().then((addr) => {
+        if (addr) saveProgressToWallet(addr, { highWave: this.highWave });
+      });
     }
   }
 
@@ -1400,6 +1530,8 @@ export default class ArenaScene extends Phaser.Scene {
     if (enemiesCleared && spawnDone && !bossAlive) {
       // Wave complete sound!
       Audio.playWaveComplete();
+      // Pop-up animado oleada completada / Wave cleared pop-up
+      this.showEventPopUp(t('game.wave_cleared'), `Wave ${this.waveNumber} → ${this.waveNumber + 1}`, 1500);
 
       this.waveNumber++;
       this.waveText.setText(`WAVE ${this.waveNumber}`);
@@ -1415,8 +1547,9 @@ export default class ArenaScene extends Phaser.Scene {
       // Save progress to leaderboard (so wave 13 etc. shows even if player hasn't died yet)
       const state = window.VIBE_CODER;
       const settings = window.VIBE_SETTINGS || {};
-      LeaderboardManager.addEntry(settings.playerName, this.waveNumber, state.totalXP);
       stellarWallet.getAddress().then((addr) => {
+        const displayName = addr ? stellarWallet.shortAddress(addr) : (settings.playerName || 'Anonymous');
+        LeaderboardManager.addEntry(displayName, this.waveNumber, state.totalXP);
         if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP).catch(() => {});
       });
 
@@ -1475,8 +1608,9 @@ export default class ArenaScene extends Phaser.Scene {
     const boss = this.enemies.create(bossX, bossY, bossKey);
     boss.health = Math.floor(bossData.health * healthScale);
     boss.maxHealth = boss.health;
-    boss.speed = bossData.speed;
-    boss.damage = bossData.damage;
+    const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
+    boss.speed = Math.floor(bossData.speed * mobSpeedMult);
+    boss.damage = Math.max(1, Math.floor(bossData.damage * (1 + this.waveNumber * BALANCE.BOSS_DAMAGE_FACTOR)));
     boss.xpValue = bossData.xpValue;
     boss.enemyType = bossKey;
     boss.isBoss = true;
@@ -1568,21 +1702,48 @@ export default class ArenaScene extends Phaser.Scene {
     const textureName = typeData.texture || type;
 
     const enemy = this.enemies.create(x, y, textureName);
-    // Vida base por nivel + extra por oleada para que en olas altas tarden más en morir
-    const waveHealthMult = 1 + (this.waveNumber - 1) * 0.05; // wave 10 ≈ 1.45x, wave 20 ≈ 1.95x
+    // Vida base por nivel + extra por oleada / Base health + wave scaling
+    const waveHealthMult = 1 + (this.waveNumber - 1) * 0.05;
     enemy.health = Math.floor(typeData.health * healthScale * waveHealthMult);
     enemy.maxHealth = enemy.health;
     // Apply event speed modifier (e.g., CURSE event)
     const speedMod = this.eventEnemySpeedMod || 1;
-    enemy.speed = Math.floor(typeData.speed * speedMod);
-    // Daño escala con ola para que olas 12+ bajen vida rápido y sea skill-based
-    const damageScale = 1 + (this.waveNumber - 1) * 0.04; // wave 15 ≈ 1.56x, wave 25 ≈ 2x
-    enemy.damage = Math.max(1, Math.floor(typeData.damage * damageScale));
+    // Velocidad escala con oleada (balance.js) / Speed scales with wave (+5% MOB_SPEED_MULT)
+    const waveSpeedMult = Math.min(BALANCE.WAVE_SPEED_CAP, 1 + (this.waveNumber - 1) * BALANCE.WAVE_SPEED_FACTOR);
+    const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
+    enemy.speed = Math.floor(typeData.speed * speedMod * waveSpeedMult * mobSpeedMult);
+    // Daño por oleada: baseDamage * (1 + wave * WAVE_DAMAGE_FACTOR) * ENEMY_DAMAGE_MULT
+    const damageScale = 1 + this.waveNumber * BALANCE.WAVE_DAMAGE_FACTOR;
+    const enemyDmgMult = BALANCE.ENEMY_DAMAGE_MULT ?? 1;
+    let baseDmg = Math.max(1, Math.floor(typeData.damage * damageScale * enemyDmgMult));
+    enemy.damage = baseDmg;
     enemy.xpValue = typeData.xpValue;
     enemy.enemyType = type;
     enemy.behavior = typeData.behavior;
-    // Tamaño enemigos: un poco más grandes (bug 128px; resto escala base 1.15)
-    const enemyScale = type === 'bug' ? 0.58 : 1.15;
+
+    // Elite modifier (random): shield = more health, speedBurst = faster, criticalHit = can deal crit to player
+    if (BALANCE.ELITE_MODIFIERS && BALANCE.ELITE_MODIFIERS.length && Math.random() < BALANCE.ELITE_CHANCE) {
+      const mod = Phaser.Utils.Array.GetRandom(BALANCE.ELITE_MODIFIERS);
+      enemy.eliteModifier = mod;
+      enemy.isElite = true;
+      if (mod === 'shield') {
+        enemy.health = Math.floor(enemy.health * 1.5);
+        enemy.maxHealth = enemy.health;
+        enemy.setTint(0x4488ff);
+      } else if (mod === 'speedBurst') {
+        enemy.speed = Math.floor(enemy.speed * 1.4);
+        enemy.setTint(0xffaa00);
+      } else if (mod === 'criticalHit') {
+        enemy.canCritPlayer = true;
+        enemy.setTint(0xff2244);
+      }
+    } else {
+      // Colores por peligrosidad (accesibilidad) / Danger-based tint for non-elite
+      enemy.setTint(this.getEnemyDangerTint(baseDmg));
+    }
+
+    // Tamaño enemigos: más grandes para mejor visibilidad
+    const enemyScale = type === 'bug' ? 1.0 : 1.65;
     enemy.setScale(enemyScale);
 
     // Play enemy animation based on type
@@ -1712,8 +1873,9 @@ export default class ArenaScene extends Phaser.Scene {
     const miniBoss = this.enemies.create(mbX, mbY, 'miniboss');
     miniBoss.health = Math.floor(miniBossData.health * healthScale);
     miniBoss.maxHealth = miniBoss.health;
-    miniBoss.speed = miniBossData.speed;
-    miniBoss.damage = miniBossData.damage;
+    const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
+    miniBoss.speed = Math.floor(miniBossData.speed * mobSpeedMult);
+    miniBoss.damage = Math.max(1, Math.floor(miniBossData.damage * (1 + this.waveNumber * BALANCE.BOSS_DAMAGE_FACTOR)));
     miniBoss.xpValue = miniBossData.xpValue;
     miniBoss.enemyType = 'miniboss-deadlock';
     miniBoss.isMiniBoss = true;
@@ -1745,6 +1907,8 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   autoAttack() {
+    if (this.isPaused) return;
+
     // Orbital weapons don't use normal attack - they're always active
     if (this.currentWeapon.type === 'orbital' || this.currentWeapon.type === 'ringoffire' ||
         this.currentWeapon.type === 'plasmaorb' || this.currentWeapon.type === 'deathaura') return;
@@ -1970,15 +2134,7 @@ export default class ArenaScene extends Phaser.Scene {
     const cy = this.scale.height / 2;
     const uiScale = this.uiScale || 1;
 
-    // Pause physics
-    this.physics.pause();
-
-    // Pause all tweens
-    this.tweens.pauseAll();
-
-    // Pause timers
-    if (this.spawnTimer) this.spawnTimer.paused = true;
-    if (this.waveTimer) this.waveTimer.paused = true;
+    // No pausar física ni timers: el juego sigue corriendo (más dificultad). Solo se muestra el menú y se bloquea input del jugador.
 
     // Create pause menu container (fixed to camera)
     this.pauseMenu = this.add.container(cx, cy);
@@ -2138,8 +2294,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Settings display
     const settingsItems = [
       { key: 'musicEnabled', label: 'MUSIC' },
-      { key: 'sfxEnabled', label: 'SOUND FX' },
-      { key: 'autoMove', label: 'AUTO-MOVE' }
+      { key: 'sfxEnabled', label: 'SOUND FX' }
     ];
 
     let selectedSetting = 0;
@@ -2219,16 +2374,6 @@ export default class ArenaScene extends Phaser.Scene {
     Audio.playWeaponPickup();
 
     this.destroyPauseMenu();
-
-    // Resume physics
-    this.physics.resume();
-
-    // Resume tweens
-    this.tweens.resumeAll();
-
-    // Resume timers
-    if (this.spawnTimer) this.spawnTimer.paused = false;
-    if (this.waveTimer) this.waveTimer.paused = false;
 
     this.isPaused = false;
   }
@@ -2333,9 +2478,13 @@ export default class ArenaScene extends Phaser.Scene {
   quitToTitle() {
     this.isPaused = false;
 
-    // Save high scores
+    // Save high scores (wallet-backed)
     if (this.waveNumber > this.highWave) {
-      localStorage.setItem('vibeCoderHighWave', this.waveNumber.toString());
+      this.highWave = this.waveNumber;
+      progressStore.highWave = this.highWave;
+      stellarWallet.getAddress().then((addr) => {
+        if (addr) saveProgressToWallet(addr, { highWave: this.highWave });
+      });
     }
 
     // Stop music
@@ -2424,6 +2573,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     const success = SaveManager.saveRun(saveData);
     if (success) {
+      persistIfWalletConnected(); // Sync run save to wallet-backed API
       // Show subtle save indicator
       const saveIcon = this.add.text(760, 10, '💾', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
@@ -3182,6 +3332,48 @@ export default class ArenaScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * Pop-up animado para eventos importantes (leaderboard, santuarios, oleada).
+   * Animated pop-up for important events (leaderboard, shrines, wave).
+   */
+  showEventPopUp(title, subtitle = '', duration = 2000) {
+    const cx = this.scale.width / 2;
+    const cy = this.scale.height / 2 - 30;
+    const panel = this.add.graphics();
+    panel.fillStyle(0x0a0a12, 0.9);
+    panel.fillRoundedRect(cx - 140, cy - 45, 280, subtitle ? 90 : 60, 8);
+    panel.lineStyle(2, 0x00ffff, 0.8);
+    panel.strokeRoundedRect(cx - 140, cy - 45, 280, subtitle ? 90 : 60, 8);
+    panel.setScrollFactor(0);
+
+    const titleText = this.add.text(cx, cy - 25, title, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '18px',
+      color: '#ffd700',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setScrollFactor(0);
+    let subText = null;
+    if (subtitle) {
+      subText = this.add.text(cx, cy + 5, subtitle, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: '14px',
+        color: '#aaaaaa'
+      }).setOrigin(0.5).setScrollFactor(0);
+    }
+
+    this.tweens.add({
+      targets: [panel, titleText, ...(subText ? [subText] : [])],
+      alpha: 0,
+      duration: 400,
+      delay: duration,
+      onComplete: () => {
+        panel.destroy();
+        titleText.destroy();
+        if (subText) subText.destroy();
+      }
+    });
+  }
+
   showDamageNumber(x, y, damage, isCrit = false) {
     const color = isCrit ? '#ffff00' : '#ffffff';
     const size = isCrit ? '20px' : '14px';
@@ -3479,7 +3671,7 @@ export default class ArenaScene extends Phaser.Scene {
           splitEnemy.enemyType = 'git-conflict';
           splitEnemy.behavior = 'split';
           splitEnemy.canSplit = false; // Can't split again
-          splitEnemy.setScale(0.85);
+          splitEnemy.setScale(1.0);
           splitEnemy.setTint(i === 0 ? 0xff6600 : 0x0066ff);
           // Flash effect
           const splitText = this.add.text(splitEnemy.x, splitEnemy.y - 15, 'MERGE CONFLICT!', {
@@ -3603,15 +3795,24 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   playerHit(player, enemy) {
+    if (this.playerDead) return; // Evitar más hits durante game over
     // Invincibility frames - can't get hit while flashing
     if (this.invincible) return;
 
-    // Take damage
-    player.health -= enemy.damage;
+    let damage = enemy.damage;
+    if (enemy.canCritPlayer && Math.random() < 0.3) {
+      damage = Math.floor(damage * BALANCE.ELITE_CRIT_DAMAGE_MULT);
+    }
+    const isCriticalHit = damage >= player.maxHealth * BALANCE.CRITICAL_THRESHOLD_PERCENT;
+
+    player.health -= damage;
+
+    // Impacto visual: flash rojo al recibir daño / Damage impact: red screen flash
+    this.cameras.main.flash(120, 255, 0, 0);
 
     // Vampiric enemies heal 10% of damage dealt
     if (this.modifierEffects?.vampiricEnemies && enemy.active) {
-      const healAmount = Math.floor(enemy.damage * 0.1);
+      const healAmount = Math.floor(damage * 0.1);
       enemy.health = Math.min(enemy.health + healAmount, enemy.maxHealth || enemy.health);
       // Show heal effect
       const healText = this.add.text(enemy.x, enemy.y - 20, `+${healAmount}`, {
@@ -3651,8 +3852,27 @@ export default class ArenaScene extends Phaser.Scene {
       repeat: 9
     });
 
-    // Screen shake
-    this.cameras.main.shake(100, 0.01);
+    // Screen shake — stronger on critical hit / Feedback de dificultad
+    if (isCriticalHit) {
+      this.cameras.main.shake(BALANCE.CRITICAL_SHAKE_DURATION, BALANCE.CRITICAL_SHAKE_INTENSITY);
+      const critText = this.add.text(this.player.x, this.player.y - 50, '⚠ CRITICAL! ⚠', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: '18px',
+        color: '#ff4444',
+        fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 3
+      }).setOrigin(0.5).setScrollFactor(0);
+      this.tweens.add({
+        targets: critText,
+        y: critText.y - 30,
+        alpha: 0,
+        duration: 1200,
+        onComplete: () => critText.destroy()
+      });
+    } else {
+      this.cameras.main.shake(100, 0.01);
+    }
 
     // Knockback enemy
     const angle = Phaser.Math.Angle.Between(player.x, player.y, enemy.x, enemy.y);
@@ -3669,126 +3889,282 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   playerDeath() {
+    if (this.playerDead) return; // Evitar múltiples ejecuciones (explota el PC)
+    this.playerDead = true;
+
+    // Parar spawn y limpiar enemigos de inmediato — evita más overlaps/hits
+    if (this.iFrameFlashTimer) { this.iFrameFlashTimer.destroy(); this.iFrameFlashTimer = null; }
+    if (this.spawnTimer && this.spawnTimer.destroy) this.spawnTimer.destroy();
+    this.spawnTimer = null;
+    if (this.waveTimer && this.waveTimer.destroy) this.waveTimer.destroy();
+    this.waveTimer = null;
+    this.enemies.clear(true, true);
+
+    // Robot death animation: play hurt + fall + fade
+    this.player.setVelocity(0, 0);
+    this.player.body.checkCollision.none = true;
+    const hurtKey = (this.playerAnimPrefix || 'player') + '-hurt';
+    if (this.anims.exists(hurtKey)) {
+      this.player.play(hurtKey, true);
+    }
+    this.tweens.add({
+      targets: this.player,
+      y: this.player.y + 30,
+      alpha: 0.4,
+      scale: this.player.scale * 0.7,
+      duration: 600,
+      ease: 'Power2.In'
+    });
+
     const state = window.VIBE_CODER;
     const settings = window.VIBE_SETTINGS;
 
-    // Check for Immortal Mode - respawn without full reset
-    if (settings.immortalMode) {
-      this.immortalModeRespawn();
-      return;
-    }
-
-    // Save high score before reset
+    // Save high score before going to menu
     const isNewHighWave = this.waveNumber > this.highWave;
     const isNewHighScore = state.totalXP > this.highScore;
 
     if (isNewHighWave) {
       this.highWave = this.waveNumber;
-      localStorage.setItem('vibeCoderHighWave', this.highWave.toString());
+      progressStore.highWave = this.highWave;
     }
     if (isNewHighScore) {
       this.highScore = state.totalXP;
-      localStorage.setItem('vibeCoderHighScore', this.highScore.toString());
+      progressStore.highScore = this.highScore;
     }
-
-    // Add run to leaderboard (local + on-chain if wallet connected)
-    LeaderboardManager.addEntry(settings.playerName, this.waveNumber, state.totalXP);
     stellarWallet.getAddress().then((addr) => {
+      if (addr) saveProgressToWallet(addr, { highWave: this.highWave, highScore: this.highScore });
+    });
+
+    // Add run to leaderboard (local: wallet short address si hay, si no nombre; on-chain si hay wallet)
+    stellarWallet.getAddress().then((addr) => {
+      const displayName = addr ? stellarWallet.shortAddress(addr) : (settings.playerName || 'Anonymous');
+      LeaderboardManager.addEntry(displayName, this.waveNumber, state.totalXP);
       if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP).catch(() => {});
     });
-    // Provably Fair: submit to Soroban contract (Game Hub) if configured and rules valid
-    if (gameClient.isContractConfigured()) {
-      const { valid } = validateGameRules(this.waveNumber, state.totalXP);
-      if (valid) {
-        stellarWallet.getAddress().then((addr) => {
-          if (addr) {
-            gameClient
-              .submitResult(addr, (xdr) => stellarWallet.signTransaction(xdr), this.waveNumber, state.totalXP)
-              .catch(() => {});
-          }
-        });
-      }
-    }
 
-    // Award currency (BITS) based on performance
-    const waveBits = this.waveNumber * 5; // 5 bits per wave
-    const killBits = Math.floor(state.kills * 0.5); // 0.5 bits per kill
-    const xpBits = Math.floor(state.totalXP * 0.01); // 1 bit per 100 XP
-    const totalBits = waveBits + killBits + xpBits;
+    // Award currency (BITS) based on performance (balance.js: más difícil conseguir)
+    const waveBits = this.waveNumber * (BALANCE.BITS_PER_WAVE ?? 3);
+    const killBits = Math.floor(state.kills * (BALANCE.BITS_PER_KILL ?? 0.3));
+    const xpBits = Math.floor(state.totalXP * ((BALANCE.BITS_PER_100_XP ?? 0.5) / 100));
+    let totalBits = waveBits + killBits + xpBits;
 
-    window.VIBE_UPGRADES.addCurrency(totalBits);
+    // Game over UI: centrado en pantalla
+    const cx = this.scale.width / 2;
+    const cy = this.scale.height / 2;
 
-    // Show bits earned (fixed to camera center)
-    const bitsText = this.add.text(400, 200, `+${totalBits} ${t('game.bits_earned')}`, {
+    const gameOverText = this.add.text(cx, cy - 120, t('game.game_over'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '36px',
+      color: '#ff4444',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
+
+    const bitsText = this.add.text(cx, cy - 60, `+${totalBits} ${t('game.bits_earned')}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#00ffff',
       fontStyle: 'bold',
       stroke: '#000000',
       strokeThickness: 4
-    }).setOrigin(0.5).setScrollFactor(0);
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
 
-    this.tweens.add({
-      targets: bitsText,
-      y: bitsText.y - 50,
-      alpha: 0,
-      duration: 2000,
-      onComplete: () => bitsText.destroy()
-    });
-
-    // Game over - respawn
-    this.cameras.main.fade(500, 0, 0, 0);
-
-    this.time.delayedCall(500, () => {
-      // Reset player to world center
-      this.player.health = this.player.maxHealth;
-      this.player.x = this.worldWidth / 2;
-      this.player.y = this.worldHeight / 2;
-
-      // Clear enemies
-      this.enemies.clear(true, true);
-
-      // Reset wave
-      this.waveNumber = 1;
-      this.currentStage = 0;
-      this.createBackground();
-
-      // Reset collected weapons
-      this.collectedWeapons = new Set(['basic']);
-      this.currentWeapon = { type: 'basic', duration: Infinity };
-      this.clearOrbitals();
-
-      // Clear saved run (player died, starting fresh)
-      SaveManager.clearSave();
-
-      // Fade back in
-      this.cameras.main.fadeIn(500);
-
-      // Show respawn text with high score info
-      let respawnMessage = 'RESPAWNED';
-      if (isNewHighWave) {
-        respawnMessage = `NEW HIGH WAVE: ${this.highWave}!\nRESPAWNED`;
-      }
-
-      const respawnText = this.add.text(400, 300, respawnMessage, {
+    let submitStatusText = null;
+    const showSubmitStatus = (status) => {
+      const msg = status === 'zk' ? t('game.submit_zk_ranked') : status === 'casual' ? t('game.submit_casual') : t('game.submit_failed');
+      const color = status === 'failed' ? '#ff6666' : status === 'zk' ? '#ffd700' : '#88ff88';
+      submitStatusText = this.add.text(cx, cy + 10, msg, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: isNewHighWave ? '28px' : '32px',
-        color: isNewHighWave ? '#ffd700' : '#00ffff',
+        fontSize: '18px',
+        color,
         fontStyle: 'bold',
+        stroke: '#000000',
+        strokeThickness: 3,
         align: 'center'
-      }).setOrigin(0.5).setScrollFactor(0);
+      }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(1001);
+      submitStatusText.setWordWrapWidth(480);
+    };
 
-      this.tweens.add({
-        targets: respawnText,
-        alpha: 0,
-        duration: 2000,
-        onComplete: () => respawnText.destroy()
-      });
+    const willSubmit = gameClient.isContractConfigured() && validateGameRules(this.waveNumber, state.totalXP).valid;
+    let submittingText = null;
+    if (willSubmit) {
+      submittingText = this.add.text(cx, cy + 10, t('game.submitting'), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: '16px',
+        color: '#aaaaaa',
+        stroke: '#000000',
+        strokeThickness: 2
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
+    }
 
-      // Restart spawning
-      this.startWave();
-      this.updateHUD();
+    const submitPromise = new Promise((resolve) => {
+      const timeout = this.time.delayedCall(5000, () => resolve('timeout'));
+      if (!gameClient.isContractConfigured()) {
+        timeout.destroy();
+        resolve(null);
+        return;
+      }
+      const { valid } = validateGameRules(this.waveNumber, state.totalXP);
+      if (!valid) {
+        timeout.destroy();
+        resolve(null);
+        return;
+      }
+      stellarWallet.getAddress().then(async (addr) => {
+        if (!addr) { resolve(null); return; }
+        const sign = (xdr) => stellarWallet.signTransaction(xdr);
+        const score = Math.floor(state.totalXP);
+        const wave = this.waveNumber;
+        try {
+          if (gameClient.isZkProverConfigured() && this.runSeed) {
+            const run_hash_hex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
+            const nonce = Date.now();
+            const season_id = 1;
+            await gameClient.submitZkFromProver(addr, sign, undefined, { run_hash_hex, score, wave, nonce, season_id });
+            timeout.destroy();
+            resolve('zk');
+          } else {
+            await gameClient.submitResult(addr, sign, wave, state.totalXP);
+            timeout.destroy();
+            resolve('casual');
+          }
+        } catch (e) {
+          console.warn('Submit failed:', e.message);
+          try {
+            await gameClient.submitResult(addr, sign, wave, state.totalXP);
+            timeout.destroy();
+            resolve('casual');
+          } catch (_) {
+            timeout.destroy();
+            resolve('failed');
+          }
+        }
+      }).catch(() => { timeout.destroy(); resolve('failed'); });
     });
+
+    // Controls button (always visible on game over)
+    const controlsBtn = this.add.text(cx, cy + 70, t('controls.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '16px',
+      color: '#00aaff'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1001).setInteractive({ useHandCursor: true });
+    controlsBtn.on('pointerover', () => controlsBtn.setColor('#00ffff'));
+    controlsBtn.on('pointerout', () => controlsBtn.setColor('#00aaff'));
+    controlsBtn.on('pointerdown', () => this.showGameOverControls());
+
+    // Hint when no chain submit (no contract ID / no wallet): why user didn't see "Submitting..."
+    let chainHintText = null;
+    if (!willSubmit) {
+      chainHintText = this.add.text(cx, cy + 48, t('game.leaderboard_hint'), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: '12px',
+        color: '#888888',
+        align: 'center',
+        wordWrap: { width: 420 }
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+    }
+
+    submitPromise.then((status) => {
+      if (submittingText && submittingText.scene) submittingText.destroy();
+      window.VIBE_UPGRADES.addCurrency(totalBits);
+      if (status === 'zk' || status === 'casual' || status === 'failed') {
+        showSubmitStatus(status);
+        if (status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
+          const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));
+          window.VIBE_UPGRADES.addCurrency(bonus);
+          bitsText.setText(`+${totalBits + bonus} ${t('game.bits_earned')} (+${bonus} ZK bonus)`);
+        }
+      }
+      // Hint: return to menu
+      const returnHint = this.add.text(cx, cy + 100, t('prompt.any_key_close'), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: '14px',
+        color: '#00aaff'
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(1001).setInteractive({ useHandCursor: true });
+
+      let returned = false;
+      const goToMenu = () => {
+        if (returned) return;
+        returned = true;
+        if (autoReturnTimer) autoReturnTimer.destroy();
+        gameOverText.destroy();
+        bitsText.destroy();
+        if (submitStatusText && submitStatusText.scene) submitStatusText.destroy();
+        if (chainHintText && chainHintText.scene) chainHintText.destroy();
+        if (controlsBtn && controlsBtn.scene) controlsBtn.destroy();
+        if (returnHint && returnHint.scene) returnHint.destroy();
+        this.input.keyboard.off('keydown', goToMenu);
+        SaveManager.clearSave();
+        this.cameras.main.fade(500, 0, 0, 0);
+        this.time.delayedCall(500, () => this.scene.start('TitleScene'));
+      };
+
+      const autoReturnTimer = this.time.delayedCall(3000, goToMenu);
+      returnHint.on('pointerdown', goToMenu);
+      this.input.keyboard.once('keydown', goToMenu);
+    });
+  }
+
+  showGameOverControls() {
+    const cx = this.scale.width / 2;
+    const cy = this.scale.height / 2;
+    const uiScale = this.uiScale || 1;
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.97);
+    backdrop.setScrollFactor(0).setDepth(1100).setInteractive({ useHandCursor: true });
+
+    const overlay = this.add.rectangle(cx, cy, Math.min(600, w - 80), Math.min(400, h - 80), 0x0a0a14, 1);
+    overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setScrollFactor(0).setDepth(1101).setInteractive({ useHandCursor: true });
+
+    const controlsTitle = this.add.text(cx, cy - 120, t('controls.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${24 * uiScale}px`,
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1102);
+
+    const controls = [
+      t('controls.wasd'),
+      t('controls.space'),
+      t('controls.m'),
+      t('controls.esc_p'),
+      '',
+      t('controls.auto_attack'),
+      t('controls.collect')
+    ];
+
+    const controlTexts = [];
+    controls.forEach((line, index) => {
+      const text = this.add.text(cx, cy - 75 + index * 22, line, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${13 * uiScale}px`,
+        color: line.includes('npm') ? '#ffff00' : '#e0e0e0'
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(1102);
+      controlTexts.push(text);
+    });
+
+    const closeText = this.add.text(cx, cy + 155, t('prompt.any_key_close'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${11 * uiScale}px`,
+      color: '#00aaff'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1102).setInteractive({ useHandCursor: true });
+
+    const closeControls = () => {
+      backdrop.destroy();
+      overlay.destroy();
+      controlsTitle.destroy();
+      closeText.destroy();
+      controlTexts.forEach(el => el.destroy());
+    };
+
+    backdrop.on('pointerdown', closeControls);
+    overlay.on('pointerdown', closeControls);
+    closeText.on('pointerdown', closeControls);
+    this.input.keyboard.once('keydown', closeControls);
   }
 
   /**
@@ -3883,98 +4259,114 @@ export default class ArenaScene extends Phaser.Scene {
   update() {
     if (!this.player || !this.player.active) return;
 
-    // Handle movement
-    const stats = this.getStats();
-    let vx = 0;
-    let vy = 0;
-
-    // Check for manual input first
-    const manualLeft = this.cursors.left.isDown || this.wasd.left.isDown;
-    const manualRight = this.cursors.right.isDown || this.wasd.right.isDown;
-    const manualUp = this.cursors.up.isDown || this.wasd.up.isDown;
-    const manualDown = this.cursors.down.isDown || this.wasd.down.isDown;
-    const hasKeyboardInput = manualLeft || manualRight || manualUp || manualDown;
-
-    // Controles táctiles (si existen) tienen prioridad sobre auto-move, pero no sobre teclado
-    let hasTouchInput = false;
-    if (!hasKeyboardInput && this.touchControls) {
-      const mv = this.touchControls.getMoveVector();
-      if (Math.abs(mv.x) > 0.1 || Math.abs(mv.y) > 0.1) {
-        vx = mv.x;
-        vy = mv.y;
-        hasTouchInput = true;
-      }
-
-      // Botón de pausa táctil
-      if (this.touchControls.consumePauseAction()) {
-        this.togglePause();
+    // Regen: vida por debajo del umbral / Regen when below threshold
+    if (this.player.health < this.player.maxHealth * BALANCE.REGEN_MAX_HEALTH_PERCENT) {
+      if (this.time.now - this.lastRegenTime >= BALANCE.REGEN_TICK_MS) {
+        this.lastRegenTime = this.time.now;
+        this.player.health = Math.min(this.player.maxHealth, this.player.health + BALANCE.REGEN_HP_PER_TICK);
       }
     }
 
-    if (hasKeyboardInput) {
-      // Manual input takes priority
-      if (manualLeft) vx = -1;
-      if (manualRight) vx = 1;
-      if (manualUp) vy = -1;
-      if (manualDown) vy = 1;
-    } else if (!hasTouchInput && window.VIBE_SETTINGS.autoMove && window.VIBE_CODER.isCodingActive()) {
-      // Auto-move: find safest direction (away from enemies)
-      const autoMove = this.calculateAutoMove();
-      vx = autoMove.x;
-      vy = autoMove.y;
-    }
+    // HUD actualizado cada frame: vida, enemigos, puntuación, modo / HUD updated every frame
+    this.updateHUD();
 
-    // Normalize diagonal movement
-    if (vx !== 0 && vy !== 0) {
-      vx *= 0.707;
-      vy *= 0.707;
-    }
-
-    this.player.setVelocity(vx * stats.speed, vy * stats.speed);
-
-    // Update speech bubble position to follow player
-    if (this.speechBubble && this.speechBubble.visible) {
-      const bubbleX = this.player.x;
-      const bubbleY = this.player.y - 40;
-      this.speechBubble.clear();
-      this.speechBubble.fillStyle(0xffffff, 0.9);
-      this.speechBubble.lineStyle(2, 0x00ffff, 1);
-      this.speechBubble.fillRoundedRect(bubbleX - 65, bubbleY - 18, 130, 36, 6);
-      this.speechBubble.strokeRoundedRect(bubbleX - 65, bubbleY - 18, 130, 36, 6);
-      this.speechText.setPosition(bubbleX, bubbleY);
-    }
-
-    // Update auto-move indicator position and mode emoji
-    if (this.autoMoveIndicator) {
-      this.autoMoveIndicator.setPosition(this.player.x + 20, this.player.y - 30);
-      const isAutoMoving = !hasKeyboardInput && !hasTouchInput && window.VIBE_SETTINGS?.autoMove && window.VIBE_CODER?.isCodingActive();
-      this.autoMoveIndicator.setVisible(isAutoMoving);
-      // Update emoji based on mode
-      if (isAutoMoving) {
-        if (this.autoPlayMode === 'hunt') this.autoMoveIndicator.setText('⚔️');
-        else if (this.autoPlayMode === 'evade') this.autoMoveIndicator.setText('🛡️');
-        else this.autoMoveIndicator.setText('😴');
-      }
-    }
-
-    // Play appropriate animation based on movement
-    const isMoving = vx !== 0 || vy !== 0;
-    if (isMoving) {
-      // Determine primary direction
-      if (Math.abs(vx) > Math.abs(vy)) {
-        // Moving horizontally - use side walk animation
-        this.player.play('player-walk-side', true);
-        this.player.setFlipX(vx < 0);
-      } else if (vy < 0) {
-        // Moving up
-        this.player.play('player-walk-up', true);
-      } else {
-        // Moving down
-        this.player.play('player-walk-down', true);
-      }
+    // Cuando está pausado el jugador no se mueve ni ataca; el mundo sigue (enemigos, oleadas)
+    if (this.isPaused) {
+      this.player.setVelocity(0, 0);
+      this.player.play((this.playerAnimPrefix || 'player') + '-idle', true);
     } else {
-      // Idle animation
-      this.player.play('player-idle', true);
+      // Handle movement
+      const stats = this.getStats();
+      let vx = 0;
+      let vy = 0;
+
+      // Check for manual input first
+      const manualLeft = this.cursors.left.isDown || this.wasd.left.isDown;
+      const manualRight = this.cursors.right.isDown || this.wasd.right.isDown;
+      const manualUp = this.cursors.up.isDown || this.wasd.up.isDown;
+      const manualDown = this.cursors.down.isDown || this.wasd.down.isDown;
+      const hasKeyboardInput = manualLeft || manualRight || manualUp || manualDown;
+      if (hasKeyboardInput) this.lastInputTime = this.time.now;
+
+      // Controles táctiles (si existen) tienen prioridad sobre auto-move, pero no sobre teclado
+      let hasTouchInput = false;
+      if (!hasKeyboardInput && this.touchControls) {
+        const mv = this.touchControls.getMoveVector();
+        if (Math.abs(mv.x) > 0.1 || Math.abs(mv.y) > 0.1) {
+          vx = mv.x;
+          vy = mv.y;
+          hasTouchInput = true;
+          this.lastInputTime = this.time.now;
+        }
+
+        // Botón de pausa táctil
+        if (this.touchControls.consumePauseAction()) {
+          this.togglePause();
+        }
+      }
+
+      if (hasKeyboardInput) {
+        // Manual input takes priority
+        if (manualLeft) vx = -1;
+        if (manualRight) vx = 1;
+        if (manualUp) vy = -1;
+        if (manualDown) vy = 1;
+      } else if (!hasTouchInput && window.VIBE_SETTINGS.autoMove && window.VIBE_CODER.isCodingActive()) {
+        // Auto-move: find safest direction (away from enemies)
+        const autoMove = this.calculateAutoMove();
+        vx = autoMove.x;
+        vy = autoMove.y;
+      }
+
+      // Normalize diagonal movement
+      if (vx !== 0 && vy !== 0) {
+        vx *= 0.707;
+        vy *= 0.707;
+      }
+
+      this.player.setVelocity(vx * stats.speed, vy * stats.speed);
+
+      // Update speech bubble position to follow player
+      if (this.speechBubble && this.speechBubble.visible) {
+        const bubbleX = this.player.x;
+        const bubbleY = this.player.y - 40;
+        this.speechBubble.clear();
+        this.speechBubble.fillStyle(0xffffff, 0.9);
+        this.speechBubble.lineStyle(2, 0x00ffff, 1);
+        this.speechBubble.fillRoundedRect(bubbleX - 65, bubbleY - 18, 130, 36, 6);
+        this.speechBubble.strokeRoundedRect(bubbleX - 65, bubbleY - 18, 130, 36, 6);
+        this.speechText.setPosition(bubbleX, bubbleY);
+      }
+
+      // Update auto-move indicator position and mode emoji
+      const isAutoMoving = !hasKeyboardInput && !hasTouchInput && window.VIBE_SETTINGS?.autoMove && window.VIBE_CODER?.isCodingActive();
+      this.hudMode = hasKeyboardInput || hasTouchInput ? 'manual' : (isAutoMoving ? this.autoPlayMode : 'idle');
+
+      if (this.autoMoveIndicator) {
+        this.autoMoveIndicator.setPosition(this.player.x + 20, this.player.y - 30);
+        this.autoMoveIndicator.setVisible(isAutoMoving);
+        if (isAutoMoving) {
+          if (this.autoPlayMode === 'hunt') this.autoMoveIndicator.setText('⚔️');
+          else if (this.autoPlayMode === 'evade') this.autoMoveIndicator.setText('🛡️');
+          else this.autoMoveIndicator.setText('😴');
+        }
+      }
+
+      // Play appropriate animation based on movement
+      const isMoving = vx !== 0 || vy !== 0;
+      const pfx = this.playerAnimPrefix || 'player';
+      if (isMoving) {
+        if (Math.abs(vx) > Math.abs(vy)) {
+          this.player.play(pfx + '-walk-side', true);
+          this.player.setFlipX(vx < 0);
+        } else if (vy < 0) {
+          this.player.play(pfx + '-walk-up', true);
+        } else {
+          this.player.play(pfx + '-walk-down', true);
+        }
+      } else {
+        this.player.play(pfx + '-idle', true);
+      }
     }
 
     // Move enemies toward player with unique behaviors
@@ -4100,7 +4492,7 @@ export default class ArenaScene extends Phaser.Scene {
             minion.xpValue = 3;
             minion.enemyType = 'bug';
             minion.behavior = 'chase';
-            minion.setScale(0.58); // Werewolf minion mismo tamaño que los bug normales
+            minion.setScale(1.0); // Tamaño similar a los bug normales
             minion.setTint(0x6622aa); // Tinted to match parent
             minion.play('bug-walk');
             // Spawn effect

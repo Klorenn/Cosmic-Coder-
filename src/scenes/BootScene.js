@@ -3,6 +3,11 @@ import Phaser from 'phaser';
 export default class BootScene extends Phaser.Scene {
   constructor() {
     super({ key: 'BootScene' });
+    /**
+     * Track asset loading for debugging (keys that failed in preload()).
+     * This helps understand why the game could get stuck on the LOADING screen.
+     */
+    this.failedAssets = [];
   }
 
   preload() {
@@ -16,150 +21,222 @@ export default class BootScene extends Phaser.Scene {
       color: '#00ffff'
     }).setOrigin(0.5);
 
-    // Load the actual Hunter's Warglaive image (relative path for GitHub Pages)
-    this.load.image('legendary-huntersWarglaive', './assets/hunters-warglaive.png');
+    console.log('[BootScene] preload() start');
+    this.failedAssets = [];
 
-    // Robot character sprites (CraftPix) - main player
+    // Loader debug hooks — log every asset and any failures.
+    this.load.on('filecomplete', (key, type) => {
+      // type can be undefined in some Phaser versions; guard it.
+      console.log(`[BootScene] loaded asset: key=${key} type=${type || 'unknown'}`);
+    });
+
+    this.load.on('loaderror', (file) => {
+      // file: Phaser.Loader.File
+      const info = file ? `key=${file.key} type=${file.type} src=${file.src}` : 'unknown file';
+      console.warn('[BootScene] LOAD ERROR:', info);
+      this.failedAssets.push({
+        key: file?.key,
+        type: file?.type,
+        src: file?.src
+      });
+    });
+
+    this.load.on('complete', (loader, totalComplete, totalFailed) => {
+      // Note: loader.totalComplete / totalFailed are available on the LoaderPlugin instance.
+      const failed = this.failedAssets.length || totalFailed || 0;
+      console.log(
+        `[BootScene] preload complete — total=${loader.totalToLoad}, completed=${loader.totalComplete}, failed=${failed}`
+      );
+      if (failed > 0) {
+        console.warn('[BootScene] Failed assets detail:', this.failedAssets);
+      }
+    });
+
+    // Character/enemy sprite sheets (local assets first, robust fallback in create()).
+    // These paths match the original repository structure under public/assets/sprites.
     this.load.spritesheet('robot-idle', './assets/sprites/player/robot-idle.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-walk', './assets/sprites/player/robot-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-hurt', './assets/sprites/player/robot-hurt.png', { frameWidth: 128, frameHeight: 128 });
-
-    // Werewolf enemy (CraftPix) - replaces "bug" enemy
+    this.load.spritesheet('destroyer-idle', './assets/sprites/player/destroyer-idle.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-walk', './assets/sprites/player/destroyer-walk.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-hurt', './assets/sprites/player/destroyer-hurt.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-idle', './assets/sprites/player/swordsman-idle.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-walk', './assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-hurt', './assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('werewolf-run', './assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
+    //
+    // Blue Version background pack:
+    // In dev we can load directly from Downloads via Vite /@fs path.
+    // Local fallback keys are also loaded from public/assets/backgrounds/blue/.
+    const bluePackAbs = '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version';
+    const layeredAbs = `${bluePackAbs}/layered`;
+    const toFsUrl = (absPath) => `/@fs${encodeURI(absPath)}`;
 
-    // We'll generate other textures in create()
+    // Primary keys (used by TitleScene) -> layered folder first
+    this.load.image('bg-blue-back', toFsUrl(`${layeredAbs}/blue-back.png`));
+    this.load.image('bg-blue-stars', toFsUrl(`${layeredAbs}/blue-stars.png`));
+    this.load.image('bg-blue-with-stars', toFsUrl(`${layeredAbs}/blue-with-stars.png`));
+    this.load.image('bg-planet-big', toFsUrl(`${layeredAbs}/prop-planet-big.png`));
+    this.load.image('bg-asteroid-1', toFsUrl(`${layeredAbs}/asteroid-1.png`));
+    this.load.image('bg-asteroid-2', toFsUrl(`${layeredAbs}/asteroid-2.png`));
+
+    // Backup keys from Blue Version root
+    this.load.image('bg-blue-back-root', toFsUrl(`${bluePackAbs}/blue-back.png`));
+    this.load.image('bg-blue-stars-root', toFsUrl(`${bluePackAbs}/blue-stars.png`));
+    this.load.image('bg-blue-with-stars-root', toFsUrl(`${bluePackAbs}/blue-with-stars.png`));
+    this.load.image('bg-planet-big-root', toFsUrl(`${bluePackAbs}/prop-planet-big.png`));
+    this.load.image('bg-asteroid-1-root', toFsUrl(`${bluePackAbs}/asteroid-1.png`));
+    this.load.image('bg-asteroid-2-root', toFsUrl(`${bluePackAbs}/asteroid-2.png`));
+
+    // Backup local keys from public/assets (optional)
+    this.load.image('bg-blue-back-local', './assets/backgrounds/blue/blue-back.png');
+    this.load.image('bg-blue-stars-local', './assets/backgrounds/blue/blue-stars.png');
+    this.load.image('bg-blue-with-stars-local', './assets/backgrounds/blue/blue-with-stars.png');
+    this.load.image('bg-planet-big-local', './assets/backgrounds/blue/prop-planet-big.png');
+    this.load.image('bg-asteroid-1-local', './assets/backgrounds/blue/asteroid-1.png');
+    this.load.image('bg-asteroid-2-local', './assets/backgrounds/blue/asteroid-2.png');
+
+    // We'll generate all textures procedurally (and with fallbacks) in create()
     this.time.delayedCall(500, () => {
       loadingText.destroy();
     });
   }
 
   create() {
-    // Build main player from robot sprites (Idle + Walk combined into one sheet)
-    this.buildRobotPlayerTexture();
-    this.buildWerewolfBugTexture(); // Werewolf replaces procedural bug
-    this.generateGlitchSpriteSheet();
-    this.generateMemoryLeakSpriteSheet();
-    this.generateSlashTexture();
+    console.log('[BootScene] create() start — generating textures & animations');
+
+    const safeStep = (label, fn) => {
+      try {
+        console.log(`[BootScene] step: ${label}`);
+        fn();
+      } catch (err) {
+        console.error(`[BootScene] ERROR in step "${label}"`, err);
+      }
+    };
+
+    // Build player textures for all 3 characters (VibeCoder, Destroyer, Swordsman)
+    safeStep('buildRobotPlayerTexture', () => this.buildRobotPlayerTexture());
+    safeStep('buildCharacterTexture(destroyer)', () => this.buildCharacterTexture('destroyer'));
+    safeStep('buildCharacterTexture(swordsman)', () => this.buildCharacterTexture('swordsman'));
+    safeStep('buildWerewolfBugTexture', () => this.buildWerewolfBugTexture()); // Werewolf replaces procedural bug (with fallback)
+
+    // Weapon + enemy textures (procedural)
+    safeStep('generateGlitchSpriteSheet', () => this.generateGlitchSpriteSheet());
+    safeStep('generateMemoryLeakSpriteSheet', () => this.generateMemoryLeakSpriteSheet());
+    safeStep('generateSlashTexture', () => this.generateSlashTexture());
 
     // Weapon pickup textures
-    this.generateSpreadWeaponTexture();
-    this.generatePierceWeaponTexture();
-    this.generateOrbitalWeaponTexture();
-    this.generateRapidWeaponTexture();
+    safeStep('generateSpreadWeaponTexture', () => this.generateSpreadWeaponTexture());
+    safeStep('generatePierceWeaponTexture', () => this.generatePierceWeaponTexture());
+    safeStep('generateOrbitalWeaponTexture', () => this.generateOrbitalWeaponTexture());
+    safeStep('generateRapidWeaponTexture', () => this.generateRapidWeaponTexture());
     // New weapon textures
-    this.generateHomingWeaponTexture();
-    this.generateBounceWeaponTexture();
-    this.generateAoeWeaponTexture();
-    this.generateFreezeWeaponTexture();
+    safeStep('generateHomingWeaponTexture', () => this.generateHomingWeaponTexture());
+    safeStep('generateBounceWeaponTexture', () => this.generateBounceWeaponTexture());
+    safeStep('generateAoeWeaponTexture', () => this.generateAoeWeaponTexture());
+    safeStep('generateFreezeWeaponTexture', () => this.generateFreezeWeaponTexture());
 
     // Rare weapon textures
-    this.generateRmRfWeaponTexture();
-    this.generateSudoWeaponTexture();
-    this.generateForkBombWeaponTexture();
+    safeStep('generateRmRfWeaponTexture', () => this.generateRmRfWeaponTexture());
+    safeStep('generateSudoWeaponTexture', () => this.generateSudoWeaponTexture());
+    safeStep('generateForkBombWeaponTexture', () => this.generateForkBombWeaponTexture());
 
     // New enemy types (animated)
-    this.generateSyntaxErrorSpriteSheet();
-    this.generateInfiniteLoopSpriteSheet();
-    this.generateRaceConditionSpriteSheet();
+    safeStep('generateSyntaxErrorSpriteSheet', () => this.generateSyntaxErrorSpriteSheet());
+    safeStep('generateInfiniteLoopSpriteSheet', () => this.generateInfiniteLoopSpriteSheet());
+    safeStep('generateRaceConditionSpriteSheet', () => this.generateRaceConditionSpriteSheet());
 
     // NEW coding + AI themed enemies
-    this.generateSegfaultTexture();
-    this.generateDependencyHellTexture();
-    this.generateStackOverflowTexture();
-    this.generateHallucinationTexture();
-    this.generateTokenOverflowTexture();
-    this.generateContextLossTexture();
-    this.generatePromptInjectionTexture();
+    safeStep('generateSegfaultTexture', () => this.generateSegfaultTexture());
+    safeStep('generateDependencyHellTexture', () => this.generateDependencyHellTexture());
+    safeStep('generateStackOverflowTexture', () => this.generateStackOverflowTexture());
+    safeStep('generateHallucinationTexture', () => this.generateHallucinationTexture());
+    safeStep('generateTokenOverflowTexture', () => this.generateTokenOverflowTexture());
+    safeStep('generateContextLossTexture', () => this.generateContextLossTexture());
+    safeStep('generatePromptInjectionTexture', () => this.generatePromptInjectionTexture());
 
     // NEW v2 enemies
-    this.generate404NotFoundTexture();
-    this.generateCorsErrorTexture();
-    this.generateTypeErrorTexture();
-    this.generateGitConflictTexture();
-    this.generateOverfittingTexture();
-    this.generateModeCollapseTexture();
+    safeStep('generate404NotFoundTexture', () => this.generate404NotFoundTexture());
+    safeStep('generateCorsErrorTexture', () => this.generateCorsErrorTexture());
+    safeStep('generateTypeErrorTexture', () => this.generateTypeErrorTexture());
+    safeStep('generateGitConflictTexture', () => this.generateGitConflictTexture());
+    safeStep('generateOverfittingTexture', () => this.generateOverfittingTexture());
+    safeStep('generateModeCollapseTexture', () => this.generateModeCollapseTexture());
 
     // Mini-boss texture
-    this.generateMiniBossTexture();
+    safeStep('generateMiniBossTexture', () => this.generateMiniBossTexture());
 
     // Boss textures
-    this.generateStackOverflowBossTexture();
-    this.generateNullPointerBossTexture();
-    this.generateMemoryLeakPrimeBossTexture();
-    this.generateKernelPanicBossTexture();
+    safeStep('generateStackOverflowBossTexture', () => this.generateStackOverflowBossTexture());
+    safeStep('generateNullPointerBossTexture', () => this.generateNullPointerBossTexture());
+    safeStep('generateMemoryLeakPrimeBossTexture', () => this.generateMemoryLeakPrimeBossTexture());
+    safeStep('generateKernelPanicBossTexture', () => this.generateKernelPanicBossTexture());
 
     // Evolved weapon textures
-    this.generateLaserBeamWeaponTexture();
-    this.generatePlasmaOrbWeaponTexture();
-    this.generateChainLightningWeaponTexture();
+    safeStep('generateLaserBeamWeaponTexture', () => this.generateLaserBeamWeaponTexture());
+    safeStep('generatePlasmaOrbWeaponTexture', () => this.generatePlasmaOrbWeaponTexture());
+    safeStep('generateChainLightningWeaponTexture', () => this.generateChainLightningWeaponTexture());
     // New evolved weapon textures
-    this.generateBulletHellWeaponTexture();
-    this.generateRingOfFireWeaponTexture();
-    this.generateSeekingMissileWeaponTexture();
-    this.generateChaosBounceWeaponTexture();
-    this.generateDeathAuraWeaponTexture();
-    this.generateIceLanceWeaponTexture();
-    this.generateSwarmWeaponTexture();
-    this.generateBlizzardWeaponTexture();
+    safeStep('generateBulletHellWeaponTexture', () => this.generateBulletHellWeaponTexture());
+    safeStep('generateRingOfFireWeaponTexture', () => this.generateRingOfFireWeaponTexture());
+    safeStep('generateSeekingMissileWeaponTexture', () => this.generateSeekingMissileWeaponTexture());
+    safeStep('generateChaosBounceWeaponTexture', () => this.generateChaosBounceWeaponTexture());
+    safeStep('generateDeathAuraWeaponTexture', () => this.generateDeathAuraWeaponTexture());
+    safeStep('generateIceLanceWeaponTexture', () => this.generateIceLanceWeaponTexture());
+    safeStep('generateSwarmWeaponTexture', () => this.generateSwarmWeaponTexture());
+    safeStep('generateBlizzardWeaponTexture', () => this.generateBlizzardWeaponTexture());
 
     // Melee weapon textures
-    this.generateSwordTexture();
-    this.generateSpearTexture();
-    this.generateBoomerangTexture();
-    this.generateKunaiTexture();
+    safeStep('generateSwordTexture', () => this.generateSwordTexture());
+    safeStep('generateSpearTexture', () => this.generateSpearTexture());
+    safeStep('generateBoomerangTexture', () => this.generateBoomerangTexture());
+    safeStep('generateKunaiTexture', () => this.generateKunaiTexture());
 
     // Legendary weapon textures
     // Hunter's Warglaive loaded from actual image in preload()
-    this.generateVoidReaperTexture();
-    this.generateCelestialBladeTexture();
+    safeStep('generateVoidReaperTexture', () => this.generateVoidReaperTexture());
+    safeStep('generateCelestialBladeTexture', () => this.generateCelestialBladeTexture());
 
-    // Register all animations
-    this.registerAnimations();
+    // Register all animations (guarded)
+    safeStep('registerAnimations', () => this.registerAnimations());
 
-    console.log('Textures and animations generated! Starting title...');
+    console.log('[BootScene] Textures & animations ready. Starting TitleScene…');
     this.scene.start('TitleScene');
   }
 
   registerAnimations() {
-    // Player (robot) animations - combined sheet: frames 0-5 idle, 6-11 walk
-    this.anims.create({
-      key: 'player-idle',
-      frames: this.anims.generateFrameNumbers('player', { start: 0, end: 5 }),
-      frameRate: 8,
-      repeat: -1
-    });
-    this.anims.create({
-      key: 'player-walk-down',
-      frames: this.anims.generateFrameNumbers('player', { start: 6, end: 11 }),
-      frameRate: 10,
-      repeat: -1
-    });
-    this.anims.create({
-      key: 'player-walk-up',
-      frames: this.anims.generateFrameNumbers('player', { start: 6, end: 11 }),
-      frameRate: 10,
-      repeat: -1
-    });
-    this.anims.create({
-      key: 'player-walk-side',
-      frames: this.anims.generateFrameNumbers('player', { start: 6, end: 11 }),
-      frameRate: 10,
-      repeat: -1
-    });
-    this.anims.create({
-      key: 'player-hurt',
-      frames: this.anims.generateFrameNumbers('robot-hurt', { start: 0, end: 3 }),
-      frameRate: 12,
-      repeat: 0
-    });
+    // VibeCoder (default) - player
+    if (this.textures.exists('player') && this.textures.exists('robot-hurt')) {
+      this.registerCharacterAnimations('player', 'robot-hurt');
+    } else {
+      console.warn('[BootScene] Skipping player animations — texture "player" or \"robot-hurt\" missing');
+    }
+
+    // Destroyer - player-destroyer
+    if (this.textures.exists('player-destroyer') && this.textures.exists('destroyer-hurt')) {
+      this.registerCharacterAnimations('player-destroyer', 'destroyer-hurt');
+    } else {
+      console.warn('[BootScene] Skipping player-destroyer animations — textures missing');
+    }
+
+    // Swordsman - player-swordsman
+    if (this.textures.exists('player-swordsman') && this.textures.exists('swordsman-hurt')) {
+      this.registerCharacterAnimations('player-swordsman', 'swordsman-hurt');
+    } else {
+      console.warn('[BootScene] Skipping player-swordsman animations — textures missing');
+    }
 
     // Bug enemy (werewolf sprite) - Run has 9 frames
-    this.anims.create({
-      key: 'bug-walk',
-      frames: this.anims.generateFrameNumbers('bug', { start: 0, end: 8 }),
-      frameRate: 10,
-      repeat: -1
-    });
+    if (this.textures.exists('bug')) {
+      this.anims.create({
+        key: 'bug-walk',
+        frames: this.anims.generateFrameNumbers('bug', { start: 0, end: 8 }),
+        frameRate: 10,
+        repeat: -1
+      });
+    } else {
+      console.warn('[BootScene] Skipping bug-walk animation — texture \"bug\" missing');
+    }
 
     // Glitch enemy animations
     this.anims.create({
@@ -203,10 +280,99 @@ export default class BootScene extends Phaser.Scene {
   }
 
   /**
-   * Build main player texture from CraftPix robot sprites.
+   * Register animations for a character (idle, walk, hurt).
+   */
+  registerCharacterAnimations(textureKey, hurtKey) {
+    if (!this.textures.exists(textureKey) || !this.textures.exists(hurtKey)) {
+      console.warn(`[BootScene] registerCharacterAnimations skipped — missing textures: ${textureKey} or ${hurtKey}`);
+      return;
+    }
+
+    const prefix = textureKey === 'player' ? 'player' : textureKey;
+    this.anims.create({
+      key: prefix + '-idle',
+      frames: this.anims.generateFrameNumbers(textureKey, { start: 0, end: 5 }),
+      frameRate: 8,
+      repeat: -1
+    });
+    this.anims.create({
+      key: prefix + '-walk-down',
+      frames: this.anims.generateFrameNumbers(textureKey, { start: 6, end: 11 }),
+      frameRate: 10,
+      repeat: -1
+    });
+    this.anims.create({
+      key: prefix + '-walk-up',
+      frames: this.anims.generateFrameNumbers(textureKey, { start: 6, end: 11 }),
+      frameRate: 10,
+      repeat: -1
+    });
+    this.anims.create({
+      key: prefix + '-walk-side',
+      frames: this.anims.generateFrameNumbers(textureKey, { start: 6, end: 11 }),
+      frameRate: 10,
+      repeat: -1
+    });
+    this.anims.create({
+      key: prefix + '-hurt',
+      frames: this.anims.generateFrameNumbers(hurtKey, { start: 0, end: 3 }),
+      frameRate: 12,
+      repeat: 0
+    });
+  }
+
+  /**
+   * Build character texture from idle + walk sprites (Destroyer, Swordsman).
+   * Supports variable frame counts: uses first 6 frames of idle and first 6 of walk (128px each).
+   */
+  buildCharacterTexture(charId) {
+    const idleKey = charId + '-idle';
+    const walkKey = charId + '-walk';
+    if (!this.textures.exists(idleKey) || !this.textures.exists(walkKey)) {
+      console.warn(`[BootScene] Missing character sprites for ${charId} (idle=${idleKey}, walk=${walkKey}). Generating fallback texture.`);
+      this.generateFallbackCharacterTexture(charId);
+      return;
+    }
+
+    const frameSize = 128;
+    const idleFrames = 6;
+    const walkFrames = 6;
+    const totalWidth = frameSize * (idleFrames + walkFrames);
+    const texKey = 'player-' + charId;
+    const idleTex = this.textures.get(idleKey);
+    const walkTex = this.textures.get(walkKey);
+    const idleImg = idleTex.getSourceImage();
+    const walkImg = walkTex.getSourceImage();
+    const canvas = document.createElement('canvas');
+    canvas.width = totalWidth;
+    canvas.height = frameSize;
+    const ctx = canvas.getContext('2d');
+    // Idle: draw up to 6 frames (source may have 5 or 6)
+    const idleW = Math.min(idleImg.width, idleFrames * frameSize);
+    for (let i = 0; i < idleFrames; i++) {
+      const srcX = Math.min(i * frameSize, idleW - frameSize);
+      ctx.drawImage(idleImg, srcX, 0, frameSize, frameSize, i * frameSize, 0, frameSize, frameSize);
+    }
+    // Walk: draw up to 6 frames
+    for (let i = 0; i < walkFrames; i++) {
+      const srcX = Math.min(i * frameSize, walkImg.width - frameSize);
+      ctx.drawImage(walkImg, srcX, 0, frameSize, frameSize, (idleFrames + i) * frameSize, 0, frameSize, frameSize);
+    }
+    this.textures.addSpriteSheet(texKey, canvas, { frameWidth: frameSize, frameHeight: frameSize });
+  }
+
+  /**
+   * Build main player texture from CraftPix robot sprites (VibeCoder).
    * Combines Idle (6 frames) + Walk (6 frames) into one 'player' sheet (12 frames, 128x128 each).
    */
   buildRobotPlayerTexture() {
+    if (!this.textures.exists('robot-idle') || !this.textures.exists('robot-walk')) {
+      console.warn('[BootScene] Missing robot sprites (robot-idle / robot-walk). Generating fallback player texture.');
+      this.generateFallbackPlayerTexture();
+      this.generateFallbackHurtTexture('robot-hurt', 0xff5e5e);
+      return;
+    }
+
     const frameSize = 128;
     const idleFrames = 6;
     const walkFrames = 6;
@@ -235,11 +401,212 @@ export default class BootScene extends Phaser.Scene {
    * Texture key 'bug' unchanged so spawn/anim code stays the same.
    */
   buildWerewolfBugTexture() {
+    if (!this.textures.exists('werewolf-run')) {
+      console.warn('[BootScene] Missing \"werewolf-run\" spritesheet. Generating fallback procedural bug texture.');
+      this.generateFallbackBugSpriteSheet();
+      return;
+    }
+
     const runTex = this.textures.get('werewolf-run');
+    if (!runTex || typeof runTex.getSourceImage !== 'function') {
+      console.warn('[BootScene] \"werewolf-run\" texture has no source image. Using fallback bug texture.');
+      this.generateFallbackBugSpriteSheet();
+      return;
+    }
+
     this.textures.addSpriteSheet('bug', runTex.getSourceImage(), {
       frameWidth: 128,
       frameHeight: 128
     });
+  }
+
+  /**
+   * Fallback player spritesheet when external CraftPix sprites are missing.
+   * Generates a simple 12‑frame idle/walk-style animation using vector shapes.
+   */
+  generateFallbackPlayerTexture() {
+    const frameSize = 128;
+    const totalFrames = 12;
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+    for (let f = 0; f < totalFrames; f++) {
+      const offsetX = f * frameSize;
+      const cx = offsetX + frameSize / 2;
+      const cy = frameSize / 2;
+
+      // Keep previous frames drawn on the strip; clearing here would erase them.
+      // Body (larger so fallback is clearly visible in title and gameplay)
+      g.fillStyle(0x00ffff, 1);
+      g.fillRoundedRect(cx - 28, cy - 36, 56, 72, 10);
+
+      // Head
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(cx, cy - 52, 16);
+
+      // Eyes
+      g.fillStyle(0x000000, 1);
+      g.fillCircle(cx - 5, cy - 54, 3);
+      g.fillCircle(cx + 5, cy - 54, 3);
+
+      // Legs with small walk offset
+      const legOffset = (f % 4) - 1.5;
+      g.fillStyle(0x0088ff, 1);
+      g.fillRect(cx - 18 + legOffset * 1.5, cy + 8, 10, 26);
+      g.fillRect(cx + 8 - legOffset * 1.5, cy + 8, 10, 26);
+    }
+
+    g.generateTexture('player-fallback-temp', frameSize * totalFrames, frameSize);
+    g.destroy();
+
+    const temp = this.textures.get('player-fallback-temp');
+    if (!temp || typeof temp.getSourceImage !== 'function') {
+      console.error('[BootScene] Failed to generate fallback player texture.');
+      return;
+    }
+
+    this.textures.addSpriteSheet('player', temp.getSourceImage(), {
+      frameWidth: frameSize,
+      frameHeight: frameSize
+    });
+    this.textures.remove('player-fallback-temp');
+    if (!this.textures.exists('robot-hurt')) {
+      this.generateFallbackHurtTexture('robot-hurt', 0xff5e5e);
+    }
+  }
+
+  /**
+   * Fallback texture for secondary playable robots (destroyer/swordsman).
+   */
+  generateFallbackCharacterTexture(charId) {
+    const palette = {
+      destroyer: { body: 0xff7a00, legs: 0xffc266, hurt: 0xff4444 },
+      swordsman: { body: 0x7a6bff, legs: 0xb9b2ff, hurt: 0xff4db8 }
+    };
+    const colors = palette[charId] || { body: 0x00c8ff, legs: 0x66e0ff, hurt: 0xff6666 };
+    const frameSize = 128;
+    const totalFrames = 12;
+    const texKey = `player-${charId}`;
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+    for (let f = 0; f < totalFrames; f++) {
+      const offsetX = f * frameSize;
+      const cx = offsetX + frameSize / 2;
+      const cy = frameSize / 2;
+
+      g.fillStyle(colors.body, 1);
+      g.fillRoundedRect(cx - 28, cy - 36, 56, 72, 10);
+
+      g.fillStyle(0xf4f8ff, 1);
+      g.fillCircle(cx, cy - 52, 16);
+
+      g.fillStyle(0x111111, 1);
+      g.fillCircle(cx - 5, cy - 54, 3);
+      g.fillCircle(cx + 5, cy - 54, 3);
+
+      const legOffset = (f % 4) - 1.5;
+      g.fillStyle(colors.legs, 1);
+      g.fillRect(cx - 18 + legOffset * 1.5, cy + 8, 10, 26);
+      g.fillRect(cx + 8 - legOffset * 1.5, cy + 8, 10, 26);
+    }
+
+    const tempKey = `${charId}-fallback-temp`;
+    g.generateTexture(tempKey, frameSize * totalFrames, frameSize);
+    g.destroy();
+
+    const temp = this.textures.get(tempKey);
+    if (!temp || typeof temp.getSourceImage !== 'function') {
+      console.error(`[BootScene] Failed to generate fallback texture for ${charId}.`);
+      return;
+    }
+    this.textures.addSpriteSheet(texKey, temp.getSourceImage(), {
+      frameWidth: frameSize,
+      frameHeight: frameSize
+    });
+    this.textures.remove(tempKey);
+
+    const hurtKey = `${charId}-hurt`;
+    if (!this.textures.exists(hurtKey)) {
+      this.generateFallbackHurtTexture(hurtKey, colors.hurt);
+    }
+  }
+
+  generateFallbackHurtTexture(textureKey, color = 0xff6666) {
+    const frameSize = 128;
+    const frames = 4;
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+    for (let i = 0; i < frames; i++) {
+      const ox = i * frameSize;
+      const cx = ox + frameSize / 2;
+      const cy = frameSize / 2;
+      g.fillStyle(color, 0.9 - i * 0.15);
+      g.fillRoundedRect(cx - 26, cy - 36, 52, 68, 12);
+      g.lineStyle(2, 0xffffff, 1);
+      g.strokeRoundedRect(cx - 26, cy - 36, 52, 68, 12);
+    }
+    const tempKey = `${textureKey}-temp`;
+    g.generateTexture(tempKey, frameSize * frames, frameSize);
+    g.destroy();
+    const temp = this.textures.get(tempKey);
+    if (!temp || typeof temp.getSourceImage !== 'function') return;
+    this.textures.addSpriteSheet(textureKey, temp.getSourceImage(), {
+      frameWidth: frameSize,
+      frameHeight: frameSize
+    });
+    this.textures.remove(tempKey);
+  }
+
+  /**
+   * Fallback bug spritesheet (9 frames) when werewolf sprite is missing.
+   */
+  generateFallbackBugSpriteSheet() {
+    const frameSize = 128;
+    const frames = 9;
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
+
+    for (let f = 0; f < frames; f++) {
+      const offsetX = f * frameSize;
+      const cx = offsetX + frameSize / 2;
+      const cy = frameSize / 2;
+
+      // Keep previously drawn frames in the strip; do not clear per frame.
+
+      // Body
+      g.fillStyle(0x006600, 1);
+      g.fillEllipse(cx, cy, 68, 50);
+
+      // Shell
+      g.fillStyle(0x00aa00, 1);
+      g.fillEllipse(cx, cy - 3, 54, 36);
+
+      // Legs
+      g.lineStyle(5, 0x003300, 1);
+      for (let i = -1; i <= 1; i++) {
+        const legY = cy + 20 + i * 10;
+        const phase = (f + i + 3) % 4 - 1.5;
+        g.lineBetween(cx - 34, legY, cx - 52 - phase * 5, legY + 12);
+        g.lineBetween(cx + 34, legY, cx + 52 + phase * 5, legY + 12);
+      }
+
+      // Eyes
+      g.fillStyle(0xff0000, 1);
+      g.fillCircle(cx - 14, cy - 18, 6);
+      g.fillCircle(cx + 14, cy - 18, 6);
+    }
+
+    g.generateTexture('bug-fallback-temp', frameSize * frames, frameSize);
+    g.destroy();
+
+    const temp = this.textures.get('bug-fallback-temp');
+    if (!temp || typeof temp.getSourceImage !== 'function') {
+      console.error('[BootScene] Failed to generate fallback bug texture.');
+      return;
+    }
+
+    this.textures.addSpriteSheet('bug', temp.getSourceImage(), {
+      frameWidth: frameSize,
+      frameHeight: frameSize
+    });
+    this.textures.remove('bug-fallback-temp');
   }
 
   generateGlitchSpriteSheet() {

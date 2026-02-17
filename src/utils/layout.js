@@ -57,3 +57,51 @@ export function anchorBottomCenter(scene, offsetY) {
   return { x: scene.scale.width / 2, y: scene.scale.height - offsetY };
 }
 
+/**
+ * Layout del HUD responsive: posiciones y tamaños según viewport y getUIScale.
+ * Usar en createHUD y updateHUD para que el HUD se vea bien en pantalla completa.
+ */
+export function getHudLayout(scene) {
+  const w = scene.scale?.width ?? 800;
+  const h = scene.scale?.height ?? 720;
+  const uiScale = getUIScale(scene);
+  const pad = Math.max(12, 14 * uiScale);
+  const barW = Math.min(220 * uiScale, w * 0.32);
+  const barH = 18 * uiScale;
+  const barHp = 14 * uiScale;
+  const lineH = 18 * uiScale;
+  const topY = 8;
+  const xpY = topY;
+  const hpY = xpY + barH + 6;
+  const leftTextY = hpY + barHp + 8;
+  const rightX = w - pad;
+  const centerX = w / 2;
+  const modeY = hpY + barHp + 6;
+  const connectionY = h - 36;
+  const bossBarW = Math.min(400, w * 0.6);
+  const bossBarH = 22 * uiScale;
+  const bossBarX = centerX - bossBarW / 2;
+  const bossBarY = h - 58;
+  const bossNameY = bossBarY - 18;
+  const fontSize = {
+    tiny: Math.round(9 * uiScale),
+    small: Math.round(10 * uiScale),
+    normal: Math.round(12 * uiScale),
+    medium: Math.round(14 * uiScale),
+    large: Math.round(16 * uiScale)
+  };
+  return {
+    w, h, pad, uiScale,
+    leftX: pad,
+    rightX,
+    centerX,
+    barW, barH, barHp,
+    xpY, hpY, leftTextY,
+    rightTopY: topY,
+    lineH,
+    modeY,
+    connectionY,
+    bossBarX, bossBarY, bossBarW, bossBarH, bossNameY,
+    fontSize
+  };
+}
