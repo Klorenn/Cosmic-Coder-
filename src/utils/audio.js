@@ -393,11 +393,12 @@ export function playMagnet() {
 }
 
 // === MUSIC ===
-const MENU_MUSIC_URL = '/assets/audio/arcade-by-lucjo.mp3';
+// Use relative URLs so it works both locally (/) and on GitHub Pages (/Cosmic-Coder-/)
+const MENU_MUSIC_URL = 'assets/audio/arcade-by-lucjo.mp3';
 // Gameplay playlist: se repite en ciclo (1 → 2 → 1 → 2...)
 const GAMEPLAY_PLAYLIST = [
-  '/assets/audio/Galaxy_Guppy_KLICKAUD.mp3',
-  '/assets/audio/Kubbi-Ember.mp3'
+  'assets/audio/Galaxy_Guppy_KLICKAUD.mp3',
+  'assets/audio/Kubbi-Ember.mp3'
 ];
 
 export function setMusicMode(mode) {
