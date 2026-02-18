@@ -274,6 +274,59 @@ export async function getLeaderboard(limit = 10) {
   }
 }
 
+/**
+ * Get ranked leaderboard by season (ZK runs). Returns [] if contract not configured or on error.
+ * ScoreEntry has { player, score } (no wave).
+ */
+export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
+  if (!getContractId()) return [];
+  try {
+    const {
+      Contract,
+      TransactionBuilder,
+      Account,
+      BASE_FEE,
+      xdr,
+    } = await import('@stellar/stellar-sdk');
+    const server = await getServer();
+    const contract = new Contract(getContractId());
+    const dummyAccount = new Account(
+      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      '0'
+    );
+    const built = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: TESTNET_PASSPHRASE,
+    })
+      .addOperation(contract.call('get_leaderboard_by_season', xdr.ScVal.scvU32(seasonId), xdr.ScVal.scvU32(limit)))
+      .setTimeout(30)
+      .build();
+    const sim = await server.simulateTransaction(built);
+    if (sim.error) return [];
+    const vec = sim.result?.retval;
+    if (!vec || vec.switch().name !== 'vec') return [];
+    const arr = vec.vec();
+    const out = [];
+    for (let i = 0; i < arr.length; i++) {
+      const entry = arr[i];
+      if (entry.obj().switch().name !== 'map') continue;
+      const m = entry.obj().map();
+      let player = '';
+      let score = 0;
+      for (let j = 0; j < m.length; j++) {
+        const k = m[j].key().sym().toString();
+        const v = m[j].val();
+        if (k === 'player') player = v.address().toScAddress().accountId().ed25519().toString();
+        if (k === 'score') score = v.u32();
+      }
+      out.push({ player, wave: 0, score });
+    }
+    return out;
+  } catch (_) {
+    return [];
+  }
+}
+
 export function isContractConfigured() {
   return !!getContractId();
 }

@@ -440,6 +440,9 @@ export default class ArenaScene extends Phaser.Scene {
       this.lastInputTime = this.time.now;
       Audio.initAudio();
       Audio.resumeAudio();
+      if (window.VIBE_SETTINGS?.musicEnabled && !Audio.isGameplayMusicPlaying()) {
+        Audio.startGameplayMusic();
+      }
     };
     this.input.on('pointerdown', markActive);
     this.input.keyboard.on('keydown', markActive);
@@ -1459,6 +1462,8 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   startWave() {
+    // Ensure player can be hit from wave 1 (no stuck invincible)
+    if (this.waveNumber === 1) this.invincible = false;
     // Check for stage transition
     this.checkStageChange();
 
@@ -1607,8 +1612,11 @@ export default class ArenaScene extends Phaser.Scene {
 
     const bossData = this.bossTypes[bossKey];
 
-    // Scale boss health with wave number
-    const healthScale = 1 + Math.floor(this.waveNumber / 20) * 0.5;
+    const playerLevel = Math.max(1, window.VIBE_CODER.level || 1);
+    const levelHealthMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_HEALTH_FACTOR ?? 0.1), BALANCE.LEVEL_HEALTH_CAP ?? 6);
+    const levelSpeedMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_SPEED_FACTOR ?? 0.03), BALANCE.LEVEL_SPEED_CAP ?? 2.2);
+    const levelDamageMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_DAMAGE_FACTOR ?? 0.06), BALANCE.LEVEL_DAMAGE_CAP ?? 4);
+    const healthScale = (1 + Math.floor(this.waveNumber / 20) * 0.5) * levelHealthMult;
 
     // Spawn boss near player (above them)
     const bossX = Phaser.Math.Clamp(this.player.x, 100, this.worldWidth - 100);
@@ -1617,8 +1625,8 @@ export default class ArenaScene extends Phaser.Scene {
     boss.health = Math.floor(bossData.health * healthScale);
     boss.maxHealth = boss.health;
     const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
-    boss.speed = Math.floor(bossData.speed * mobSpeedMult);
-    boss.damage = Math.max(1, Math.floor(bossData.damage * (1 + this.waveNumber * BALANCE.BOSS_DAMAGE_FACTOR)));
+    boss.speed = Math.floor(bossData.speed * mobSpeedMult * levelSpeedMult);
+    boss.damage = Math.max(1, Math.floor(bossData.damage * (1 + this.waveNumber * BALANCE.BOSS_DAMAGE_FACTOR) * levelDamageMult));
     boss.xpValue = bossData.xpValue;
     boss.enemyType = bossKey;
     boss.isBoss = true;
@@ -1668,10 +1676,12 @@ export default class ArenaScene extends Phaser.Scene {
    * repeated by its spawnWeight (default 1).
    */
   buildSpawnPool(wave) {
+    // Wave 1 uses same spawn pool as wave 2 so all types that appear in wave 2 can appear in wave 1
+    const effectiveWave = wave < 2 ? 2 : wave;
     const pool = [];
     for (const [type, data] of Object.entries(this.enemyTypes)) {
       const waveMin = data.waveMin ?? 0;
-      if (wave >= waveMin) {
+      if (effectiveWave >= waveMin) {
         const weight = data.spawnWeight ?? 1;
         for (let i = 0; i < weight; i++) {
           pool.push(type);
@@ -1698,8 +1708,11 @@ export default class ArenaScene extends Phaser.Scene {
     y = Phaser.Math.Clamp(y, 50, this.worldHeight - 50);
 
     // Choose enemy type based on wave with scaling pools
-    const playerLevel = window.VIBE_CODER.level;
-    const healthScale = 1 + Math.min(playerLevel * 0.05, 2); // Cap at 3x health
+    const playerLevel = Math.max(1, window.VIBE_CODER.level || 1);
+    // Scale with player level so higher level = harder enemies (still killable, but reaching wave 100 is tough)
+    const levelHealthMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_HEALTH_FACTOR ?? 0.1), BALANCE.LEVEL_HEALTH_CAP ?? 6);
+    const levelSpeedMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_SPEED_FACTOR ?? 0.03), BALANCE.LEVEL_SPEED_CAP ?? 2.2);
+    const levelDamageMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_DAMAGE_FACTOR ?? 0.06), BALANCE.LEVEL_DAMAGE_CAP ?? 4);
 
     // Build spawn pool from enemyTypes data (waveMin + spawnWeight)
     const spawnPool = this.buildSpawnPool(this.waveNumber);
@@ -1710,20 +1723,19 @@ export default class ArenaScene extends Phaser.Scene {
     const textureName = typeData.texture || type;
 
     const enemy = this.enemies.create(x, y, textureName);
-    // Vida base por nivel + extra por oleada / Base health + wave scaling
+    // Vida: base + oleada + nivel jugador
     const waveHealthMult = 1 + (this.waveNumber - 1) * 0.05;
-    enemy.health = Math.floor(typeData.health * healthScale * waveHealthMult);
+    enemy.health = Math.floor(typeData.health * levelHealthMult * waveHealthMult);
     enemy.maxHealth = enemy.health;
     // Apply event speed modifier (e.g., CURSE event)
     const speedMod = this.eventEnemySpeedMod || 1;
-    // Velocidad escala con oleada (balance.js) / Speed scales with wave (+5% MOB_SPEED_MULT)
     const waveSpeedMult = Math.min(BALANCE.WAVE_SPEED_CAP, 1 + (this.waveNumber - 1) * BALANCE.WAVE_SPEED_FACTOR);
     const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
-    enemy.speed = Math.floor(typeData.speed * speedMod * waveSpeedMult * mobSpeedMult);
-    // Daño por oleada: baseDamage * (1 + wave * WAVE_DAMAGE_FACTOR) * ENEMY_DAMAGE_MULT
+    enemy.speed = Math.floor(typeData.speed * speedMod * waveSpeedMult * mobSpeedMult * levelSpeedMult);
+    // Daño: oleada + nivel jugador
     const damageScale = 1 + this.waveNumber * BALANCE.WAVE_DAMAGE_FACTOR;
     const enemyDmgMult = BALANCE.ENEMY_DAMAGE_MULT ?? 1;
-    let baseDmg = Math.max(1, Math.floor(typeData.damage * damageScale * enemyDmgMult));
+    let baseDmg = Math.max(1, Math.floor(typeData.damage * damageScale * enemyDmgMult * levelDamageMult));
     enemy.damage = baseDmg;
     enemy.xpValue = typeData.xpValue;
     enemy.enemyType = type;
@@ -1753,6 +1765,12 @@ export default class ArenaScene extends Phaser.Scene {
     // Tamaño enemigos: más grandes para mejor visibilidad
     const enemyScale = type === 'bug' ? 1.0 : 1.65;
     enemy.setScale(enemyScale);
+    // Minimum hitbox so overlap with player always registers (enemies can hit)
+    if (enemy.body && (enemy.body.width < 20 || enemy.body.height < 20)) {
+      const w = Math.max(20, enemy.body.width);
+      const h = Math.max(20, enemy.body.height);
+      enemy.body.setSize(w, h, (enemy.width - w) / 2, (enemy.height - h) / 2);
+    }
 
     // Play enemy animation based on type
     const animKey = this.getEnemyAnimKey(type);
@@ -1873,8 +1891,11 @@ export default class ArenaScene extends Phaser.Scene {
   spawnMiniBoss() {
     const miniBossData = this.miniBossTypes['miniboss-deadlock'];
 
-    // Scale mini-boss health with wave
-    const healthScale = 1 + Math.floor(this.waveNumber / 20) * 0.3;
+    const playerLevel = Math.max(1, window.VIBE_CODER.level || 1);
+    const levelHealthMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_HEALTH_FACTOR ?? 0.1), BALANCE.LEVEL_HEALTH_CAP ?? 6);
+    const levelSpeedMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_SPEED_FACTOR ?? 0.03), BALANCE.LEVEL_SPEED_CAP ?? 2.2);
+    const levelDamageMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_DAMAGE_FACTOR ?? 0.06), BALANCE.LEVEL_DAMAGE_CAP ?? 4);
+    const healthScale = (1 + Math.floor(this.waveNumber / 20) * 0.3) * levelHealthMult;
 
     // Spawn mini-boss near player
     const mbX = Phaser.Math.Clamp(this.player.x + Phaser.Math.Between(-200, 200), 100, this.worldWidth - 100);
@@ -1883,8 +1904,8 @@ export default class ArenaScene extends Phaser.Scene {
     miniBoss.health = Math.floor(miniBossData.health * healthScale);
     miniBoss.maxHealth = miniBoss.health;
     const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
-    miniBoss.speed = Math.floor(miniBossData.speed * mobSpeedMult);
-    miniBoss.damage = Math.max(1, Math.floor(miniBossData.damage * (1 + this.waveNumber * BALANCE.BOSS_DAMAGE_FACTOR)));
+    miniBoss.speed = Math.floor(miniBossData.speed * mobSpeedMult * levelSpeedMult);
+    miniBoss.damage = Math.max(1, Math.floor(miniBossData.damage * (1 + this.waveNumber * BALANCE.BOSS_DAMAGE_FACTOR) * levelDamageMult));
     miniBoss.xpValue = miniBossData.xpValue;
     miniBoss.enemyType = 'miniboss-deadlock';
     miniBoss.isMiniBoss = true;
@@ -3060,10 +3081,10 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   activateSudoMode() {
-    // GOD MODE - invincible + 3x damage for 10 seconds
+    // SUDO MODE - 3x damage for 10 seconds (no invincibility)
     this.cameras.main.flash(300, 255, 215, 0);
 
-    const sudoText = this.add.text(400, 300, '👑 SUDO MODE ACTIVATED 👑\nINVINCIBLE + 3X DAMAGE', {
+    const sudoText = this.add.text(400, 300, '👑 SUDO MODE ACTIVATED 👑\n3X DAMAGE', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#ffd700',
@@ -3087,9 +3108,6 @@ export default class ArenaScene extends Phaser.Scene {
       duration: 10000
     };
 
-    // Make player invincible
-    this.invincible = true;
-
     // Golden glow effect on player
     this.player.setTint(0xffd700);
 
@@ -3097,7 +3115,6 @@ export default class ArenaScene extends Phaser.Scene {
     this.time.delayedCall(10000, () => {
       if (this.currentWeapon.type === 'sudo') {
         this.currentWeapon = { type: 'basic', duration: Infinity };
-        this.invincible = false;
         this.player.clearTint();
 
         const endText = this.add.text(this.player.x, this.player.y - 30, 'SUDO EXPIRED', {
@@ -3806,8 +3823,7 @@ export default class ArenaScene extends Phaser.Scene {
 
   playerHit(player, enemy) {
     if (this.playerDead) return; // Evitar más hits durante game over
-    // Invincibility frames - can't get hit while flashing (solo con buff o tras un golpe)
-    if (this.invincible) return;
+    // No invincibility: player can always be hit
 
     let damage = typeof enemy.damage === 'number' && !isNaN(enemy.damage) ? enemy.damage : 1;
     if (damage <= 0) return; // e.g. hallucination (fake) — no damage, no i-frames
@@ -3843,25 +3859,9 @@ export default class ArenaScene extends Phaser.Scene {
     // Play damage sound
     Audio.playPlayerHit();
 
-    // Become invincible for a bit
-    this.invincible = true;
-
-    // Flash red/white cycle to show i-frames (stored on this for cleanup)
-    if (this.iFrameFlashTimer) this.iFrameFlashTimer.destroy();
-    let flashCount = 0;
-    this.iFrameFlashTimer = this.time.addEvent({
-      delay: 100,
-      callback: () => {
-        flashCount++;
-        player.setAlpha(flashCount % 2 === 0 ? 1 : 0.3);
-        if (flashCount >= 10) {
-          player.setAlpha(1);
-          this.invincible = false;
-          this.iFrameFlashTimer = null;
-        }
-      },
-      repeat: 9
-    });
+    // Brief flash only (no i-frames)
+    player.setAlpha(0.4);
+    this.time.delayedCall(150, () => { if (player && player.setAlpha) player.setAlpha(1); });
 
     // Screen shake — stronger on critical hit / Feedback de dificultad
     if (isCriticalHit) {
@@ -3894,7 +3894,6 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Check death
     if (player.health <= 0) {
-      this.invincible = false;
       this.playerDeath();
     }
   }
@@ -4256,19 +4255,15 @@ export default class ArenaScene extends Phaser.Scene {
         }
       });
 
-      // Cancel any stale i-frame flash timer from playerHit() to prevent it
-      // from overwriting respawn invincibility
       if (this.iFrameFlashTimer) {
         this.iFrameFlashTimer.destroy();
         this.iFrameFlashTimer = null;
       }
 
-      // Brief invincibility
-      this.invincible = true;
-      this.player.setAlpha(0.5);
-      this.time.delayedCall(2000, () => {
-        this.invincible = false;
-        this.player.setAlpha(1);
+      // Brief visual feedback only (no invincibility)
+      this.player.setAlpha(0.6);
+      this.time.delayedCall(1500, () => {
+        if (this.player && this.player.setAlpha) this.player.setAlpha(1);
       });
 
       // Fade back in

@@ -33,11 +33,12 @@ export default class TitleScene extends Phaser.Scene {
 
     // Menu music mode (Arcade by Lucjo - loop infinito)
     Audio.setMusicMode('menu');
+    // Always reset to a fresh menu track when entering the title screen
     if (window.VIBE_SETTINGS?.musicEnabled) {
       Audio.startMenuMusic();
     }
 
-    // Initialize audio on first interaction (browsers block autoplay)
+    // Initialize audio on first interaction (browsers block autoplay for some APIs)
     const onFirstInteraction = () => {
       Audio.initAudio();
       Audio.resumeAudio();
@@ -48,13 +49,10 @@ export default class TitleScene extends Phaser.Scene {
     this.input.once('pointerdown', onFirstInteraction);
     this.input.keyboard.once('keydown', onFirstInteraction);
 
-    // Check for saved game and update menu options
-    this.hasSavedGame = SaveManager.hasSave();
-    if (this.hasSavedGame) {
-      this.menuOptions = ['CONTINUE', ...this.baseMenuOptions]; // keys for i18n
-    } else {
-      this.menuOptions = [...this.baseMenuOptions];
-    }
+    // No continue: exiting the game always loses in-run progress
+    SaveManager.clearSave();
+    this.hasSavedGame = false;
+    this.menuOptions = [...this.baseMenuOptions];
 
     // Load progress from API if wallet already connected (updates menu and character after load)
     if (stellarWallet.isConnected()) {
@@ -626,13 +624,9 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   updateContinueMenuOption() {
-    this.hasSavedGame = SaveManager.hasSave();
-    const hadContinue = this.menuOptions[0] === 'CONTINUE';
-    if (this.hasSavedGame && !hadContinue) {
-      this.menuOptions = ['CONTINUE', ...this.baseMenuOptions];
-    } else if (!this.hasSavedGame && hadContinue) {
-      this.menuOptions = [...this.baseMenuOptions];
-    } else return;
+    // Continue is disabled: always show base menu options (START_GAME, UPGRADES, etc.)
+    this.hasSavedGame = false;
+    this.menuOptions = [...this.baseMenuOptions];
     // Rebuild menu
     this.menuTexts?.forEach((t) => t.destroy());
     this.menuTexts = [];
@@ -1781,19 +1775,6 @@ export default class TitleScene extends Phaser.Scene {
     const option = this.menuOptions[this.selectedOption];
 
     switch (option) {
-      case 'CONTINUE': {
-        if (!stellarWallet.isConnected()) {
-          this.sayQuote(t('prompt.link_wallet'));
-          return;
-        }
-        Audio.playLevelUp();
-        this.cameras.main.fade(500, 0, 0, 0);
-        this.time.delayedCall(500, () => {
-          this.scene.start('ArenaScene', { continueGame: true });
-        });
-        break;
-      }
-
       case 'START_GAME': {
         if (!stellarWallet.isConnected()) {
           this.sayQuote(t('prompt.link_wallet'));
@@ -2068,7 +2049,12 @@ export default class TitleScene extends Phaser.Scene {
     const walletConnected = stellarWallet.isConnected();
     let top;
     if (walletConnected && gameClient.isContractConfigured()) {
-      const onChain = await gameClient.getLeaderboard(10);
+      // ZK ranked runs are in get_leaderboard_by_season(1); show that so ranked runs appear
+      const onChain = await gameClient.getLeaderboardBySeason(1, 10);
+      if (onChain.length === 0) {
+        const legacy = await gameClient.getLeaderboard(10);
+        onChain.push(...legacy);
+      }
       top = onChain.map((e, i) => ({
         rank: i + 1,
         name: e.player ? stellarWallet.shortAddress(e.player) : '???',

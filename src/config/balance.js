@@ -20,6 +20,17 @@ export const WAVE_SPEED_CAP = 2.0;
 /** Multiplicador global velocidad mobs (+5% más rápidos). */
 export const MOB_SPEED_MULT = 1.05;
 
+// —— Escalado por nivel del jugador / Player level scaling ———
+/** Enemigos más duros al subir nivel: vida = base * (1 + level * factor), cap. */
+export const LEVEL_HEALTH_FACTOR = 0.1;
+export const LEVEL_HEALTH_CAP = 6;
+/** Velocidad enemiga extra por nivel. */
+export const LEVEL_SPEED_FACTOR = 0.03;
+export const LEVEL_SPEED_CAP = 2.2;
+/** Daño enemigo extra por nivel. */
+export const LEVEL_DAMAGE_FACTOR = 0.06;
+export const LEVEL_DAMAGE_CAP = 4;
+
 /** Spawn: delay mínimo (ms) entre apariciones. Menor = más enemigos por segundo. */
 export const SPAWN_DELAY_MIN = 180;
 /** Reducción de delay por oleada: delay = max(SPAWN_DELAY_MIN, baseDelay - wave * SPAWN_DELAY_PER_WAVE). */
