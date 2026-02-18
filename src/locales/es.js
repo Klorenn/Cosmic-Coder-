@@ -75,7 +75,8 @@ export default {
     fullscreen_exit: 'SALIR PANTALLA COMPLETA',
     wallet_connect: 'CONECTAR WALLET',
     wallet_disconnect: 'DESCONECTAR',
-    wallet_error: 'No se pudo conectar.\nInstala la extensión Freighter en tu navegador.'
+    wallet_error: 'No se pudo conectar.\nInstala la extensión Freighter en tu navegador.',
+    wallet_error_mobile: 'En móvil: abre esta página en el navegador de la app Freighter, o usa un navegador de escritorio con Freighter.'
   },
   controls: {
     title: 'CONTROLES',

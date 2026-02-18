@@ -400,9 +400,49 @@ function loadRuntimeConfig() {
     });
 }
 
-loadRuntimeConfig().then(() => {
+function isMobileDevice() {
+  if (typeof window === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  const touch = !!(navigator.maxTouchPoints && navigator.maxTouchPoints > 0);
+  const narrow = window.innerWidth < 1024;
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua) || (touch && narrow);
+}
+
+function isPortrait() {
+  if (typeof window === 'undefined') return false;
+  return window.innerHeight > window.innerWidth;
+}
+
+function showRotateOverlay(show) {
+  const el = document.getElementById('rotate-overlay');
+  if (el) el.classList.toggle('show', !!show);
+}
+
+function startGame() {
+  if (window.__VIBE_GAME__) return;
+  showRotateOverlay(false);
+  if (isMobileDevice() && typeof screen !== 'undefined' && screen.orientation && typeof screen.orientation.lock === 'function') {
+    screen.orientation.lock('landscape').catch(() => {});
+  }
   const game = new Phaser.Game(config);
   window.__VIBE_GAME__ = game;
+}
+
+loadRuntimeConfig().then(() => {
+  if (isMobileDevice() && isPortrait()) {
+    showRotateOverlay(true);
+    const onOrientation = () => {
+      if (!isPortrait() || !isMobileDevice()) {
+        window.removeEventListener('orientationchange', onOrientation);
+        window.removeEventListener('resize', onOrientation);
+        startGame();
+      }
+    };
+    window.addEventListener('orientationchange', onOrientation);
+    window.addEventListener('resize', onOrientation);
+  } else {
+    startGame();
+  }
 });
 
 // Connect to XP server for real-time coding rewards

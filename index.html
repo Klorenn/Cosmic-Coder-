@@ -2,7 +2,10 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="screen-orientation" content="landscape">
   <!-- HTML Meta Tags -->
   <title>Cosmic Coder — Prove Your Skill. On-Chain</title>
   <meta name="description" content="A next-generation blockchain game powered by zero-knowledge proofs and on-chain contracts. Built on Stellar Testnet to deliver trustless gameplay and cryptographic fairness.">
@@ -56,13 +59,48 @@
       display: block;
       max-width: 100%;
       max-height: 100%;
-      /* Escalado suave para mejor calidad de texto y líneas */
       image-rendering: auto;
       image-rendering: -webkit-optimize-contrast;
+    }
+    .rotate-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: #0a0a0f;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+      box-sizing: border-box;
+    }
+    .rotate-overlay.show {
+      display: flex;
+    }
+    .rotate-overlay-inner {
+      text-align: center;
+      color: #fff;
+      max-width: 320px;
+    }
+    .rotate-title {
+      font-size: 1.5rem;
+      margin-bottom: 0.75rem;
+      color: #00ffff;
+    }
+    .rotate-sub, .rotate-sub-en {
+      font-size: 1rem;
+      opacity: 0.9;
+      margin: 0.25rem 0;
     }
   </style>
 </head>
 <body>
+  <div id="rotate-overlay" class="rotate-overlay" aria-hidden="true">
+    <div class="rotate-overlay-inner">
+      <p class="rotate-title">📱 Play in landscape</p>
+      <p class="rotate-sub">Gira el dispositivo a horizontal para jugar.</p>
+      <p class="rotate-sub-en">Please rotate your device to landscape.</p>
+    </div>
+  </div>
   <div id="game-container"></div>
   <script type="module" src="/src/main.js"></script>
 </body>

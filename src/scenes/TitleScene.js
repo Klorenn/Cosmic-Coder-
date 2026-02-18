@@ -494,7 +494,10 @@ export default class TitleScene extends Phaser.Scene {
         }
         this.updateWalletButton();
         this.updateConnectionBadge();
-        if (!addr && this.sayQuote) this.sayQuote(t('footer.wallet_error'));
+        if (!addr && this.sayQuote) {
+          const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+          this.sayQuote(t(isMobile ? 'footer.wallet_error_mobile' : 'footer.wallet_error'));
+        }
       }
     });
     this.walletBtn.on('pointerover', () => this.walletBtn.setColor('#00ffaa'));
