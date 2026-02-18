@@ -4030,8 +4030,10 @@ export default class ArenaScene extends Phaser.Scene {
       }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
     }
 
+    // ZK proof generation can take 20–60+ s; casual submit ~5–15 s
+    const submitTimeoutMs = gameClient.isZkProverConfigured() ? 90000 : 25000;
     const submitPromise = new Promise((resolve) => {
-      const timeout = this.time.delayedCall(5000, () => resolve('timeout'));
+      const timeout = this.time.delayedCall(submitTimeoutMs, () => resolve('timeout'));
       if (!gameClient.isContractConfigured()) {
         timeout.destroy();
         resolve(null);
