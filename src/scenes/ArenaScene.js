@@ -695,6 +695,14 @@ export default class ArenaScene extends Phaser.Scene {
     this.player = this.physics.add.sprite(this.worldWidth / 2, this.worldHeight / 2, char.textureKey);
     this.player.setCollideWorldBounds(true);
     this.player.setScale(0.85 * this.uiScale); // Más grande y visible en arena
+    // Hurtbox mínimo para que el overlap con enemigos se detecte siempre
+    const minHurt = 20;
+    const b = this.player.body;
+    if (b && (b.width < minHurt || b.height < minHurt)) {
+      const w = Math.max(minHurt, b.width);
+      const h = Math.max(minHurt, b.height);
+      b.setSize(w, h, (this.player.width - w) / 2, (this.player.height - h) / 2);
+    }
 
     // Player health
     this.player.health = this.getStats().maxHealth;
@@ -1798,9 +1806,10 @@ export default class ArenaScene extends Phaser.Scene {
       enemy.currentScale = 1;
     }
 
-    // NEW: Hallucination - make semi-transparent
+    // NEW: Hallucination - make semi-transparent, does not deal damage (so no i-frames)
     if (typeData.behavior === 'fake') {
       enemy.setAlpha(0.5);
+      enemy.damage = 0;
     }
 
     // NEW: Context Loss teleport setup
@@ -3797,10 +3806,11 @@ export default class ArenaScene extends Phaser.Scene {
 
   playerHit(player, enemy) {
     if (this.playerDead) return; // Evitar más hits durante game over
-    // Invincibility frames - can't get hit while flashing
+    // Invincibility frames - can't get hit while flashing (solo con buff o tras un golpe)
     if (this.invincible) return;
 
-    let damage = enemy.damage;
+    let damage = typeof enemy.damage === 'number' && !isNaN(enemy.damage) ? enemy.damage : 1;
+    if (damage <= 0) return; // e.g. hallucination (fake) — no damage, no i-frames
     if (enemy.canCritPlayer && Math.random() < 0.3) {
       damage = Math.floor(damage * BALANCE.ELITE_CRIT_DAMAGE_MULT);
     }
@@ -3971,6 +3981,13 @@ export default class ArenaScene extends Phaser.Scene {
       strokeThickness: 4
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
 
+    const friendlySubmitError = (errStr, t) => {
+      const e = errStr.toLowerCase();
+      if (/reject|cancel|denied|user|firma rechazada|signature rejected/i.test(e)) return t('game.submit_error_rejected');
+      if (/contract|transaction|errorresult|host function|soroban|insufficient/i.test(e)) return t('game.submit_error_contract');
+      if (/fetch|network|timeout|failed to fetch/i.test(e)) return t('game.submit_error_network');
+      return null;
+    };
     let submitStatusText = null;
     let submitErrorText = null;
     const showSubmitStatus = (status, errorMessage) => {
@@ -3989,7 +4006,8 @@ export default class ArenaScene extends Phaser.Scene {
       }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(1001);
       submitStatusText.setWordWrapWidth(480);
       if (err && (s === 'failed' || s === 'zk_failed')) {
-        const short = String(err).slice(0, 80);
+        const friendly = friendlySubmitError(String(err), t);
+        const short = friendly || String(err).slice(0, 80);
         submitErrorText = this.add.text(cx, cy + 32, short, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '12px',

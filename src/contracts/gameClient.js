@@ -41,7 +41,8 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
   } = await import('@stellar/stellar-sdk');
   const server = await getServer();
   const source = await server.getAccount(publicKey);
-  const account = new Account(publicKey, source.sequence);
+  // Stellar SDK Account requires sequence as string (Horizon/RPC may return number)
+  const account = new Account(publicKey, String(source.sequence ?? '0'));
   const contract = new Contract(contractId);
   const op = contract.call(method, ...args);
   const built = new TransactionBuilder(account, {
