@@ -3,7 +3,7 @@
 **A vampire-survivors-style idle game where coding powers your astronaut. Code, conquer, and grow!**  
 **Un juego idle al estilo Vampire Survivors donde tu actividad de codificación potencia a tu astronauta. Programa, conquista y crece.**
 
-▶️ [Play Now / Jugar Ahora](https://klorenn.github.io/Cosmic-Coder-/) | ⬇️ [Download Desktop App / Descargar App](#-desktop-app--app-de-escritorio) | 📖 [Setup Guide / Guía de Configuración](./SETUP.md) | 📋 [Changelog / Historial de Cambios](./CHANGELOG.md)
+▶️ [Play Now / Jugar Ahora](https://klorenn.github.io/Cosmic-Coder-/) | 📖 [Setup Guide / Guía de Configuración](./SETUP.md) | 📋 [Changelog / Historial de Cambios](./CHANGELOG.md)
 
 ![Phaser 3](https://img.shields.io/badge/Phaser-3.x-blue) ![Vite](https://img.shields.io/badge/Vite-7.x-purple) ![Electron](https://img.shields.io/badge/Electron-33.x-9feaf9) ![Node](https://img.shields.io/badge/Node-18+-green) ![Tests](https://img.shields.io/badge/Tests-240_passing-brightgreen) ![Deploy](https://img.shields.io/github/actions/workflow/status/Klorenn/Cosmic-Coder-/deploy.yml?label=Deploy) ![Play Online](https://img.shields.io/badge/Play-Online-brightgreen)
 
@@ -92,22 +92,20 @@ Behavior notes:
 
 ---
 
-## 🖥️ Desktop App / App de escritorio
+## 📜 Contracts & Stellar Expert (Testnet) / Contratos y Stellar Expert
 
-Run Cosmic Coder as a native desktop app with system tray integration!  
-**Ejecuta Cosmic Coder como app de escritorio con integración en la bandeja del sistema.**
+Contratos Soroban desplegados en **Stellar Testnet**. Enlaces en Stellar Expert para inspeccionar invocaciones y estado.
 
-### Download / Descargar
-Check the [Releases](https://github.com/Klorenn/Cosmic-Coder-/releases) page for pre-built binaries / Revisa la página de [Releases](https://github.com/Klorenn/Cosmic-Coder-/releases) para binarios:
-- **macOS**: `.dmg` (Universal)
-- **Windows**: `.exe`
-- **Linux**: `.AppImage` o `.deb`
+**Soroban contracts deployed on Stellar Testnet. Stellar Expert links to inspect invocations and state.**
 
-### Build from Source / Compilar desde código
-```bash
-npm run electron:dev    # Modo desarrollo (hot reload)
-npm run electron:build # Compilar instalable
-```
+| Contract | Description / Descripción | Stellar Expert |
+|----------|----------------------------|----------------|
+| **Game Hub** | Game Studio hub: `start_game`, `end_game` | [Stellar Expert – Game Hub](https://stellar.expert/explorer/testnet/contract/CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG) |
+| **Policy (shadow_ascension)** | Game policy: `start_match`, `submit_result`, `submit_zk`, leaderboard | [Stellar Expert – Policy](https://stellar.expert/explorer/testnet/contract/CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO) |
+| **Verifier (groth16_verifier)** | BN254 Groth16 proof verification | [Stellar Expert – Verifier](https://stellar.expert/explorer/testnet/contract/CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA) |
+
+- **Game (online):** [Play Cosmic Coder](https://klorenn.github.io/Cosmic-Coder-/)
+- **Deploy / re-deploy:** [docs/DEPLOY_ZK_STEPS.md](docs/DEPLOY_ZK_STEPS.md)
 
 ---
 
