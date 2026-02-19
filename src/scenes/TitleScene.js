@@ -520,8 +520,9 @@ export default class TitleScene extends Phaser.Scene {
               this.showUsernameModal();
             }
           } catch (e) {
-            console.warn('SEP-10 session failed:', e?.message || e);
-            if (this.sayQuote) this.sayQuote(t('auth.session_failed'));
+            const msg = e?.message || String(e);
+            console.warn('SEP-10 login failed:', msg);
+            if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
           }
         }
         this.updateWalletButton();
@@ -1946,6 +1947,32 @@ export default class TitleScene extends Phaser.Scene {
         window.VIBE_CODER.reset();
         SaveManager.clearSave();
         (async () => {
+          // Asegurar sesión SEP-10 (JWT válido) antes de iniciar partida
+          try {
+            const hasToken = typeof authApi.getStoredToken === 'function' && !!authApi.getStoredToken();
+            if (!hasToken) {
+              const addrForAuth = await stellarWallet.getAddress();
+              if (!addrForAuth) {
+                this.sayQuote(t('prompt.link_wallet'));
+                return;
+              }
+              if (this.walletBtn && this.walletBtn.setText) {
+                this.walletBtn.setText(t('auth.sign_prompt'));
+              }
+              await authApi.loginWithSep10(addrForAuth, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase));
+            }
+          } catch (e) {
+            const msg = e?.message || String(e);
+            // eslint-disable-next-line no-console
+            console.warn('SEP-10 login failed on START_GAME:', msg);
+            if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
+            if (this.updateWalletButton) this.updateWalletButton();
+            if (this.updateConnectionBadge) this.updateConnectionBadge();
+            return;
+          }
+          if (this.updateWalletButton) this.updateWalletButton();
+          if (this.updateConnectionBadge) this.updateConnectionBadge();
+
           if (gameClient.isContractConfigured()) {
             try {
               const addr = await stellarWallet.getAddress();

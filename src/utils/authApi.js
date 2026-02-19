@@ -7,15 +7,20 @@
 
 const STORAGE_KEY = 'cosmicCoderJwt';
 
-/** API base URL: build-time env, then runtime config.json (__VITE_CONFIG__), then window override. */
+/** Default backend when no env is set (e.g. build without .env). */
+const DEFAULT_API_BASE = 'https://cosmic-coder.onrender.com';
+
+/** API base URL: build-time env, then runtime config, then window override, then default. */
 function getApiBase() {
   const fromEnv = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL;
-  if (fromEnv) return import.meta.env.VITE_API_URL.replace(/\/$/, '');
+  if (fromEnv) return String(import.meta.env.VITE_API_URL).replace(/\/$/, '');
   if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_API_URL) {
     return String(window.__VITE_CONFIG__.VITE_API_URL).replace(/\/$/, '');
   }
-  if (typeof window !== 'undefined' && window.VIBE_CODER_API_URL) return window.VIBE_CODER_API_URL.replace(/\/$/, '');
-  return '';
+  if (typeof window !== 'undefined' && window.VIBE_CODER_API_URL) {
+    return String(window.VIBE_CODER_API_URL).replace(/\/$/, '');
+  }
+  return DEFAULT_API_BASE;
 }
 
 let inMemoryToken = null;
@@ -55,12 +60,18 @@ export function clearStoredToken() {
  * @returns {Promise<{ transaction: string, network_passphrase: string }>}
  */
 export async function getChallenge(account) {
-  const base = getApiBase() || (typeof location !== 'undefined' ? location.origin.replace(/\/$/, '') : '');
-  const url = `${base}/auth/challenge?account=${encodeURIComponent(account)}`;
-  const res = await fetch(url, { method: 'GET', credentials: 'omit' });
+  const base = getApiBase();
+  const standardUrl = `${base}/auth?account=${encodeURIComponent(account)}`;
+  let res = await fetch(standardUrl, { method: 'GET', credentials: 'omit' });
+  // Backward-compat fallback for older backends
+  if (res.status === 404 || res.status === 405) {
+    const legacyUrl = `${base}/auth/challenge?account=${encodeURIComponent(account)}`;
+    res = await fetch(legacyUrl, { method: 'GET', credentials: 'omit' });
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Challenge failed: ${res.status}`);
+    const msg = body.error || body.message || `Challenge failed: ${res.status}`;
+    throw new Error(msg);
   }
   return res.json();
 }
@@ -71,19 +82,32 @@ export async function getChallenge(account) {
  * @returns {Promise<{ token: string, public_key: string }>}
  */
 export async function postToken(signedTransactionXdr) {
-  const base = getApiBase() || (typeof location !== 'undefined' ? location.origin.replace(/\/$/, '') : '');
-  const url = `${base}/auth/token`;
-  const res = await fetch(url, {
+  const base = getApiBase();
+  const standardUrl = `${base}/auth`;
+  let res = await fetch(standardUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ transaction: signedTransactionXdr }),
     credentials: 'omit'
   });
+  // Backward-compat fallback for older backends
+  if (res.status === 404 || res.status === 405) {
+    const legacyUrl = `${base}/auth/token`;
+    res = await fetch(legacyUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ transaction: signedTransactionXdr }),
+      credentials: 'omit'
+    });
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Token exchange failed: ${res.status}`);
+    const msg = body.error || body.message || `Token exchange failed: ${res.status}`;
+    throw new Error(msg);
   }
-  return res.json();
+  const data = await res.json();
+  if (!data || !data.token) throw new Error('Server did not return a token');
+  return data;
 }
 
 /**

@@ -1,6 +1,10 @@
 /**
  * Auth routes: SEP-10 challenge + token, and protected user/me endpoints.
- * CORS is applied by the main app; no need to set headers here.
+ * Compliant with Stellar SEP-10: https://developers.stellar.org/docs/platforms/anchor-platform/sep-guide/sep10
+ * and SEP-0010 spec: https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md
+ *
+ * WEB_AUTH_ENDPOINT can be https://your-server/auth (GET = challenge, POST = token).
+ * We also expose GET /auth/challenge and POST /auth/token for backward compatibility.
  */
 
 import { Router } from 'express';
@@ -12,9 +16,7 @@ import { isSep10Configured } from '../config/sep10.js';
 
 const router = Router();
 
-// --- SEP-10 Challenge (GET) ---
-// Compliant with SEP-10: GET WEB_AUTH_ENDPOINT?account=G...
-router.get('/challenge', (req, res, next) => {
+function handleGetChallenge(req, res) {
   if (!isSep10Configured()) {
     return res.status(503).json({ error: 'SEP-10 auth is not configured' });
   }
@@ -28,12 +30,9 @@ router.get('/challenge', (req, res, next) => {
   } catch (err) {
     return res.status(400).json({ error: err.message || 'Invalid request' });
   }
-});
+}
 
-// --- SEP-10 Token (POST) ---
-// Compliant with SEP-10: POST WEB_AUTH_ENDPOINT with body { transaction: "<signed_xdr_base64>" }
-// Content-Type must be application/json.
-router.post('/token', async (req, res, next) => {
+async function handlePostToken(req, res) {
   if (!isSep10Configured()) {
     return res.status(503).json({ error: 'SEP-10 auth is not configured' });
   }
@@ -52,6 +51,27 @@ router.post('/token', async (req, res, next) => {
     const message = err.message || 'Invalid transaction';
     console.warn('[auth/token]', message);
     return res.status(400).json({ error: message });
+  }
+}
+
+// --- SEP-10 standard: GET /auth and POST /auth (same path as per Stellar doc) ---
+// GET /auth?account=G... → challenge; POST /auth with { transaction } → JWT
+router.get('/', (req, res, next) => handleGetChallenge(req, res));
+router.post('/', async (req, res, next) => {
+  try {
+    await handlePostToken(req, res);
+  } catch (e) {
+    next(e);
+  }
+});
+
+// --- Same handlers under /challenge and /token (backward compatibility) ---
+router.get('/challenge', (req, res, next) => handleGetChallenge(req, res));
+router.post('/token', async (req, res, next) => {
+  try {
+    await handlePostToken(req, res);
+  } catch (e) {
+    next(e);
   }
 });
 

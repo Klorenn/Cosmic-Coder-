@@ -1,8 +1,10 @@
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
+import { Keypair } from '@stellar/stellar-base';
 import { generateProof } from './zkProve.js';
 import authRoutes from './routes/auth.js';
+import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_WEB_AUTH_DOMAIN } from './config/sep10.js';
 
 const app = express();
 
@@ -24,6 +26,29 @@ app.get('/', (req, res) => {
 
 // --- Auth (SEP-10): GET /auth/challenge, POST /auth/token, GET/PATCH /auth/me ---
 app.use('/auth', authRoutes);
+
+// --- stellar.toml for SEP-10 discovery ---
+app.get('/.well-known/stellar.toml', (req, res) => {
+  if (!isSep10Configured()) {
+    return res.status(503).type('text/plain; charset=utf-8').send('SEP-10 auth is not configured');
+  }
+  let signingKey = '';
+  try {
+    signingKey = Keypair.fromSecret(getServerSecretKey()).publicKey();
+  } catch (e) {
+    return res.status(500).type('text/plain; charset=utf-8').send('Invalid SEP-10 signing key configuration');
+  }
+  const endpointScheme = SEP10_WEB_AUTH_DOMAIN.includes('localhost') ? 'http' : 'https';
+  const webAuthEndpoint = `${endpointScheme}://${SEP10_WEB_AUTH_DOMAIN}/auth`;
+  const toml = [
+    'VERSION = "2.0.0"',
+    `NETWORK_PASSPHRASE = "${SEP10_NETWORK_PASSPHRASE}"`,
+    `SIGNING_KEY = "${signingKey}"`,
+    `WEB_AUTH_ENDPOINT = "${webAuthEndpoint}"`,
+    ''
+  ].join('\n');
+  return res.status(200).type('text/plain; charset=utf-8').send(toml);
+});
 
 const server = createServer(app);
 const wss = new WebSocketServer({ server });

@@ -1,0 +1,8 @@
+VERSION = "2.0.0"
+# Public key derived from SEP10_SERVER_SECRET_KEY (S...) configured in backend env.
+# Replace this value with your real signing public key (G...).
+SIGNING_KEY = "REPLACE_WITH_SEP10_SIGNING_PUBLIC_KEY"
+
+# Standard SEP-10 endpoint (must support GET and POST on same path).
+WEB_AUTH_ENDPOINT = "https://cosmic-coder.onrender.com/auth"
+

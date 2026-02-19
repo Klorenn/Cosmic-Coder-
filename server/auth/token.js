@@ -14,7 +14,7 @@ import {
   JWT_SECRET,
   JWT_EXPIRY_SEC
 } from '../config/sep10.js';
-import { upsertUser } from '../db/users.js';
+import { upsertUser, setUserToken } from '../db/users.js';
 
 const { Keypair } = StellarSdk;
 const { readChallengeTx, verifyChallengeTxSigners } = StellarSdk.WebAuth || {};
@@ -73,6 +73,7 @@ export async function verifyAndIssueToken(signedChallengeXdr) {
   const token = jwt.sign(payload, JWT_SECRET, { algorithm: 'HS256' });
 
   await upsertUser(clientAccountID);
+  await setUserToken(clientAccountID, token, new Date((now + JWT_EXPIRY_SEC) * 1000));
 
   return { token, public_key: clientAccountID };
 }

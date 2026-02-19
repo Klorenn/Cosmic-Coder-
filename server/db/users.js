@@ -123,3 +123,58 @@ export async function updateUsername(publicKey, username) {
   u.updated_at = new Date().toISOString();
   return { ...u };
 }
+
+/**
+ * Store the JWT issued after the user signs the SEP-10 challenge (proof they control the wallet).
+ * Used for audit / session record; the client also keeps the JWT in localStorage.
+ */
+export async function setUserToken(publicKey, token, expiresAt) {
+  const key = String(publicKey).trim().slice(0, 56);
+  if (!key || !token) return;
+
+  const expiresAtIso = expiresAt instanceof Date ? expiresAt.toISOString() : (expiresAt ? new Date(expiresAt).toISOString() : null);
+  const updatedAt = new Date().toISOString();
+
+  const supabase = getSupabase();
+  if (supabase) {
+    // First try UPDATE by public_key
+    const { data: updated, error: updateError } = await supabase
+      .from(USERS_TABLE)
+      .update({ current_jwt: token, jwt_expires_at: expiresAtIso, updated_at: updatedAt })
+      .eq('public_key', key)
+      .select('id');
+    if (updateError) {
+      console.error('[db] setUserToken update failed:', updateError.message);
+      return;
+    }
+    // If no row matched (RLS or row missing), upsert so the JWT is stored
+    if (!updated || updated.length === 0) {
+      const { error: upsertError } = await supabase
+        .from(USERS_TABLE)
+        .upsert(
+          { public_key: key, current_jwt: token, jwt_expires_at: expiresAtIso, updated_at: updatedAt },
+          { onConflict: 'public_key' }
+        );
+      if (upsertError) {
+        console.error('[db] setUserToken upsert fallback failed:', upsertError.message);
+      }
+    }
+    return;
+  }
+
+  const p = getPool();
+  if (p) {
+    await query(
+      'UPDATE users SET current_jwt = $1, jwt_expires_at = $2, updated_at = now() WHERE public_key = $3',
+      [token, expiresAtIso, key]
+    );
+    return;
+  }
+
+  const u = memoryStore.get(key);
+  if (u) {
+    u.current_jwt = token;
+    u.jwt_expires_at = expiresAtIso;
+    u.updated_at = new Date().toISOString();
+  }
+}

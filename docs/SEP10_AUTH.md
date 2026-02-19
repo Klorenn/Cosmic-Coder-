@@ -1,23 +1,40 @@
 # SEP-10 Stellar Web Authentication (Cosmic Coder)
 
-This project implements **SEP-10** (Stellar Web Authentication) for server-verified wallet login. The flow follows the [official SEP-10 specification](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md) exactly: no simulated auth, no custom crypto.
+This project implements **SEP-10** (Stellar Web Authentication) for server-verified wallet login, aligned with:
+
+- [Stellar SEP-10 guide](https://developers.stellar.org/docs/platforms/anchor-platform/sep-guide/sep10)
+- [SEP-0010 specification](https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md)
 
 ## Flow (compliant with SEP-10)
 
-1. **Frontend** requests a challenge: `GET /auth/challenge?account=G...`
-2. **Backend** builds a SEP-10 challenge transaction (server account, sequence 0, timebounds, Manage Data ops for `home_domain auth` and `web_auth_domain`), signs it with the server key, returns `{ transaction, network_passphrase }`.
-3. **Frontend** has the user sign the challenge with Freighter (`signTransaction(xdr, networkPassphrase)`), then sends the signed XDR: `POST /auth/token` with `{ transaction: signedXdr }`.
-4. **Backend** verifies the signed challenge (via `@stellar/stellar-sdk` WebAuth: `readChallengeTx` + `verifyChallengeTxSigners`), then issues a **JWT** (24h expiry) and creates/updates the user row (`public_key`, optional `username`).
-5. **Frontend** stores the JWT (memory + localStorage for reloads) and sends `Authorization: Bearer <token>` on protected calls. Auth is **always server-verified** on each request.
+1. **Client** requests a challenge: `GET /auth?account=G...` (or `GET /auth/challenge?account=G...`).
+2. **Server** builds a SEP-10 challenge transaction (server account, sequence 0, timebounds, Manage Data ops for `home_domain auth` and `web_auth_domain`), signs it with the server key, returns `{ transaction, network_passphrase }`.
+3. **Client** has the user sign the challenge with Freighter, then sends the signed XDR: `POST /auth` with body `{ "transaction": "<signed_xdr_base64>" }` (or `POST /auth/token`).
+4. **Server** verifies the signed challenge (Stellar SDK `readChallengeTx` + `verifyChallengeTxSigners`), issues a **JWT**, and creates/updates the user row.
+5. **Client** stores the JWT and sends `Authorization: Bearer <token>` on protected calls.
+
+## stellar.toml (optional, for wallet discovery)
+
+To advertise SEP-10 so wallets can discover your endpoint, serve a `stellar.toml` with:
+
+```toml
+SIGNING_KEY = "<public key from SEP10_SERVER_SECRET_KEY>"
+WEB_AUTH_ENDPOINT = "https://cosmic-coder.onrender.com/auth"
+```
+
+`WEB_AUTH_ENDPOINT` must support:
+
+- **GET** `<WEB_AUTH_ENDPOINT>?account=G...` → challenge (returns `{ transaction, network_passphrase }`).
+- **POST** `<WEB_AUTH_ENDPOINT>` with `{ "transaction": "<signed_xdr>" }` → returns `{ "token": "<jwt>" }`.
 
 ## Backend layout
 
-- `server/config/sep10.js` – SEP-10 and JWT config from env
-- `server/auth/challenge.js` – Build challenge (Stellar SDK `WebAuth.buildChallengeTx`)
-- `server/auth/token.js` – Verify signed challenge (Stellar SDK `readChallengeTx`, `verifyChallengeTxSigners`) and issue JWT
-- `server/middleware/jwtAuth.js` – JWT verification for protected routes
-- `server/routes/auth.js` – `GET /auth/challenge`, `POST /auth/token`, `GET /auth/me`, `PATCH /auth/me/username`
-- `server/db/schema.sql` – `users` table (id, public_key, username, created_at, updated_at)
+- `server/config/sep10.js` – SEP-10 and JWT config from env; normalizes `SEP10_WEB_AUTH_DOMAIN` to hostname.
+- `server/auth/challenge.js` – Build challenge transaction (Manage Data ops, server-signed).
+- `server/auth/token.js` – Verify signed challenge (Stellar SDK `readChallengeTx`, `verifyChallengeTxSigners`) and issue JWT.
+- `server/middleware/jwtAuth.js` – JWT verification for protected routes.
+- `server/routes/auth.js` – **GET /auth** and **POST /auth** (standard SEP-10), plus **GET /auth/challenge**, **POST /auth/token** (backward compatibility), **GET /auth/me**, **PATCH /auth/me/username**.
+- `server/db/schema.sql` – `users` table (`public_key`, `username`, `current_jwt`, `jwt_expires_at`, timestamps).
 - `server/db/pool.js` + `server/db/users.js` – PostgreSQL (or in-memory fallback when `DATABASE_URL` is unset)
 
 ## Environment (backend)
@@ -34,6 +51,17 @@ Set these on the server (e.g. Render):
 | `SEP10_CHALLENGE_TIMEOUT` | Challenge validity in seconds (default 300) |
 | `JWT_EXPIRY_SEC` | JWT lifetime (default 86400 = 24h) |
 | `DATABASE_URL` | PostgreSQL connection string (optional: in-memory store used if unset) |
+
+### Variable aliases (compatible with Stellar Anchor docs naming)
+
+The backend also accepts these aliases so deployment docs map cleanly:
+
+- `SECRET_SEP10_SIGNING_SEED` → same as `SEP10_SERVER_SECRET_KEY`
+- `SECRET_SEP10_JWT_SECRET` → same as `JWT_SECRET`
+- `SEP10_HOME_DOMAINS` (comma-separated) → first domain is used as `SEP10_HOME_DOMAIN` fallback
+- `SEP10_AUTH_TIMEOUT` → same as `SEP10_CHALLENGE_TIMEOUT`
+- `SEP10_JWT_TIMEOUT` → same as `JWT_EXPIRY_SEC`
+- `SEP10_ENABLED` (`true`/`false`) → can disable SEP-10 endpoints without removing config
 
 Run the schema once: `psql $DATABASE_URL -f server/db/schema.sql`
 
