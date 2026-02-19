@@ -512,14 +512,16 @@ export default class TitleScene extends Phaser.Scene {
           await loadProgressForWallet(addr);
           this.updateContinueMenuOption();
           // SEP-10: authenticate with backend (challenge → sign with Freighter → token). Session is server-verified.
+          this.walletBtn.setText(t('auth.sign_prompt'));
           try {
             await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase));
             const me = await authApi.getMe();
             if (me && (me.username == null || me.username === '')) {
               this.showUsernameModal();
             }
-          } catch (_) {
-            // Backend may not have SEP-10 configured; wallet connect and progress still work
+          } catch (e) {
+            console.warn('SEP-10 session failed:', e?.message || e);
+            if (this.sayQuote) this.sayQuote(t('auth.session_failed'));
           }
         }
         this.updateWalletButton();
@@ -1905,6 +1907,7 @@ export default class TitleScene extends Phaser.Scene {
               await gameClient.startMatch(addr, (xdr) => stellarWallet.signTransaction(xdr));
             } catch (e) {
               console.warn('On-chain start_match failed:', e);
+              this.sayQuote(t('game.start_match_failed'));
             }
           }
           this.cameras.main.fade(500, 0, 0, 0);
@@ -2358,7 +2361,6 @@ export default class TitleScene extends Phaser.Scene {
 
     const settingsData = [
       { key: 'playerName', labelKey: 'settings.NAME', type: 'input', getValue: () => settings.playerName || t('settings.NOT_SET') },
-      { key: 'username', labelKey: 'settings.CHANGE_USERNAME', type: 'action', getValue: () => (authApi.getStoredToken() ? 'Tap to change' : 'Connect wallet first'), action: () => { if (authApi.getStoredToken()) { close(); this.showUsernameModal(); } } },
       { key: 'language', labelKey: 'settings.LANGUAGE', type: 'select', options: ['en', 'es'], optionLabels: [t('settings.lang_en'), t('settings.lang_es')], getValue: () => settings.language || 'en', setValue: (v) => { setLanguage(v); close(); this.scene.start('TitleScene'); } },
       { key: 'music', labelKey: 'settings.MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); } },
       { key: 'sfx', labelKey: 'settings.SOUND_FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },

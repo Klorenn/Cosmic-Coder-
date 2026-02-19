@@ -1,4 +1,5 @@
 {
+  "VITE_API_URL": "https://cosmic-coder.onrender.com",
   "VITE_SHADOW_ASCENSION_CONTRACT_ID": "CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO",
   "VITE_ZK_PROVER_URL": "https://cosmic-coder-zk-prover.onrender.com",
   "VITE_PROGRESS_API_URL": "https://cosmic-coder-zk-prover.onrender.com"

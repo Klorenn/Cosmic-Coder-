@@ -10,7 +10,15 @@ let connected = false;
 let connecting = false;
 let offlineLoggedOnce = false;
 
+function isLocalhost() {
+  if (typeof window === 'undefined' || !window.location?.hostname) return false;
+  return /^localhost$|^127\.0\.0\.1$/i.test(window.location.hostname);
+}
+
 export function connectToXPServer() {
+  // Never connect when not on localhost (e.g. GitHub Pages) — avoids "WebSocket connection failed"
+  if (!isLocalhost()) return;
+
   // Guard against concurrent connection attempts
   if (connecting) return;
   if (socket && socket.readyState === WebSocket.OPEN) {

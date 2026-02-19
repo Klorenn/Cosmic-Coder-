@@ -445,8 +445,11 @@ loadRuntimeConfig().then(() => {
   }
 });
 
-// Connect to XP server for real-time coding rewards
-connectToXPServer();
+// Connect to XP server only on localhost (dev/Electron). On GitHub Pages etc. skip to avoid "WebSocket connection failed"
+const isLocalhost = typeof window !== 'undefined' && /^localhost$|^127\.0\.0\.1$/.test(window.location.hostname);
+if (isLocalhost) {
+  connectToXPServer();
+}
 
 // Show connection status
 window.addEventListener('xpserver-connected', () => {

@@ -120,32 +120,83 @@ export async function requestZkProof(baseUrl, payload) {
   return res.json();
 }
 
+/** Normalize any bytes-like value to Uint8Array (hex string, array of numbers, or object with numeric keys from JSON). */
+function ensureBytes(val) {
+  if (val instanceof Uint8Array) return val;
+  if (Array.isArray(val)) return new Uint8Array(val);
+  if (typeof val === 'object' && val !== null && !(val instanceof Uint8Array)) {
+    const arr = Object.keys(val)
+      .filter((k) => /^\d+$/.test(k))
+      .sort((a, b) => Number(a) - Number(b))
+      .map((k) => val[k] & 0xff);
+    return new Uint8Array(arr);
+  }
+  const h = String(val).replace(/^0x/, '').slice(0, 128);
+  const arr = new Uint8Array(h.length / 2);
+  for (let i = 0; i < h.length; i += 2) arr[i / 2] = parseInt(h.slice(i, i + 2), 16);
+  return arr;
+}
+
 /**
- * Convert contract_proof.json payload (hex) to zk object for submitZk (byte arrays).
- * Works in browser (Uint8Array) and Node (Buffer).
+ * Convert contract_proof.json payload (hex or raw) to zk object for submitZk (always Uint8Array).
+ * Works in browser (Uint8Array) and Node (Buffer). Tolerates API returning arrays/objects.
  */
 function contractProofToZk(payload) {
-  const toBytes = (hex) => {
-    const h = String(hex).replace(/^0x/, '').slice(0, 64);
-    const arr = new Uint8Array(h.length / 2);
-    for (let i = 0; i < h.length; i += 2) arr[i / 2] = parseInt(h.slice(i, i + 2), 16);
-    return arr;
-  };
   return {
     proof: {
-      a: toBytes(payload.proof.a),
-      b: toBytes(payload.proof.b),
-      c: toBytes(payload.proof.c)
+      a: ensureBytes(payload.proof.a),
+      b: ensureBytes(payload.proof.b),
+      c: ensureBytes(payload.proof.c)
     },
     vk: {
-      alpha: toBytes(payload.vk.alpha),
-      beta: toBytes(payload.vk.beta),
-      gamma: toBytes(payload.vk.gamma),
-      delta: toBytes(payload.vk.delta),
-      ic: payload.vk.ic.map(toBytes)
+      alpha: ensureBytes(payload.vk.alpha),
+      beta: ensureBytes(payload.vk.beta),
+      gamma: ensureBytes(payload.vk.gamma),
+      delta: ensureBytes(payload.vk.delta),
+      ic: payload.vk.ic.map(ensureBytes)
     },
-    pubSignals: payload.pub_signals.map(toBytes)
+    pubSignals: payload.pub_signals.map(ensureBytes)
   };
+}
+
+/**
+ * Build xdr.ScVal for Groth16 proof (map: a, b, c -> bytes). Contract expects ScVal, not plain objects.
+ */
+function proofToScVal(proof, xdr) {
+  const entry = (key, bytes) =>
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol(key),
+      val: xdr.ScVal.scvBytes(ensureBytes(bytes))
+    });
+  return xdr.ScVal.scvMap([
+    entry('a', proof.a),
+    entry('b', proof.b),
+    entry('c', proof.c)
+  ]);
+}
+
+/**
+ * Build xdr.ScVal for verification key (map: alpha, beta, delta, gamma, ic). Keys sorted for Soroban. ic is vec of bytes.
+ */
+function vkToScVal(vk, xdr) {
+  const entry = (key, val) =>
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol(key),
+      val
+    });
+  const icVec = xdr.ScVal.scvVec(vk.ic.map((b) => xdr.ScVal.scvBytes(ensureBytes(b))));
+  return xdr.ScVal.scvMap([
+    entry('alpha', xdr.ScVal.scvBytes(ensureBytes(vk.alpha))),
+    entry('beta', xdr.ScVal.scvBytes(ensureBytes(vk.beta))),
+    entry('delta', xdr.ScVal.scvBytes(ensureBytes(vk.delta))),
+    entry('gamma', xdr.ScVal.scvBytes(ensureBytes(vk.gamma))),
+    entry('ic', icVec)
+  ]);
+}
+
+/** Build xdr.ScVal for public signals (vec of bytes). */
+function pubSignalsToScVal(pubSignals, xdr) {
+  return xdr.ScVal.scvVec(pubSignals.map((b) => xdr.ScVal.scvBytes(ensureBytes(b))));
 }
 
 /**
@@ -182,11 +233,12 @@ export async function submitZk(
   const runHashBuf = new Uint8Array(32);
   for (let i = 0; i < 32; i++) runHashBuf[i] = parseInt(runHashHexClean.slice(i * 2, i * 2 + 2), 16);
   const runHashBytes = xdr.ScVal.scvBytes(runHashBuf);
+  // Contract expects xdr.ScVal; passing raw proof/vk/pubSignals causes "union name undefined, not ScVal"
   const args = [
     await playerScVal(signerPublicKey),
-    zk.proof,
-    zk.vk,
-    zk.pubSignals,
+    proofToScVal(zk.proof, xdr),
+    vkToScVal(zk.vk, xdr),
+    pubSignalsToScVal(zk.pubSignals, xdr),
     xdr.ScVal.scvU64(BigInt(nonce)),
     runHashBytes,
     xdr.ScVal.scvU32(seasonId),
@@ -317,7 +369,17 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
         const k = m[j].key().sym().toString();
         const v = m[j].val();
         if (k === 'player') player = v.address().toScAddress().accountId().ed25519().toString();
-        if (k === 'score') score = v.u32();
+        if (k === 'score') {
+          try {
+            score = typeof v.i128 === 'function' ? Number(v.i128().toString()) : v.u32();
+          } catch (_) {
+            try {
+              score = v.u32();
+            } catch (__) {
+              score = 0;
+            }
+          }
+        }
       }
       out.push({ player, wave: 0, score });
     }

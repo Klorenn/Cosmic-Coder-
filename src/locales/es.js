@@ -68,7 +68,9 @@ export default {
   auth: {
     choose_username: 'Elige tu nombre de usuario',
     username_placeholder: 'Nombre de usuario',
-    save_username: 'Guardar'
+    save_username: 'Guardar',
+    sign_prompt: 'Firma en Freighter...',
+    session_failed: 'Wallet conectada, pero no se pudo verificar la sesión con el servidor.'
   },
   footer: {
     high_wave: 'OLA MÁX',
@@ -211,11 +213,13 @@ export default {
     submit_zk_fallback: '✓ CASUAL — Prover ZK no disponible, enviado al ranking',
     submit_casual: '✓ CASUAL — Enviado al ranking',
     submit_failed: '✗ No se pudo enviar a la cadena',
+    submit_no_wallet: '✗ Conecta la wallet para enviar al ranking',
     submit_timeout: '⏱ Tiempo de envío agotado',
     submit_error_rejected: 'Wallet: firma rechazada o cancelada',
     submit_error_contract: 'Error de contrato o red (revisa Testnet)',
     submit_error_network: 'Error de red — vuelve a intentar',
     leaderboard_hint: 'Para salir en el ranking on-chain: conecta wallet y pon VITE_SHADOW_ASCENSION_CONTRACT_ID en .env',
+    start_match_failed: 'No se pudo iniciar partida on-chain. Puedes jugar igual; firma en Freighter al empezar para enviar puntuaciones.',
     xp_lost: 'XP PERDIDOS',
     immortal_respawn: '♾️ REVIVIR INMORTAL',
     defeated: '¡DERROTADO!',

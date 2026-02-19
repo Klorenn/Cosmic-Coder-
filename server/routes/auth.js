@@ -31,21 +31,27 @@ router.get('/challenge', (req, res, next) => {
 });
 
 // --- SEP-10 Token (POST) ---
-// Compliant with SEP-10: POST WEB_AUTH_ENDPOINT with transaction=<signed_xdr>
+// Compliant with SEP-10: POST WEB_AUTH_ENDPOINT with body { transaction: "<signed_xdr_base64>" }
+// Content-Type must be application/json.
 router.post('/token', async (req, res, next) => {
   if (!isSep10Configured()) {
     return res.status(503).json({ error: 'SEP-10 auth is not configured' });
   }
-  const transaction = (req.body && req.body.transaction) || req.body?.transaction;
-  const signedXdr = typeof transaction === 'string' ? transaction.trim() : null;
-  if (!signedXdr) {
-    return res.status(400).json({ error: 'transaction (signed challenge XDR) is required' });
+  const raw = req.body?.transaction ?? req.body?.transaction_xdr ?? (typeof req.body === 'string' ? req.body : null);
+  const signedXdr = typeof raw === 'string' ? raw.trim().replace(/\s/g, '') : null;
+  if (!signedXdr || signedXdr.length < 50) {
+    return res.status(400).json({
+      error: 'transaction (signed challenge XDR) is required',
+      hint: 'Send JSON body: { "transaction": "<base64_signed_xdr>" } with Content-Type: application/json'
+    });
   }
   try {
     const result = await verifyAndIssueToken(signedXdr);
     return res.status(200).json(result);
   } catch (err) {
-    return res.status(400).json({ error: err.message || 'Invalid transaction' });
+    const message = err.message || 'Invalid transaction';
+    console.warn('[auth/token]', message);
+    return res.status(400).json({ error: message });
   }
 });
 

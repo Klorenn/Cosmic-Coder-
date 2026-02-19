@@ -52,3 +52,26 @@ Run the schema once: `psql $DATABASE_URL -f server/db/schema.sql`
 ## CORS
 
 Auth endpoints send `Access-Control-Allow-Origin: *` and allow `Authorization` and `Content-Type` headers so the GitHub Pages frontend can call the backend on another origin.
+
+## Troubleshooting: POST /auth/token 400 (Bad Request)
+
+The backend returns 400 with a JSON body `{ error: "<message>" }`. Check that message in the Network tab or in the script’s console (the demo logs the full response).
+
+**Common causes:**
+
+1. **`transaction (signed challenge XDR) is required`**  
+   - Body must be JSON: `{ "transaction": "<base64_signed_xdr>" }` with header `Content-Type: application/json`.  
+   - If using curl: `curl -X POST ... -H "Content-Type: application/json" -d '{"transaction":"'$SIGNED_XDR'"}'`.
+
+2. **`Invalid challenge: ...`**  
+   - Challenge XDR is malformed, or it was built with different `SEP10_HOME_DOMAIN` / `SEP10_WEB_AUTH_DOMAIN` / network than the server’s current config.  
+   - Ensure the **same** backend that served `GET /auth/challenge` is the one receiving `POST /auth/token` (same Render service, same env).
+
+3. **`Signature verification failed: ...`**  
+   - The transaction was not signed by the client key, or was modified.  
+   - Ensure you’re sending the **signed** XDR returned by Freighter (not the original challenge XDR).  
+   - Use the same Stellar account (public key) for both challenge and sign.
+
+4. **SEP10_WEB_AUTH_DOMAIN mismatch**  
+   - On Render, set `SEP10_WEB_AUTH_DOMAIN=https://cosmic-coder.onrender.com` (your service’s public URL, no trailing slash).  
+   - The challenge is built with this value; verification will fail if it doesn’t match the domain that serves the auth endpoints.

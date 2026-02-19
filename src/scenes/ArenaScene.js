@@ -4028,8 +4028,8 @@ export default class ArenaScene extends Phaser.Scene {
     const showSubmitStatus = (status, errorMessage) => {
       const s = typeof status === 'object' ? status.status : status;
       const err = typeof status === 'object' ? status.error : errorMessage;
-      const msg = s === 'zk' ? t('game.submit_zk_ranked') : s === 'zk_failed' ? t('game.submit_zk_fallback') : s === 'casual' ? t('game.submit_casual') : s === 'timeout' ? t('game.submit_timeout') : t('game.submit_failed');
-      const color = (s === 'failed' || s === 'timeout') ? '#ff6666' : s === 'zk' ? '#ffd700' : '#88ff88';
+      const msg = s === 'zk' ? t('game.submit_zk_ranked') : s === 'zk_failed' ? t('game.submit_zk_fallback') : s === 'casual' ? t('game.submit_casual') : s === 'timeout' ? t('game.submit_timeout') : s === 'no_wallet' ? t('game.submit_no_wallet') : t('game.submit_failed');
+      const color = (s === 'failed' || s === 'timeout' || s === 'no_wallet') ? '#ff6666' : s === 'zk' ? '#ffd700' : '#88ff88';
       submitStatusText = this.add.text(cx, cy + 10, msg, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: '18px',
@@ -4040,7 +4040,7 @@ export default class ArenaScene extends Phaser.Scene {
         align: 'center'
       }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(1001);
       submitStatusText.setWordWrapWidth(480);
-      if (err && (s === 'failed' || s === 'zk_failed')) {
+      if (err && (s === 'failed' || s === 'zk_failed' || s === 'no_wallet')) {
         const friendly = friendlySubmitError(String(err), t);
         const short = friendly || String(err).slice(0, 80);
         submitErrorText = this.add.text(cx, cy + 32, short, {
@@ -4053,7 +4053,8 @@ export default class ArenaScene extends Phaser.Scene {
       }
     };
 
-    const willSubmit = gameClient.isContractConfigured() && validateGameRules(this.waveNumber, state.totalXP).valid;
+    // Only show "Submitting..." when contract is set, wallet is connected, and score is valid
+    const willSubmit = gameClient.isContractConfigured() && stellarWallet.isConnected() && validateGameRules(this.waveNumber, state.totalXP).valid;
     let submittingText = null;
     if (willSubmit) {
       submittingText = this.add.text(cx, cy + 10, t('game.submitting'), {
@@ -4092,7 +4093,11 @@ export default class ArenaScene extends Phaser.Scene {
         return;
       }
       stellarWallet.getAddress().then(async (addr) => {
-        if (!addr) { timeout.destroy(); resolve(null); return; }
+        if (!addr) {
+          timeout.destroy();
+          resolve({ status: 'no_wallet', error: 'Wallet not connected' });
+          return;
+        }
         const sign = (xdr) => stellarWallet.signTransaction(xdr);
         try {
           if (runZkProof) {
@@ -4152,7 +4157,7 @@ export default class ArenaScene extends Phaser.Scene {
       if (submittingText && submittingText.scene) submittingText.destroy();
       window.VIBE_UPGRADES.addCurrency(totalBits);
       const s = typeof status === 'object' ? status?.status : status;
-      if (s === 'zk' || s === 'casual' || s === 'failed' || s === 'zk_failed' || s === 'timeout') {
+      if (s === 'zk' || s === 'casual' || s === 'failed' || s === 'zk_failed' || s === 'timeout' || s === 'no_wallet') {
         showSubmitStatus(status);
         if (s === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
           const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));

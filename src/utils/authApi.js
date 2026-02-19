@@ -6,9 +6,17 @@
  */
 
 const STORAGE_KEY = 'cosmicCoderJwt';
-const API_BASE = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL
-  ? import.meta.env.VITE_API_URL.replace(/\/$/, '')
-  : (typeof window !== 'undefined' && window.VIBE_CODER_API_URL) || '';
+
+/** API base URL: build-time env, then runtime config.json (__VITE_CONFIG__), then window override. */
+function getApiBase() {
+  const fromEnv = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL;
+  if (fromEnv) return import.meta.env.VITE_API_URL.replace(/\/$/, '');
+  if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_API_URL) {
+    return String(window.__VITE_CONFIG__.VITE_API_URL).replace(/\/$/, '');
+  }
+  if (typeof window !== 'undefined' && window.VIBE_CODER_API_URL) return window.VIBE_CODER_API_URL.replace(/\/$/, '');
+  return '';
+}
 
 let inMemoryToken = null;
 
@@ -47,7 +55,7 @@ export function clearStoredToken() {
  * @returns {Promise<{ transaction: string, network_passphrase: string }>}
  */
 export async function getChallenge(account) {
-  const base = API_BASE || `${location.origin.replace(/\/$/, '')}`;
+  const base = getApiBase() || (typeof location !== 'undefined' ? location.origin.replace(/\/$/, '') : '');
   const url = `${base}/auth/challenge?account=${encodeURIComponent(account)}`;
   const res = await fetch(url, { method: 'GET', credentials: 'omit' });
   if (!res.ok) {
@@ -63,7 +71,7 @@ export async function getChallenge(account) {
  * @returns {Promise<{ token: string, public_key: string }>}
  */
 export async function postToken(signedTransactionXdr) {
-  const base = API_BASE || `${location.origin.replace(/\/$/, '')}`;
+  const base = getApiBase() || (typeof location !== 'undefined' ? location.origin.replace(/\/$/, '') : '');
   const url = `${base}/auth/token`;
   const res = await fetch(url, {
     method: 'POST',
@@ -85,7 +93,7 @@ export async function postToken(signedTransactionXdr) {
 export async function getMe() {
   const token = getStoredToken();
   if (!token) throw new Error('Not authenticated');
-  const base = API_BASE || `${location.origin.replace(/\/$/, '')}`;
+  const base = getApiBase() || (typeof location !== 'undefined' ? location.origin.replace(/\/$/, '') : '');
   const res = await fetch(`${base}/auth/me`, {
     method: 'GET',
     headers: { Authorization: `Bearer ${token}` },
@@ -106,7 +114,7 @@ export async function getMe() {
 export async function updateMeUsername(username) {
   const token = getStoredToken();
   if (!token) throw new Error('Not authenticated');
-  const base = API_BASE || `${location.origin.replace(/\/$/, '')}`;
+  const base = getApiBase() || (typeof location !== 'undefined' ? location.origin.replace(/\/$/, '') : '');
   const res = await fetch(`${base}/auth/me/username`, {
     method: 'PATCH',
     headers: {

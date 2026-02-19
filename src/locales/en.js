@@ -69,7 +69,9 @@ export default {
   auth: {
     choose_username: 'Choose your username',
     username_placeholder: 'Username',
-    save_username: 'Save'
+    save_username: 'Save',
+    sign_prompt: 'Sign in Freighter...',
+    session_failed: 'Wallet connected, but session verification with the server failed.'
   },
   footer: {
     high_wave: 'HIGH WAVE',
@@ -213,11 +215,13 @@ export default {
     submit_zk_fallback: '✓ CASUAL — ZK prover unavailable, submitted to leaderboard',
     submit_casual: '✓ CASUAL — Submitted to leaderboard',
     submit_failed: '✗ Could not submit to chain',
+    submit_no_wallet: '✗ Connect wallet to submit to leaderboard',
     submit_timeout: '⏱ Submitting timed out',
     submit_error_rejected: 'Wallet: signature rejected or cancelled',
     submit_error_contract: 'Contract or network error (check Testnet)',
     submit_error_network: 'Network error — try again',
     leaderboard_hint: 'To appear on chain leaderboard: connect wallet and set VITE_SHADOW_ASCENSION_CONTRACT_ID in .env',
+    start_match_failed: 'Could not start on-chain match. You can still play; sign in Freighter when starting to submit scores.',
     xp_lost: 'XP LOST',
     immortal_respawn: '♾️ IMMORTAL RESPAWN',
     defeated: 'DEFEATED!',
