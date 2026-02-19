@@ -1,5 +1,5 @@
 /**
- * Shadow Ascension - Soroban game contract client.
+ * Cosmic Coder - Soroban game contract client.
  * Calls start_match(), submit_result(wave, score), get_leaderboard(limit).
  * Requires Stellar Wallets Kit for signing.
  * @see https://github.com/jamesbachini/Stellar-Game-Studio
@@ -8,13 +8,13 @@
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 
-function getContractId() {
-  return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SHADOW_ASCENSION_CONTRACT_ID) || '';
+export function getContractId() {
+  return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_COSMIC_CODER_CONTRACT_ID) || '';
 }
 
 /** Base URL for ZK prover backend (option B: backend generates proof). */
-function getZkProverUrl() {
+export function getZkProverUrl() {
   return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_ZK_PROVER_URL) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || 'http://localhost:3333';
 }
@@ -75,7 +75,7 @@ async function playerScVal(signerPublicKey) {
  */
 export async function startMatch(signerPublicKey, signTransaction) {
   const contractId = getContractId();
-  if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
+  if (!contractId) throw new Error('VITE_COSMIC_CODER_CONTRACT_ID not set');
   return invoke(contractId, 'start_match', [await playerScVal(signerPublicKey)], signerPublicKey, signTransaction);
 }
 
@@ -84,7 +84,7 @@ export async function startMatch(signerPublicKey, signTransaction) {
  */
 export async function submitResult(signerPublicKey, signTransaction, wave, score) {
   const contractId = getContractId();
-  if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
+  if (!contractId) throw new Error('VITE_COSMIC_CODER_CONTRACT_ID not set');
   const { xdr, ScInt } = await import('@stellar/stellar-sdk');
   const args = [
     await playerScVal(signerPublicKey),
@@ -221,7 +221,7 @@ export async function submitZk(
   wave
 ) {
   const contractId = getContractId();
-  if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
+  if (!contractId) throw new Error('VITE_COSMIC_CODER_CONTRACT_ID not set');
   if (!zk?.proof || !zk?.vk || !zk?.pubSignals) {
     throw new Error('submitZk requires zk.proof, zk.vk, zk.pubSignals (BN254 Groth16)');
   }
@@ -397,4 +397,52 @@ export function isContractConfigured() {
 export function isZkProverConfigured() {
   const url = getZkProverUrl();
   return !!getContractId() && !!(url && url.startsWith('http'));
+}
+
+/**
+ * Check ZK prover health by making a ping request.
+ * @returns {Promise<{ok: boolean, status: string, error?: string}>}
+ */
+export async function checkZkProverHealth() {
+  const url = getZkProverUrl();
+  if (!url || !url.startsWith('http')) {
+    return { ok: false, status: 'not_configured', error: 'ZK prover URL not configured' };
+  }
+  try {
+    const res = await fetch(url.replace(/\/$/, '') + '/health', {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+    if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      return { ok: true, status: data.status || 'healthy', data };
+    }
+    return { ok: false, status: 'error', error: `HTTP ${res.status}: ${res.statusText}` };
+  } catch (e) {
+    return { ok: false, status: 'unreachable', error: e?.message || 'Network error' };
+  }
+}
+
+/**
+ * Get detailed ZK status for UI display.
+ * @returns {Promise<{configured: boolean, proverHealthy: boolean, contractSet: boolean, message: string}>}
+ */
+export async function getZkStatus() {
+  const contractSet = isContractConfigured();
+  const proverConfigured = isZkProverConfigured();
+  
+  if (!contractSet) {
+    return { configured: false, proverHealthy: false, contractSet: false, message: 'Contract not configured' };
+  }
+  if (!proverConfigured) {
+    return { configured: false, proverHealthy: false, contractSet: true, message: 'ZK prover not configured' };
+  }
+  
+  const health = await checkZkProverHealth();
+  return {
+    configured: true,
+    proverHealthy: health.ok,
+    contractSet: true,
+    message: health.ok ? 'ZK ready' : `ZK prover ${health.status}: ${health.error || 'Unknown error'}`
+  };
 }

@@ -83,12 +83,18 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('robot-idle', './assets/sprites/player/robot-idle.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-walk', './assets/sprites/player/robot-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-hurt', './assets/sprites/player/robot-hurt.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-death', './assets/sprites/player/robot-death.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-enabling', './assets/sprites/player/robot-enabling.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-idle', './assets/sprites/player/destroyer-idle.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-walk', './assets/sprites/player/destroyer-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-hurt', './assets/sprites/player/destroyer-hurt.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-death', './assets/sprites/player/destroyer-death.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-enabling', './assets/sprites/player/destroyer-enabling.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-idle', './assets/sprites/player/swordsman-idle.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-walk', './assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-hurt', './assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-death', './assets/sprites/player/swordsman-death.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-enabling', './assets/sprites/player/swordsman-enabling.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('werewolf-run', './assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
     // Blue Version background pack — resolve base at runtime so it works on GitHub Pages, Vercel, and local
     const bgBase = getBackgroundBase();
@@ -104,6 +110,12 @@ export default class BootScene extends Phaser.Scene {
     for (let i = 0; i < 6; i++) {
       this.load.image(`arena-bg-${i}`, `${arenaBgBase}/arena-bg-${i}.png`);
     }
+
+    // Rank icons for leaderboard and profile
+    this.load.image('rank_bronze', './assets/UI/Ranks/rank_bronze.png');
+    this.load.image('rank_silver', './assets/UI/Ranks/rank_silver.png');
+    this.load.image('rank_gold', './assets/UI/Ranks/rank_gold.png');
+    this.load.image('rank_diamond', './assets/UI/Ranks/rank_diamond.png');
 
     // We'll generate all textures procedurally (and with fallbacks) in create()
     this.time.delayedCall(500, () => {
@@ -218,14 +230,86 @@ export default class BootScene extends Phaser.Scene {
     if (this.textures.exists('player') && this.textures.exists('robot-hurt')) {
       this.registerCharacterAnimations('player', 'robot-hurt');
     } else {
-      console.warn('[BootScene] Skipping player animations — texture "player" or \"robot-hurt\" missing');
+      console.warn('[BootScene] Skipping player animations — texture "player" or "robot-hurt" missing');
     }
-
+  
+    // VibeCoder death animation (for game over screen)
+    if (this.textures.exists('robot-death')) {
+      this.anims.create({
+        key: 'robot-death',
+        frames: this.anims.generateFrameNumbers('robot-death', { start: 0, end: 4 }),
+        frameRate: 8,
+        repeat: 0
+      });
+    } else {
+      console.warn('[BootScene] Skipping robot-death animation — texture missing');
+    }
+  
+    // VibeCoder enabling animation (for character selection)
+    if (this.textures.exists('robot-enabling')) {
+      this.anims.create({
+        key: 'robot-enabling',
+        frames: this.anims.generateFrameNumbers('robot-enabling', { start: 0, end: 5 }),
+        frameRate: 8,
+        repeat: -1
+      });
+    } else {
+      console.warn('[BootScene] Skipping robot-enabling animation — texture missing');
+    }
+  
     // Destroyer - player-destroyer
     if (this.textures.exists('player-destroyer') && this.textures.exists('destroyer-hurt')) {
       this.registerCharacterAnimations('player-destroyer', 'destroyer-hurt');
     } else {
       console.warn('[BootScene] Skipping player-destroyer animations — textures missing');
+    }
+
+    // Destroyer death animation (for game over screen)
+    if (this.textures.exists('destroyer-death')) {
+      this.anims.create({
+        key: 'destroyer-death',
+        frames: this.anims.generateFrameNumbers('destroyer-death', { start: 0, end: 5 }),
+        frameRate: 8,
+        repeat: 0
+      });
+    } else {
+      console.warn('[BootScene] Skipping destroyer-death animation — texture missing');
+    }
+
+    // Destroyer enabling animation (for character selection)
+    if (this.textures.exists('destroyer-enabling')) {
+      this.anims.create({
+        key: 'destroyer-enabling',
+        frames: this.anims.generateFrameNumbers('destroyer-enabling', { start: 0, end: 2 }),
+        frameRate: 6,
+        repeat: -1
+      });
+    } else {
+      console.warn('[BootScene] Skipping destroyer-enabling animation — texture missing');
+    }
+
+    // StormMan death animation (for game over screen)
+    if (this.textures.exists('swordsman-death')) {
+      this.anims.create({
+        key: 'swordsman-death',
+        frames: this.anims.generateFrameNumbers('swordsman-death', { start: 0, end: 4 }),
+        frameRate: 8,
+        repeat: 0
+      });
+    } else {
+      console.warn('[BootScene] Skipping swordsman-death animation — texture missing');
+    }
+
+    // StormMan enabling animation (for character selection)
+    if (this.textures.exists('swordsman-enabling')) {
+      this.anims.create({
+        key: 'swordsman-enabling',
+        frames: this.anims.generateFrameNumbers('swordsman-enabling', { start: 0, end: 5 }),
+        frameRate: 8,
+        repeat: -1
+      });
+    } else {
+      console.warn('[BootScene] Skipping swordsman-enabling animation — texture missing');
     }
 
     // Swordsman - player-swordsman

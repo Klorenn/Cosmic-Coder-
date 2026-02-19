@@ -160,11 +160,23 @@ export async function updateMeUsername(username) {
  * Full SEP-10 login: get challenge → sign with signTransaction → post token → store JWT.
  * @param {string} publicKey - From Freighter (getAddress)
  * @param {function(string, string): Promise<string>} signTransaction - (xdr, networkPassphrase) => signedXdr
+ * @param {object} [options] - Optional settings
+ * @param {number} [options.timeoutMs=60000] - Timeout for signing in milliseconds
  * @returns {Promise<{ token: string, public_key: string }>}
  */
-export async function loginWithSep10(publicKey, signTransaction) {
+export async function loginWithSep10(publicKey, signTransaction, options = {}) {
+  const timeoutMs = options.timeoutMs || 60000;
   const { transaction, network_passphrase } = await getChallenge(publicKey);
-  const signedXdr = await signTransaction(transaction, network_passphrase);
+
+  // Wrap signTransaction with timeout to prevent UI from getting stuck
+  const signWithTimeout = Promise.race([
+    signTransaction(transaction, network_passphrase),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Signing timeout - please try again')), timeoutMs)
+    )
+  ]);
+
+  const signedXdr = await signWithTimeout;
   const result = await postToken(signedXdr);
   setStoredToken(result.token);
   return result;

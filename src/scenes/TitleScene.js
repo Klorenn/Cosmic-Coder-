@@ -3,12 +3,15 @@ import * as Audio from '../utils/audio.js';
 import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import LeaderboardManager from '../systems/LeaderboardManager.js';
+import { getRankById, getRankName, getRankColorCSS, getRankBonusPercent, isUnranked, hasRankIcon, getAllRanks } from '../systems/RankManager.js';
 import { isConnected } from '../utils/socket.js';
 import { t, setLanguage } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
 import { loadProgressForWallet, resetProgressForDisconnect, progressStore, cycleCharacter, selectCharacter } from '../utils/walletProgressService.js';
 import * as authApi from '../utils/authApi.js';
 import * as gameClient from '../contracts/gameClient.js';
+import * as weaponClient from '../contracts/weaponClient.js';
+import { WEAPONS, WEAPON_TIERS, getWeaponById, getTierById } from '../config/weapons.js';
 import { getUIScale, getCameraZoom, anchorTopLeft, anchorTopRight, anchorBottomLeft, anchorBottomRight, anchorBottomCenter } from '../utils/layout.js';
 
 // Debug flag for TitleScene (FPS overlay, selection logs, etc.)
@@ -36,7 +39,7 @@ export default class TitleScene extends Phaser.Scene {
     this.gitQuoteTimer = null;
   }
 
-  create() {
+  create(data) {
     // Ensure we always clean up tweens, timers and listeners when the scene shuts down
     this.events.once('shutdown', this.handleShutdown, this);
 
@@ -120,6 +123,11 @@ export default class TitleScene extends Phaser.Scene {
     // Check if we need to ask for name on first launch
     if (!window.VIBE_SETTINGS.playerName) {
       this.time.delayedCall(500, () => this.showNameInput(true));
+    }
+
+    // Check if we should show leaderboard (from game over screen)
+    if (data?.showLeaderboard) {
+      this.time.delayedCall(600, () => this.showLeaderboard());
     }
   }
 
@@ -514,7 +522,7 @@ export default class TitleScene extends Phaser.Scene {
           // SEP-10: authenticate with backend (challenge → sign with Freighter → token). Session is server-verified.
           this.walletBtn.setText(t('auth.sign_prompt'));
           try {
-            await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase));
+            await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase), { timeoutMs: 60000 });
             const me = await authApi.getMe();
             if (me && (me.username == null || me.username === '')) {
               this.showUsernameModal();
@@ -525,6 +533,7 @@ export default class TitleScene extends Phaser.Scene {
             if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
           }
         }
+        // Always update UI state after connection attempt (success or failure)
         this.updateWalletButton();
         this.updateConnectionBadge();
         if (!addr && this.sayQuote) {
@@ -560,6 +569,15 @@ export default class TitleScene extends Phaser.Scene {
       color: '#ff6666'
     }).setOrigin(1, 0).setDepth(10);
     this.updateConnectionBadge();
+
+    // ZK Status badge (below connection badge, above language button)
+    this.zkBadge = this.add.text(badgePos.x, badgePos.y + 48, 'ZK: ...', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: 10 * uiScale,
+      color: '#888888'
+    }).setOrigin(1, 0).setDepth(10);
+    // Check ZK status asynchronously
+    this.checkZkStatus().then(status => this.updateZkBadge(status));
 
   }
 
@@ -801,6 +819,33 @@ export default class TitleScene extends Phaser.Scene {
         repeat: -1,
         ease: 'Sine.easeInOut'
       });
+    }
+  }
+
+  async checkZkStatus() {
+    try {
+      const status = await gameClient.getZkStatus();
+      console.log('[ZK Status]', status);
+      return status;
+    } catch (e) {
+      console.warn('[ZK Status] Check failed:', e);
+      return { configured: false, proverHealthy: false, message: 'Check failed' };
+    }
+  }
+
+  updateZkBadge(status) {
+    if (!this.zkBadge || !this.zkBadge.scene) return;
+    if (!status.configured) {
+      // Hide ZK badge when not configured
+      this.zkBadge.setVisible(false);
+    } else if (status.proverHealthy) {
+      this.zkBadge.setVisible(true);
+      this.zkBadge.setText('ZK: READY');
+      this.zkBadge.setColor('#00ff88');
+    } else {
+      this.zkBadge.setVisible(true);
+      this.zkBadge.setText('ZK: SLEEPING');
+      this.zkBadge.setColor('#ffaa00');
     }
   }
 
@@ -1826,7 +1871,7 @@ export default class TitleScene extends Phaser.Scene {
   setupInput() {
     // Navegación: flechas (ArrowUp/Down) y WASD — handler genérico para máxima compatibilidad
     this.onKeyDownHandler = (event) => {
-      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal) return;
+      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.menuBlocked) return;
       const k = event.key?.toLowerCase?.() || event.key;
       if (k === 'arrowup' || k === 'up' || k === 'w') this.moveSelection(-1);
       else if (k === 'arrowdown' || k === 'down' || k === 's') this.moveSelection(1);
@@ -1849,7 +1894,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   moveSelection(direction) {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.menuBlocked) return;
     Audio.initAudio();
 
     this.selectedOption += direction;
@@ -1916,7 +1961,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   selectOption() {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.menuBlocked) return;
     Audio.initAudio();
 
     const currentText = this.menuTexts?.[this.selectedOption];
@@ -1935,58 +1980,8 @@ export default class TitleScene extends Phaser.Scene {
 
     switch (option) {
       case 'START_GAME': {
-        if (!stellarWallet.isConnected()) {
-          this.sayQuote(t('prompt.link_wallet'));
-          return;
-        }
-        const gameMode = gameClient.isContractConfigured() && gameClient.isZkProverConfigured()
-          ? 'zk_ranked'
-          : 'casual';
-        console.log('[Cosmic Coder] Mode selected:', gameMode === 'zk_ranked' ? 'ZK Ranked' : 'Casual');
-        Audio.playLevelUp();
-        window.VIBE_CODER.reset();
-        SaveManager.clearSave();
-        (async () => {
-          // Asegurar sesión SEP-10 (JWT válido) antes de iniciar partida
-          try {
-            const hasToken = typeof authApi.getStoredToken === 'function' && !!authApi.getStoredToken();
-            if (!hasToken) {
-              const addrForAuth = await stellarWallet.getAddress();
-              if (!addrForAuth) {
-                this.sayQuote(t('prompt.link_wallet'));
-                return;
-              }
-              if (this.walletBtn && this.walletBtn.setText) {
-                this.walletBtn.setText(t('auth.sign_prompt'));
-              }
-              await authApi.loginWithSep10(addrForAuth, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase));
-            }
-          } catch (e) {
-            const msg = e?.message || String(e);
-            // eslint-disable-next-line no-console
-            console.warn('SEP-10 login failed on START_GAME:', msg);
-            if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
-            if (this.updateWalletButton) this.updateWalletButton();
-            if (this.updateConnectionBadge) this.updateConnectionBadge();
-            return;
-          }
-          if (this.updateWalletButton) this.updateWalletButton();
-          if (this.updateConnectionBadge) this.updateConnectionBadge();
-
-          if (gameClient.isContractConfigured()) {
-            try {
-              const addr = await stellarWallet.getAddress();
-              await gameClient.startMatch(addr, (xdr) => stellarWallet.signTransaction(xdr));
-            } catch (e) {
-              console.warn('On-chain start_match failed:', e);
-              this.sayQuote(t('game.start_match_failed'));
-            }
-          }
-          this.cameras.main.fade(500, 0, 0, 0);
-          this.time.delayedCall(500, () => {
-            this.scene.start('ArenaScene', { continueGame: false, gameMode });
-          });
-        })();
+        // Show ZK Start Popup instead of starting directly
+        this.showZKStartPopup();
         break;
       }
 
@@ -2202,13 +2197,13 @@ export default class TitleScene extends Phaser.Scene {
     const container = this.add.container(0, 0);
     container.setDepth(1000);
 
-    // Fondo a pantalla completa opaco para tapar menú y título
+    // Full screen backdrop
     const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
     backdrop.setInteractive({ useHandCursor: true });
     container.add(backdrop);
 
-    const overlayW = Math.min(620, w - 60);
-    const overlayH = Math.min(480, h - 60);
+    const overlayW = Math.min(720, w - 40);
+    const overlayH = Math.min(520, h - 40);
     const overlayLeft = cx - overlayW / 2;
     const overlayTop = cy - overlayH / 2;
 
@@ -2217,7 +2212,8 @@ export default class TitleScene extends Phaser.Scene {
     overlay.setInteractive({ useHandCursor: true });
     container.add(overlay);
 
-    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 44, t('leaderboard.title'), {
+    // Title
+    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 36, t('leaderboard.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${24 * uiScale}px`,
       color: '#ffd700',
@@ -2225,42 +2221,75 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5);
     container.add(title);
 
-    const headerY = overlayTop + 88;
-    const colRank = overlayLeft + 24;
-    const colName = overlayLeft + 140;
-    const colWave = overlayLeft + overlayW - 200;
-    const colScore = overlayLeft + overlayW - 100;
+    // Headers
+    const headerY = overlayTop + 72;
     const fs = (n) => `${Math.round(n * uiScale)}px`;
-    container.add(this.add.text(colRank, headerY, '#', { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
-    container.add(this.add.text(colName, headerY, t('leaderboard.name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
-    container.add(this.add.text(colWave, headerY, t('leaderboard.wave'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
-    container.add(this.add.text(colScore, headerY, t('leaderboard.score'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(14), color: '#00ffff' }));
+    const colPos = overlayLeft + 20;
+    const colRankIcon = overlayLeft + 50;
+    const colName = overlayLeft + 90;
+    const colWallet = overlayLeft + overlayW - 180;
+    const colRankName = overlayLeft + overlayW - 80;
+
+    container.add(this.add.text(colPos, headerY, t('leaderboard.position'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
+    container.add(this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
+    container.add(this.add.text(colWallet, headerY, t('leaderboard.short_wallet'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
+    container.add(this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
 
     const walletConnected = stellarWallet.isConnected();
     let top;
+    let hasRankData = false;
+
     if (walletConnected && gameClient.isContractConfigured()) {
-      // ZK ranked runs are in get_leaderboard_by_season(1); show that so ranked runs appear
-      const onChain = await gameClient.getLeaderboardBySeason(1, 10);
+      // Fetch leaderboard with rank data from contract
+      const onChain = await gameClient.getLeaderboardBySeason(1, 50);
       if (onChain.length === 0) {
-        const legacy = await gameClient.getLeaderboard(10);
+        const legacy = await gameClient.getLeaderboard(50);
         onChain.push(...legacy);
       }
+      // Map to new format with rank support
       top = onChain.map((e, i) => ({
-        rank: i + 1,
-        name: e.player ? stellarWallet.shortAddress(e.player) : '???',
-        wave: e.wave ?? 0,
-        score: e.score ?? 0
+        position: i + 1,
+        name: e.player_name || 'Unknown',
+        wallet: e.player || '',
+        rank: e.rank !== undefined ? e.rank : 0,
+        bestScore: e.score ?? e.bestScore ?? 0,
+        gamesPlayed: e.gamesPlayed ?? 0
       }));
+      hasRankData = true;
     } else if (walletConnected) {
-      top = await LeaderboardManager.fetchOnChain();
+      const entries = await LeaderboardManager.fetchOnChain();
+      top = entries.map((e, i) => ({
+        position: i + 1,
+        name: e.name || 'Unknown',
+        wallet: e.wallet || '',
+        rank: e.rank || 0,
+        bestScore: e.score ?? 0,
+        gamesPlayed: e.gamesPlayed ?? 0
+      }));
     } else {
-      top = LeaderboardManager.getTop(10);
+      const entries = LeaderboardManager.getTop(50);
+      top = entries.map((e, i) => ({
+        position: i + 1,
+        name: e.name || 'Unknown',
+        wallet: '',
+        rank: 0,
+        bestScore: e.score ?? 0,
+        gamesPlayed: 0
+      }));
     }
 
-    const lineHeight = 32 * uiScale;
-    const maxRows = 7;
-    const tableStartY = overlayTop + 118;
-    const tableEndY = tableStartY + maxRows * lineHeight;
+    // Sort by bestScore DESC, then gamesPlayed DESC
+    top.sort((a, b) => {
+      if (b.bestScore !== a.bestScore) return b.bestScore - a.bestScore;
+      return b.gamesPlayed - a.gamesPlayed;
+    });
+
+    // Re-assign positions after sort
+    top.forEach((entry, i) => entry.position = i + 1);
+
+    const lineHeight = 36 * uiScale;
+    const maxRows = 10;
+    const tableStartY = overlayTop + 100;
 
     if (top.length === 0) {
       const centerX = overlayLeft + overlayW / 2;
@@ -2286,42 +2315,491 @@ export default class TitleScene extends Phaser.Scene {
       const toShow = top.slice(0, maxRows);
       toShow.forEach((entry, i) => {
         const y = tableStartY + i * lineHeight;
-        const medalColor = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#cccccc';
-        container.add(this.add.text(colRank, y, `${entry.rank}.`, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: medalColor }));
-        container.add(this.add.text(colName, y, (entry.name || '').slice(0, 16), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: '#ffffff' }));
-        container.add(this.add.text(colWave, y, String(entry.wave), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: '#00ff88' }));
-        container.add(this.add.text(colScore, y, String(entry.score), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(13), color: '#ffff00' }));
+        const rankData = getRankById(entry.rank);
+
+        // Position number
+        const posColor = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#888888';
+        container.add(this.add.text(colPos, y, `#${entry.position}`, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: posColor }));
+
+        // Rank icon (if not unranked)
+        if (!isUnranked(entry.rank) && hasRankIcon(entry.rank)) {
+          const spriteKey = rankData.sprite;
+          if (this.textures.exists(spriteKey)) {
+            const icon = this.add.image(colRankIcon, y + 8, spriteKey);
+            icon.setDisplaySize(24, 24);
+            container.add(icon);
+          }
+        }
+
+        // Player name
+        const nameText = entry.name.slice(0, 14);
+        container.add(this.add.text(colName, y, nameText, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#ffffff' }));
+
+        // Short wallet
+        const shortWallet = entry.wallet ? stellarWallet.shortWalletForLeaderboard(entry.wallet) : '';
+        container.add(this.add.text(colWallet, y, shortWallet, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(11), color: '#aaaaaa' }));
+
+        // Rank name
+        const rankName = isUnranked(entry.rank) ? t('ranks.unranked') : rankData.name;
+        const rankColor = isUnranked(entry.rank) ? '#888888' : getRankColorCSS(entry.rank);
+        container.add(this.add.text(colRankName, y, rankName, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(11), color: rankColor }));
       });
     }
 
-    // Pie fijo: hint de wallet, cerrar
-    const footerHintY = overlayTop + overlayH - 52;
-    const footerCloseY = overlayTop + overlayH - 24;
-    if (!walletConnected && top.length > 0) {
-      container.add(this.add.text(overlayLeft + overlayW / 2, footerHintY, t('leaderboard.connect_hint'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(11),
-        color: '#666666',
-        align: 'center',
-        wordWrap: { width: overlayW - 60 }
-      }).setOrigin(0.5));
-    }
-    const closeText = this.add.text(overlayLeft + overlayW / 2, footerCloseY, t('leaderboard.back'), {
+    // Footer buttons
+    const footerY = overlayTop + overlayH - 40;
+
+    // View Ranks button
+    const viewRanksText = this.add.text(overlayLeft + overlayW / 2 - 80, footerY, `[ ${t('leaderboard.view_ranks')} ]`, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: fs(12),
+      color: '#00ff88'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    container.add(viewRanksText);
+
+    viewRanksText.on('pointerdown', () => {
+      container.destroy();
+      this.showRankSystem();
+    });
+
+    // Close button
+    const closeText = this.add.text(overlayLeft + overlayW / 2 + 80, footerY, t('leaderboard.back'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: fs(12),
       color: '#00aaff'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
     container.add(closeText);
 
     const close = () => {
       container.destroy();
       this.input.keyboard.off('keydown', close);
-      this.input.off('pointerdown', close);
     };
 
+    closeText.on('pointerdown', close);
     backdrop.on('pointerdown', close);
     overlay.on('pointerdown', close);
     this.input.keyboard.once('keydown', close);
+  }
+
+  /**
+   * Show Rank System information screen
+   */
+  showRankSystem() {
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const container = this.add.container(0, 0);
+    container.setDepth(1001);
+
+    // Backdrop
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    backdrop.setInteractive({ useHandCursor: true });
+    container.add(backdrop);
+
+    const overlayW = Math.min(560, w - 40);
+    const overlayH = Math.min(480, h - 40);
+    const overlayLeft = cx - overlayW / 2;
+    const overlayTop = cy - overlayH / 2;
+
+    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
+    overlay.setStrokeStyle(2, 0x00ffff);
+    overlay.setInteractive({ useHandCursor: true });
+    container.add(overlay);
+
+    // Title
+    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 36, t('ranks.title'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${24 * uiScale}px`,
+      color: '#ffd700',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(title);
+
+    const fs = (n) => `${Math.round(n * uiScale)}px`;
+    const ranks = getAllRanks();
+    const startY = overlayTop + 80;
+    const lineHeight = 70 * uiScale;
+
+    ranks.forEach((rank, i) => {
+      const y = startY + i * lineHeight;
+
+      // Rank icon (48x48)
+      if (this.textures.exists(rank.sprite)) {
+        const icon = this.add.image(overlayLeft + 60, y + 20, rank.sprite);
+        icon.setDisplaySize(48, 48);
+        container.add(icon);
+      }
+
+      // Rank name
+      const rankName = this.add.text(overlayLeft + 120, y, rank.name, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: fs(16),
+        color: getRankColorCSS(rank.id),
+        fontStyle: 'bold'
+      });
+      container.add(rankName);
+
+      // Rank description
+      const descKey = `ranks.${rank.name.toLowerCase()}_desc`;
+      const descText = this.add.text(overlayLeft + 120, y + 22, t(descKey), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: fs(12),
+        color: '#aaaaaa'
+      });
+      container.add(descText);
+
+      // Bonus percentage
+      const bonusText = this.add.text(overlayLeft + overlayW - 30, y + 10, `${getRankBonusPercent(rank.id)}`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: fs(14),
+        color: '#00ff88'
+      }).setOrigin(1, 0);
+      container.add(bonusText);
+    });
+
+    // Close button
+    const closeText = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 30, t('ranks.back'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: fs(12),
+      color: '#00aaff'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    container.add(closeText);
+
+    const close = () => {
+      container.destroy();
+      this.input.keyboard.off('keydown', close);
+    };
+
+    closeText.on('pointerdown', close);
+    backdrop.on('pointerdown', close);
+    overlay.on('pointerdown', close);
+    this.input.keyboard.once('keydown', close);
+  }
+
+  /**
+   * Show ZK Start Popup - Pixel art book-style pre-game modal
+   * Displays ZK Proof info, mode, rank, and controls
+   */
+  async showZKStartPopup() {
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    // Disable menu interaction
+    this.menuBlocked = true;
+
+    const container = this.add.container(0, 0);
+    container.setDepth(2000);
+
+    // Full screen backdrop (blocks all interaction)
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 0.85);
+    backdrop.setInteractive({ useHandCursor: false });
+    container.add(backdrop);
+
+    // Book-style panel dimensions (pixel art aesthetic)
+    const panelW = Math.min(520, w - 40);
+    const panelH = Math.min(420, h - 40);
+    const panelLeft = cx - panelW / 2;
+    const panelTop = cy - panelH / 2;
+
+    // Main panel background (cream/beige book page color)
+    const panel = this.add.rectangle(cx, cy, panelW, panelH, 0xf5e6c8);
+    panel.setStrokeStyle(4, 0x4a2c2a); // Dark brown border
+    panel.setInteractive({ useHandCursor: true });
+    container.add(panel);
+
+    // Inner border (pixel art style - 2px border)
+    const innerPanel = this.add.rectangle(cx, cy, panelW - 12, panelH - 12, 0xf5e6c8);
+    innerPanel.setStrokeStyle(2, 0x8b7355); // Lighter brown inner border
+    container.add(innerPanel);
+
+    const fs = (n) => `${Math.round(n * uiScale)}px`;
+
+    // Title - Pixel font style (monospace, high contrast)
+    const titleY = panelTop + 30;
+    const titleText = this.add.text(cx, titleY, t('zk_popup.title'), {
+      fontFamily: 'monospace',
+      fontSize: fs(20),
+      color: '#2d1810',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(titleText);
+
+    // Divider line
+    const dividerY = titleY + 25;
+    const divider = this.add.rectangle(cx, dividerY, panelW - 40, 2, 0x4a2c2a);
+    container.add(divider);
+
+    // Get wallet and rank info
+    const walletConnected = stellarWallet.isConnected();
+    const isZkMode = walletConnected && gameClient.isContractConfigured() && gameClient.isZkProverConfigured();
+    
+    let playerRank = 0;
+    if (walletConnected) {
+      try {
+        const stats = await weaponClient.getPlayerStats(await stellarWallet.getAddress());
+        playerRank = stats.rank !== undefined ? stats.rank : stats.tier;
+      } catch (e) {
+        console.warn('[ZKPopup] Failed to get player rank:', e);
+      }
+    }
+
+    // Mode section (left side)
+    const leftColX = panelLeft + 30;
+    const modeY = dividerY + 30;
+
+    const modeText = isZkMode ? t('zk_popup.mode_ranked') : t('zk_popup.mode_casual');
+    const modeColor = isZkMode ? '#228b22' : '#8b4513'; // Green for ranked, brown for casual
+    const modeDisplay = this.add.text(leftColX, modeY, modeText, {
+      fontFamily: 'monospace',
+      fontSize: fs(14),
+      color: modeColor,
+      fontStyle: 'bold'
+    });
+    container.add(modeDisplay);
+
+    const zkStatusText = isZkMode ? t('zk_popup.zk_enabled') : t('zk_popup.zk_disabled');
+    const zkStatusColor = isZkMode ? '#228b22' : '#8b0000'; // Green or dark red
+    const zkStatus = this.add.text(leftColX, modeY + 20, zkStatusText, {
+      fontFamily: 'monospace',
+      fontSize: fs(12),
+      color: zkStatusColor
+    });
+    container.add(zkStatus);
+
+    // Description text
+    const descY = modeY + 55;
+    const descLines = t('zk_popup.description').split('\n');
+    descLines.forEach((line, i) => {
+      const descText = this.add.text(leftColX, descY + i * 16, line, {
+        fontFamily: 'monospace',
+        fontSize: fs(10),
+        color: '#4a4a4a'
+      });
+      container.add(descText);
+    });
+
+    // Rank section (right side)
+    const rightColX = panelLeft + panelW - 30;
+    const rankY = dividerY + 30;
+
+    const rankTitle = this.add.text(rightColX, rankY, t('zk_popup.rank_title'), {
+      fontFamily: 'monospace',
+      fontSize: fs(12),
+      color: '#4a2c2a',
+      fontStyle: 'bold'
+    }).setOrigin(1, 0);
+    container.add(rankTitle);
+
+    if (!isUnranked(playerRank)) {
+      // Show rank icon
+      const rankData = getRankById(playerRank);
+      if (this.textures.exists(rankData.sprite)) {
+        const rankIcon = this.add.image(rightColX - 40, rankY + 35, rankData.sprite);
+        rankIcon.setDisplaySize(48, 48);
+        container.add(rankIcon);
+      }
+
+      // Show rank name
+      const rankNameText = this.add.text(rightColX, rankY + 25, rankData.name, {
+        fontFamily: 'monospace',
+        fontSize: fs(14),
+        color: getRankColorCSS(playerRank),
+        fontStyle: 'bold'
+      }).setOrigin(1, 0);
+      container.add(rankNameText);
+    } else {
+      // Unranked
+      const unrankedText = this.add.text(rightColX, rankY + 35, t('ranks.unranked'), {
+        fontFamily: 'monospace',
+        fontSize: fs(14),
+        color: '#888888',
+        fontStyle: 'bold'
+      }).setOrigin(1, 0);
+      container.add(unrankedText);
+    }
+
+    // Controls section (bottom left)
+    const controlsY = panelTop + panelH - 140;
+    const controlsTitle = this.add.text(leftColX, controlsY, t('zk_popup.controls_title'), {
+      fontFamily: 'monospace',
+      fontSize: fs(12),
+      color: '#4a2c2a',
+      fontStyle: 'bold'
+    });
+    container.add(controlsTitle);
+
+    // Controls lines
+    const controlsLines = [
+      t('zk_popup.controls_move'),
+      t('zk_popup.controls_menu'),
+      t('zk_popup.controls_menu_note')
+    ];
+    controlsLines.forEach((line, i) => {
+      const controlText = this.add.text(leftColX, controlsY + 18 + i * 14, line, {
+        fontFamily: 'monospace',
+        fontSize: fs(10),
+        color: '#5a4a3a'
+      });
+      container.add(controlText);
+    });
+
+    // Auto-Shoot info (subtle, neutral color)
+    const autoShootText = this.add.text(leftColX, controlsY + 18 + controlsLines.length * 14 + 8, t('zk_popup.controls_auto_shoot'), {
+      fontFamily: 'monospace',
+      fontSize: fs(9),
+      color: '#6a5a4a'
+    });
+    container.add(autoShootText);
+
+    // Buttons (bottom center)
+    const buttonsY = panelTop + panelH - 45;
+
+    // Play button (Ranked or Casual)
+    const playButtonText = isZkMode ? t('zk_popup.play_ranked') : t('zk_popup.play_casual');
+    const playButtonColor = isZkMode ? '#228b22' : '#8b4513';
+    const playButton = this.add.text(cx - 70, buttonsY, playButtonText, {
+      fontFamily: 'monospace',
+      fontSize: fs(12),
+      color: playButtonColor,
+      fontStyle: 'bold',
+      backgroundColor: '#f5e6c8'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    container.add(playButton);
+
+    // Close button
+    const closeButton = this.add.text(cx + 70, buttonsY, t('zk_popup.close'), {
+      fontFamily: 'monospace',
+      fontSize: fs(12),
+      color: '#8b0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    container.add(closeButton);
+
+    // Button hover effects (simple color change, no animations)
+    playButton.on('pointerover', () => playButton.setColor('#2e8b57'));
+    playButton.on('pointerout', () => playButton.setColor(playButtonColor));
+    closeButton.on('pointerover', () => closeButton.setColor('#ff0000'));
+    closeButton.on('pointerout', () => closeButton.setColor('#8b0000'));
+
+    // Close function
+    const closePopup = () => {
+      container.destroy();
+      this.menuBlocked = false;
+      this.input.keyboard.off('keydown', handleKeydown);
+    };
+
+    // Play function
+    const startGame = () => {
+      if (isZkMode) {
+        // Start ranked game
+        closePopup();
+        this.startRankedGame();
+      } else if (walletConnected) {
+        // Start casual game
+        closePopup();
+        this.startCasualGame();
+      } else {
+        // Wallet required for ranked, show message
+        const warningText = this.add.text(cx, buttonsY - 30, t('zk_popup.wallet_required'), {
+          fontFamily: 'monospace',
+          fontSize: fs(11),
+          color: '#ff0000'
+        }).setOrigin(0.5);
+        container.add(warningText);
+        
+        // Remove warning after 2 seconds
+        this.time.delayedCall(2000, () => warningText.destroy());
+      }
+    };
+
+    playButton.on('pointerdown', startGame);
+    closeButton.on('pointerdown', closePopup);
+    backdrop.on('pointerdown', closePopup);
+
+    // Keyboard handler
+    const handleKeydown = (event) => {
+      if (event.code === 'Escape') {
+        closePopup();
+      } else if (event.code === 'Enter') {
+        startGame();
+      }
+    };
+    this.input.keyboard.on('keydown', handleKeydown);
+  }
+
+  /**
+   * Start ranked game (ZK mode)
+   */
+  startRankedGame() {
+    const gameMode = 'zk_ranked';
+    console.log('[Cosmic Coder] Mode selected: ZK Ranked');
+    Audio.playLevelUp();
+    window.VIBE_CODER.reset();
+    SaveManager.clearSave();
+    
+    (async () => {
+      try {
+        const hasToken = typeof authApi.getStoredToken === 'function' && !!authApi.getStoredToken();
+        if (!hasToken) {
+          const addrForAuth = await stellarWallet.getAddress();
+          if (!addrForAuth) {
+            this.sayQuote(t('prompt.link_wallet'));
+            return;
+          }
+          if (this.walletBtn && this.walletBtn.setText) {
+            this.walletBtn.setText(t('auth.sign_prompt'));
+          }
+          await authApi.loginWithSep10(addrForAuth, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase), { timeoutMs: 60000 });
+        }
+      } catch (e) {
+        const msg = e?.message || String(e);
+        console.warn('SEP-10 login failed on START_GAME:', msg);
+        if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
+        if (this.updateWalletButton) this.updateWalletButton();
+        if (this.updateConnectionBadge) this.updateConnectionBadge();
+        return;
+      }
+      
+      if (this.updateWalletButton) this.updateWalletButton();
+      if (this.updateConnectionBadge) this.updateConnectionBadge();
+
+      if (gameClient.isContractConfigured()) {
+        try {
+          const addr = await stellarWallet.getAddress();
+          await gameClient.startMatch(addr, (xdr) => stellarWallet.signTransaction(xdr));
+        } catch (e) {
+          console.warn('On-chain start_match failed:', e);
+          this.sayQuote(t('game.start_match_failed'));
+        }
+      }
+      
+      this.cameras.main.fade(500, 0, 0, 0);
+      this.time.delayedCall(500, () => {
+        this.scene.start('ArenaScene', { continueGame: false, gameMode });
+      });
+    })();
+  }
+
+  /**
+   * Start casual game (non-ZK mode)
+   */
+  startCasualGame() {
+    const gameMode = 'casual';
+    console.log('[Cosmic Coder] Mode selected: Casual');
+    Audio.playLevelUp();
+    window.VIBE_CODER.reset();
+    SaveManager.clearSave();
+    
+    this.cameras.main.fade(500, 0, 0, 0);
+    this.time.delayedCall(500, () => {
+      this.scene.start('ArenaScene', { continueGame: false, gameMode });
+    });
   }
 
   showControls() {
@@ -3022,13 +3500,13 @@ export default class TitleScene extends Phaser.Scene {
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
 
-    const tabs = ['LEGENDARY', 'MELEE', 'RANGED'];
+    const tabs = ['LEGENDARY', 'MELEE', 'RANGED', 'WEB3'];
     const tabTexts = [];
-    const tabStartX = overlayLeft + overlayW * 0.2;
-    const tabSpacing = overlayW * 0.28;
+    const tabStartX = overlayLeft + overlayW * 0.12;
+    const tabSpacing = overlayW * 0.22;
 
     tabs.forEach((tab, index) => {
-      const tabText = this.add.text(tabStartX + index * tabSpacing, overlayTop + 68, t('weapons.' + tab), {
+      const tabText = this.add.text(tabStartX + index * tabSpacing, overlayTop + 68, tab === 'WEB3' ? 'WEB3' : t('weapons.' + tab), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${13 * uiScale}px`,
         color: index === 0 ? '#ffd700' : '#666666',
@@ -3302,6 +3780,204 @@ export default class TitleScene extends Phaser.Scene {
       contentElements.push(info);
     };
 
+    const renderWeb3 = async () => {
+      clearContent();
+
+      const web3Title = this.add.text(overlayLeft + 24, overlayTop + 98, 'WEB3 UNLOCKS', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${13 * uiScale}px`,
+        color: '#00ff88',
+        fontStyle: 'bold'
+      }).setDepth(contentDepth);
+      contentElements.push(web3Title);
+
+      // Get wallet address
+      const addr = await stellarWallet.getAddress();
+      
+      if (!addr) {
+        const connectText = this.add.text(overlayLeft + overlayW / 2, overlayTop + 200, 'Connect wallet to view Web3 weapons', {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${14 * uiScale}px`,
+          color: '#888888'
+        }).setOrigin(0.5).setDepth(contentDepth);
+        contentElements.push(connectText);
+        return;
+      }
+
+      // Load player stats
+      let playerStats = { gamesPlayed: 0, bestScore: 0, tier: 1, rank: 0, canStartMatch: false };
+      let unlockedWeapons = [1];
+      
+      try {
+        playerStats = await weaponClient.getPlayerStats(addr);
+        unlockedWeapons = await weaponClient.getUnlockedWeapons(addr);
+      } catch (e) {
+        console.warn('[TitleScene] Failed to load Web3 weapon data:', e);
+      }
+
+      // Use rank from playerStats if available, otherwise derive from tier
+      const playerRank = playerStats.rank !== undefined ? playerStats.rank : playerStats.tier;
+      const rankData = getRankById(playerRank);
+
+      // Show player rank section
+      const rankSectionY = overlayTop + 110;
+      
+      if (!isUnranked(playerRank)) {
+        // Show rank icon (64x64) for ranked players
+        if (this.textures.exists(rankData.sprite)) {
+          const rankIcon = this.add.image(overlayLeft + 50, rankSectionY, rankData.sprite);
+          rankIcon.setDisplaySize(64, 64);
+          rankIcon.setDepth(contentDepth);
+          contentElements.push(rankIcon);
+        }
+
+        // Rank name
+        const rankNameText = this.add.text(overlayLeft + 100, rankSectionY - 15, rankData.name, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${18 * uiScale}px`,
+          color: getRankColorCSS(playerRank),
+          fontStyle: 'bold'
+        }).setDepth(contentDepth);
+        contentElements.push(rankNameText);
+
+        // Round 1 Bonus
+        const bonusText = this.add.text(overlayLeft + 100, rankSectionY + 12, `${t('ranks.bonus_label')}: ${getRankBonusPercent(playerRank)}`, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${12 * uiScale}px`,
+          color: '#00ff88'
+        }).setDepth(contentDepth);
+        contentElements.push(bonusText);
+      } else {
+        // Unranked display
+        const unrankedText = this.add.text(overlayLeft + 24, rankSectionY - 10, t('ranks.unranked'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${16 * uiScale}px`,
+          color: '#888888',
+          fontStyle: 'bold'
+        }).setDepth(contentDepth);
+        contentElements.push(unrankedText);
+
+        const unrankedDesc = this.add.text(overlayLeft + 24, rankSectionY + 15, t('ranks.unranked_desc'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${11 * uiScale}px`,
+          color: '#666666'
+        }).setDepth(contentDepth);
+        contentElements.push(unrankedDesc);
+      }
+
+      // Show stats
+      const statsY = overlayTop + 160;
+      const statsText = this.add.text(overlayLeft + 24, statsY, `${t('ranks.best_score')}: ${playerStats.bestScore} | ${t('ranks.games_played')}: ${playerStats.gamesPlayed}`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${11 * uiScale}px`,
+        color: '#aaaaaa'
+      }).setDepth(contentDepth);
+      contentElements.push(statsText);
+
+      // Weapon list
+      const weaponIds = [1, 2, 3, 4, 5];
+      const startY = overlayTop + 190;
+      const spacing = 65;
+
+      for (let i = 0; i < weaponIds.length; i++) {
+        const weaponId = weaponIds[i];
+        const weapon = getWeaponById(weaponId);
+        const isUnlocked = unlockedWeapons.includes(weaponId);
+        const tier = getTierById(weapon.tier);
+        
+        const y = startY + i * spacing;
+        
+        // Weapon box
+        const boxColor = isUnlocked ? 0x00ff88 : 0x222222;
+        const boxStroke = isUnlocked ? 0x00ff88 : 0x444444;
+        const box = this.add.rectangle(overlayLeft + 50, y, 40, 40, boxColor);
+        box.setStrokeStyle(2, boxStroke).setDepth(contentDepth);
+        contentElements.push(box);
+
+        // Weapon ID
+        const idText = this.add.text(overlayLeft + 50, y, weaponId.toString(), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: '16px',
+          color: isUnlocked ? '#000000' : '#666666',
+          fontStyle: 'bold'
+        }).setOrigin(0.5).setDepth(contentDepth);
+        contentElements.push(idText);
+
+        // Weapon name
+        const nameColor = isUnlocked ? '#00ff88' : '#666666';
+        const nameText = this.add.text(overlayLeft + 100, y - 10, weapon.name, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${13 * uiScale}px`,
+          color: nameColor,
+          fontStyle: isUnlocked ? 'bold' : 'normal'
+        }).setDepth(contentDepth);
+        contentElements.push(nameText);
+
+        // Tier requirement
+        const reqText = this.add.text(overlayLeft + 100, y + 8, `Requires: ${tier.name} (${tier.threshold}+ score)`, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: '10px',
+          color: '#888888'
+        }).setDepth(contentDepth);
+        contentElements.push(reqText);
+
+        // Status or unlock button
+        if (isUnlocked) {
+          const statusText = this.add.text(overlayLeft + overlayW - 80, y, 'UNLOCKED', {
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
+            fontSize: '11px',
+            color: '#00ff88',
+            fontStyle: 'bold'
+          }).setOrigin(0.5).setDepth(contentDepth);
+          contentElements.push(statusText);
+        } else if (playerStats.gamesPlayed < 3) {
+          const lockText = this.add.text(overlayLeft + overlayW - 80, y, `Play ${3 - playerStats.gamesPlayed} more`, {
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
+            fontSize: '10px',
+            color: '#ff6666'
+          }).setOrigin(0.5).setDepth(contentDepth);
+          contentElements.push(lockText);
+        } else if (playerStats.bestScore < tier.threshold) {
+          const lockText = this.add.text(overlayLeft + overlayW - 80, y, 'Score too low', {
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
+            fontSize: '10px',
+            color: '#ff6666'
+          }).setOrigin(0.5).setDepth(contentDepth);
+          contentElements.push(lockText);
+        } else {
+          // Unlock button
+          const unlockBtn = this.add.text(overlayLeft + overlayW - 80, y, 'UNLOCK', {
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
+            fontSize: '11px',
+            color: '#00ffff',
+            fontStyle: 'bold'
+          }).setOrigin(0.5).setDepth(contentDepth);
+          unlockBtn.setInteractive({ useHandCursor: true });
+          unlockBtn.on('pointerover', () => unlockBtn.setColor('#ffffff'));
+          unlockBtn.on('pointerout', () => unlockBtn.setColor('#00ffff'));
+          unlockBtn.on('pointerdown', async () => {
+            unlockBtn.setText('...');
+            try {
+              // This would trigger ZK proof generation and unlock
+              // For now, show coming soon
+              unlockBtn.setText('SOON');
+            } catch (e) {
+              unlockBtn.setText('ERROR');
+            }
+          });
+          contentElements.push(unlockBtn);
+        }
+      }
+
+      // Info text
+      const infoText = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 30, 'Web3 weapons are permanently unlocked to your wallet', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${10 * uiScale}px`,
+        color: '#666666'
+      }).setOrigin(0.5).setDepth(contentDepth);
+      contentElements.push(infoText);
+    };
+
     const clearContent = () => {
       contentElements.forEach(el => el.destroy());
       contentElements.length = 0;
@@ -3319,9 +3995,12 @@ export default class TitleScene extends Phaser.Scene {
       } else if (tabIndex === 1) {
         this.weaponTab = 'melee';
         renderMelee();
-      } else {
+      } else if (tabIndex === 2) {
         this.weaponTab = 'ranged';
         renderRanged();
+      } else {
+        this.weaponTab = 'web3';
+        renderWeb3();
       }
     };
 
@@ -3345,14 +4024,14 @@ export default class TitleScene extends Phaser.Scene {
 
     const tabLeft = () => {
       currentTab--;
-      if (currentTab < 0) currentTab = 2;
+      if (currentTab < 0) currentTab = 3;
       switchTab(currentTab);
       Audio.playXPGain();
     };
 
     const tabRight = () => {
       currentTab++;
-      if (currentTab > 2) currentTab = 0;
+      if (currentTab > 3) currentTab = 0;
       switchTab(currentTab);
       Audio.playXPGain();
     };
@@ -3469,11 +4148,34 @@ export default class TitleScene extends Phaser.Scene {
       placeText.setVisible(false);
       previewSprite.setVisible(true).setAlpha(1);
       previewSprite.setTexture(char.textureKey, 0);
-      const idleKey = char.animPrefix + '-idle';
-      if (this.anims.exists(idleKey)) {
-        previewSprite.play(idleKey);
+
+      // Check for special enabling animation (VibeCoder, Destroyer, StormMan)
+      let enablingKey = null;
+      if (charId === 'destroyer') {
+        enablingKey = 'destroyer-enabling';
+      } else if (charId === 'vibecoder') {
+        enablingKey = 'robot-enabling';
+      } else if (charId === 'swordsman') {
+        enablingKey = 'swordsman-enabling';
+      }
+
+      if (enablingKey && this.anims.exists(enablingKey)) {
+        // Play enabling animation first, then loop idle
+        previewSprite.play(enablingKey);
+        previewSprite.once('animationcomplete', () => {
+          const idleKey = char.animPrefix + '-idle';
+          if (this.anims.exists(idleKey)) {
+            previewSprite.play(idleKey);
+          }
+        });
       } else {
-        previewSprite.setFrame(0);
+        // Normal idle animation
+        const idleKey = char.animPrefix + '-idle';
+        if (this.anims.exists(idleKey)) {
+          previewSprite.play(idleKey);
+        } else {
+          previewSprite.setFrame(0);
+        }
       }
     };
     updatePreview();

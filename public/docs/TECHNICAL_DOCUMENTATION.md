@@ -238,7 +238,7 @@ ReplayKey = (player, nonce, season_id) se almacena como usado tras un submit_zk 
 - **Type definitions:**  
   - `ZkProof { a: BytesN<64>, b: BytesN<128>, c: BytesN<64> }`.  
   - `ZkVerificationKey { alpha: BytesN<64>, beta: BytesN<128>, gamma: BytesN<128>, delta: BytesN<128>, ic: Vec<BytesN<64>> }`.
-- **Error enum:** `Groth16Error`: `InvalidProof`, `InvalidVerificationKey`, `InvalidPublicInputs`, `MalformedVerifyingKey` (with the note that `vk.ic.len()` must equal `pub_signals.len() + 1`). Used by the verifier; the policy maps these to `ShadowAscensionError::VerifierError` or `InvalidProof` as appropriate.
+- **Error enum:** `Groth16Error`: `InvalidProof`, `InvalidVerificationKey`, `InvalidPublicInputs`, `MalformedVerifyingKey` (with the note that `vk.ic.len()` must equal `pub_signals.len() + 1`). Used by the verifier; the policy maps these to `CosmicCoderError::VerifierError` or `InvalidProof` as appropriate.
 
 ---
 

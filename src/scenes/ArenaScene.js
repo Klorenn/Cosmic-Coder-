@@ -11,10 +11,13 @@ import RunModifiers from '../systems/RunModifiers.js';
 import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
 import LeaderboardManager from '../systems/LeaderboardManager.js';
+import { getRankById, getRankName, getRankBonus, isUnranked } from '../systems/RankManager.js';
 import { t } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
 import { progressStore, saveProgressToWallet, persistIfWalletConnected } from '../utils/walletProgressService.js';
 import * as gameClient from '../contracts/gameClient.js';
+import * as weaponClient from '../contracts/weaponClient.js';
+import { WEAPON_TYPE_CONFIG, getWeaponById } from '../config/weapons.js';
 import { validateGameRules, computeGameHash, generateRunSeed } from '../zk/gameProof.js';
 import * as BALANCE from '../config/balance.js';
 
@@ -282,6 +285,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.isContinuedGame = data?.continueGame || false;
     this.gameMode = data?.gameMode === 'zk_ranked' ? 'zk_ranked' : 'casual';
     this.zkProofSubmitted = false;
+    this.playerDead = false; // FIX: Always reset playerDead when starting/continuing a game
   }
 
   create() {
@@ -392,6 +396,9 @@ export default class ArenaScene extends Phaser.Scene {
         }
         console.log(`Rebirth bonus: Starting with weapons: ${startingWeapons.join(', ')}`);
       }
+
+      // Apply Web3 weapon unlock starting bonus
+      this.applyWeb3StartingBonus();
     }
 
     // Start spawning enemies
@@ -640,8 +647,8 @@ export default class ArenaScene extends Phaser.Scene {
     const startY = Phaser.Math.Between(0, this.worldHeight - 700);
     const streamGroup = this.add.group();
 
-    // Create falling characters
-    const chars = '01アイウエオカキクケコ';
+    // Create falling characters (binary only - removed Japanese characters)
+    const chars = '01';
     const charCount = Phaser.Math.Between(5, 12);
 
     for (let i = 0; i < charCount; i++) {
@@ -2492,6 +2499,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.currentStage = 0;
     this.currentBoss = null;
     this.invincible = false;
+    this.playerDead = false; // FIX: Reset playerDead to prevent immortality bug on restart
     this.collectedWeapons = new Set(['basic']);
     this.currentWeapon = { type: 'basic', duration: Infinity };
     this.clearOrbitals();
@@ -3510,6 +3518,73 @@ export default class ArenaScene extends Phaser.Scene {
     });
   }
 
+  async applyWeb3StartingBonus() {
+    try {
+      const addr = await stellarWallet.getAddress();
+      if (!addr) return;
+
+      // Get player stats and unlocked weapons
+      const stats = await weaponClient.getPlayerStats(addr);
+      const unlockedWeapons = await weaponClient.getUnlockedWeapons(addr);
+      
+      if (unlockedWeapons.length <= 1) return; // Only starter weapon unlocked
+
+      // Use rank from stats if available, otherwise fall back to tier
+      const playerRank = stats.rank !== undefined ? stats.rank : stats.tier;
+      
+      // Get bonus chance from RankManager
+      const bonusChance = getRankBonus(playerRank);
+      
+      // Skip if unranked or no bonus
+      if (isUnranked(playerRank) || bonusChance <= 0) return;
+      
+      // Roll for bonus weapon
+      if (Math.random() < bonusChance) {
+        // Select random unlocked weapon (excluding starter)
+        const bonusWeapons = unlockedWeapons.filter(id => id !== 1);
+        if (bonusWeapons.length > 0) {
+          const selectedId = bonusWeapons[Math.floor(Math.random() * bonusWeapons.length)];
+          const weapon = getWeaponById(selectedId);
+          
+          if (weapon) {
+            // Add to collected weapons
+            this.collectedWeapons.add(weapon.type);
+            
+            // Equip the weapon temporarily
+            this.currentWeapon = {
+              type: weapon.type,
+              duration: 30000 // 30 seconds
+            };
+            
+            // Show notification using rank name from RankManager
+            const rankName = getRankName(playerRank);
+            
+            const bonusText = this.add.text(400, 200, `🎁 ${rankName} BONUS: ${weapon.name} START!`, {
+              fontFamily: '"Segoe UI", system-ui, sans-serif',
+              fontSize: '20px',
+              color: '#00ff88',
+              fontStyle: 'bold',
+              stroke: '#000000',
+              strokeThickness: 4
+            }).setOrigin(0.5).setScrollFactor(0);
+
+            this.tweens.add({
+              targets: bonusText,
+              alpha: 0,
+              y: 150,
+              duration: 3000,
+              onComplete: () => bonusText.destroy()
+            });
+
+            console.log(`[Web3] Starting bonus: ${weapon.name} (Rank ${rankName}, ${Math.round(bonusChance * 100)}% chance)`);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ArenaScene] Failed to apply Web3 starting bonus:', e);
+    }
+  }
+
   updateLegendaryWeapons() {
     if (this.legendaryWeapons.getLength() === 0) return;
 
@@ -3994,27 +4069,95 @@ export default class ArenaScene extends Phaser.Scene {
     const xpBits = Math.floor(state.totalXP * ((BALANCE.BITS_PER_100_XP ?? 0.5) / 100));
     let totalBits = waveBits + killBits + xpBits;
 
-    // Game over UI: centrado en pantalla
+    // Game over UI: Pixel-art style black screen
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
 
-    const gameOverText = this.add.text(cx, cy - 120, t('game.game_over'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '36px',
-      color: '#ff4444',
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 4
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
+    // Create game over container
+    const gameOverContainer = this.add.container(0, 0);
+    gameOverContainer.setDepth(2000);
 
-    const bitsText = this.add.text(cx, cy - 60, `+${totalBits} ${t('game.bits_earned')}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '24px',
-      color: '#00ffff',
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 4
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
+    // Full black background
+    const blackBg = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 1);
+    blackBg.setInteractive({ useHandCursor: false });
+    gameOverContainer.add(blackBg);
+
+    // Character death animation - show the sprite playing death animation
+    const characterId = window.VIBE_SETTINGS?.character || 'robot';
+    let deathSprite = null;
+
+    // Determine which death animation to use based on character
+    let deathAnimKey = null;
+    let deathSpriteKey = null;
+    let lastFrame = 4; // Default last frame
+
+    if (characterId === 'destroyer') {
+      deathAnimKey = 'destroyer-death';
+      deathSpriteKey = 'destroyer-death';
+      lastFrame = 5;
+    } else if (characterId === 'vibecoder' || characterId === 'robot') {
+      deathAnimKey = 'robot-death';
+      deathSpriteKey = 'robot-death';
+      lastFrame = 4;
+    } else if (characterId === 'swordsman') {
+      deathAnimKey = 'swordsman-death';
+      deathSpriteKey = 'swordsman-death';
+      lastFrame = 4;
+    }
+
+    if (deathAnimKey && deathSpriteKey && this.anims.exists(deathAnimKey)) {
+      // Create sprite and play death animation
+      deathSprite = this.add.sprite(cx, cy - 140, deathSpriteKey, 0);
+      deathSprite.setScale(1.5);
+      deathSprite.play(deathAnimKey);
+
+      // On animation complete, show the last frame (character lying on ground)
+      deathSprite.once('animationcomplete', () => {
+        deathSprite.setFrame(lastFrame); // Last frame - character on ground
+      });
+
+      gameOverContainer.add(deathSprite);
+    }
+
+    // Pixel-art style GAME OVER text (red, monospace, no effects)
+    const gameOverTextY = deathSprite ? cy - 60 : cy - 100;
+    const gameOverText = this.add.text(cx, gameOverTextY, t('game_over_screen.title'), {
+      fontFamily: 'monospace',
+      fontSize: '48px',
+      color: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    gameOverContainer.add(gameOverText);
+
+    // Stats section (pixel font, simple)
+    const statsY = cy - 20;
+    const lineHeight = 28;
+
+    // Final Score
+    const scoreText = this.add.text(cx, statsY, `${t('game_over_screen.final_score')}: ${Math.floor(state.totalXP)}`, {
+      fontFamily: 'monospace',
+      fontSize: '16px',
+      color: '#ffffff'
+    }).setOrigin(0.5);
+    gameOverContainer.add(scoreText);
+
+    // Wave Reached
+    const waveText = this.add.text(cx, statsY + lineHeight, `${t('game_over_screen.wave_reached')}: ${this.waveNumber}`, {
+      fontFamily: 'monospace',
+      fontSize: '16px',
+      color: '#ffffff'
+    }).setOrigin(0.5);
+    gameOverContainer.add(waveText);
+
+    // Bits Earned
+    const bitsText = this.add.text(cx, statsY + lineHeight * 2, `${t('game_over_screen.bits_earned')}: ${totalBits}`, {
+      fontFamily: 'monospace',
+      fontSize: '16px',
+      color: '#00ff00'
+    }).setOrigin(0.5);
+    gameOverContainer.add(bitsText);
 
     const friendlySubmitError = (errStr, t) => {
       const e = errStr.toLowerCase();
@@ -4030,26 +4173,26 @@ export default class ArenaScene extends Phaser.Scene {
       const err = typeof status === 'object' ? status.error : errorMessage;
       const msg = s === 'zk' ? t('game.submit_zk_ranked') : s === 'zk_failed' ? t('game.submit_zk_fallback') : s === 'casual' ? t('game.submit_casual') : s === 'timeout' ? t('game.submit_timeout') : s === 'no_wallet' ? t('game.submit_no_wallet') : t('game.submit_failed');
       const color = (s === 'failed' || s === 'timeout' || s === 'no_wallet') ? '#ff6666' : s === 'zk' ? '#ffd700' : '#88ff88';
-      submitStatusText = this.add.text(cx, cy + 10, msg, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '18px',
+      submitStatusText = this.add.text(cx, cy + 60, msg, {
+        fontFamily: 'monospace',
+        fontSize: '12px',
         color,
         fontStyle: 'bold',
-        stroke: '#000000',
-        strokeThickness: 3,
         align: 'center'
-      }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(1001);
+      }).setOrigin(0.5, 0);
       submitStatusText.setWordWrapWidth(480);
+      gameOverContainer.add(submitStatusText);
       if (err && (s === 'failed' || s === 'zk_failed' || s === 'no_wallet')) {
         const friendly = friendlySubmitError(String(err), t);
         const short = friendly || String(err).slice(0, 80);
-        submitErrorText = this.add.text(cx, cy + 32, short, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '12px',
+        submitErrorText = this.add.text(cx, cy + 80, short, {
+          fontFamily: 'monospace',
+          fontSize: '10px',
           color: '#cc8888',
           align: 'center',
           wordWrap: { width: 460 }
-        }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(1001);
+        }).setOrigin(0.5, 0);
+        gameOverContainer.add(submitErrorText);
       }
     };
 
@@ -4057,13 +4200,12 @@ export default class ArenaScene extends Phaser.Scene {
     const willSubmit = gameClient.isContractConfigured() && stellarWallet.isConnected() && validateGameRules(this.waveNumber, state.totalXP).valid;
     let submittingText = null;
     if (willSubmit) {
-      submittingText = this.add.text(cx, cy + 10, t('game.submitting'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '16px',
-        color: '#aaaaaa',
-        stroke: '#000000',
-        strokeThickness: 2
-      }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
+      submittingText = this.add.text(cx, cy + 60, t('game.submitting'), {
+        fontFamily: 'monospace',
+        fontSize: '12px',
+        color: '#aaaaaa'
+      }).setOrigin(0.5);
+      gameOverContainer.add(submittingText);
     }
 
     const score = Math.floor(state.totalXP);
@@ -4131,27 +4273,40 @@ export default class ArenaScene extends Phaser.Scene {
       }).catch((e) => { timeout.destroy(); resolve({ status: 'failed', error: e?.message || 'Unknown error' }); });
     });
 
-    // Controls button (always visible on game over)
-    const controlsBtn = this.add.text(cx, cy + 70, t('controls.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
-      color: '#00aaff'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(1001).setInteractive({ useHandCursor: true });
-    controlsBtn.on('pointerover', () => controlsBtn.setColor('#00ffff'));
-    controlsBtn.on('pointerout', () => controlsBtn.setColor('#00aaff'));
-    controlsBtn.on('pointerdown', () => this.showGameOverControls());
+    // Pixel-art style buttons
+    const buttonsY = cy + 110;
 
-    // Hint when no chain submit (no contract ID / no wallet): why user didn't see "Submitting..."
-    let chainHintText = null;
-    if (!willSubmit) {
-      chainHintText = this.add.text(cx, cy + 48, t('game.leaderboard_hint'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '12px',
-        color: '#888888',
-        align: 'center',
-        wordWrap: { width: 420 }
-      }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
-    }
+    // View Ranking button
+    const viewRankingBtn = this.add.text(cx - 100, buttonsY, t('game_over_screen.view_ranking'), {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      color: '#00aaff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    gameOverContainer.add(viewRankingBtn);
+
+    // Return to Menu button
+    const returnMenuBtn = this.add.text(cx + 100, buttonsY, t('game_over_screen.return_menu'), {
+      fontFamily: 'monospace',
+      fontSize: '14px',
+      color: '#ff6666',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+    gameOverContainer.add(returnMenuBtn);
+
+    // Button hover effects (simple color change)
+    viewRankingBtn.on('pointerover', () => viewRankingBtn.setColor('#00ffff'));
+    viewRankingBtn.on('pointerout', () => viewRankingBtn.setColor('#00aaff'));
+    returnMenuBtn.on('pointerover', () => returnMenuBtn.setColor('#ff9999'));
+    returnMenuBtn.on('pointerout', () => returnMenuBtn.setColor('#ff6666'));
+
+    // Press any key hint
+    const pressKeyHint = this.add.text(cx, cy + 160, t('game_over_screen.press_any_key'), {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#666666'
+    }).setOrigin(0.5);
+    gameOverContainer.add(pressKeyHint);
 
     submitPromise.then((status) => {
       if (submittingText && submittingText.scene) submittingText.destroy();
@@ -4162,37 +4317,45 @@ export default class ArenaScene extends Phaser.Scene {
         if (s === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
           const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));
           window.VIBE_UPGRADES.addCurrency(bonus);
-          bitsText.setText(`+${totalBits + bonus} ${t('game.bits_earned')} (+${bonus} ZK bonus)`);
+          bitsText.setText(`${t('game_over_screen.bits_earned')}: ${totalBits + bonus} (+${bonus} ZK)`);
         }
       }
-      // Hint: return to menu
-      const returnHint = this.add.text(cx, cy + 100, t('prompt.any_key_close'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
-        color: '#00aaff'
-      }).setOrigin(0.5).setScrollFactor(0).setDepth(1001).setInteractive({ useHandCursor: true });
 
       let returned = false;
       const goToMenu = () => {
         if (returned) return;
         returned = true;
-        if (autoReturnTimer) autoReturnTimer.destroy();
-        gameOverText.destroy();
-        bitsText.destroy();
-        if (submitStatusText && submitStatusText.scene) submitStatusText.destroy();
-        if (submitErrorText && submitErrorText.scene) submitErrorText.destroy();
-        if (chainHintText && chainHintText.scene) chainHintText.destroy();
-        if (controlsBtn && controlsBtn.scene) controlsBtn.destroy();
-        if (returnHint && returnHint.scene) returnHint.destroy();
-        this.input.keyboard.off('keydown', goToMenu);
+        gameOverContainer.destroy();
+        this.input.keyboard.off('keydown', handleKeydown);
         SaveManager.clearSave();
         this.cameras.main.fade(500, 0, 0, 0);
         this.time.delayedCall(500, () => this.scene.start('TitleScene'));
       };
 
-      const autoReturnTimer = this.time.delayedCall(3000, goToMenu);
-      returnHint.on('pointerdown', goToMenu);
-      this.input.keyboard.once('keydown', goToMenu);
+      const goToRanking = () => {
+        if (returned) return;
+        returned = true;
+        gameOverContainer.destroy();
+        this.input.keyboard.off('keydown', handleKeydown);
+        SaveManager.clearSave();
+        this.cameras.main.fade(500, 0, 0, 0);
+        this.time.delayedCall(500, () => {
+          // Start TitleScene and then show leaderboard
+          this.scene.start('TitleScene', { showLeaderboard: true });
+        });
+      };
+
+      // Button handlers
+      viewRankingBtn.on('pointerdown', goToRanking);
+      returnMenuBtn.on('pointerdown', goToMenu);
+
+      // Keyboard handler
+      const handleKeydown = (event) => {
+        if (event.code === 'Enter') {
+          goToMenu();
+        }
+      };
+      this.input.keyboard.once('keydown', handleKeydown);
     });
   }
 

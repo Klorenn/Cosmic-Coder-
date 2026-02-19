@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy groth16_verifier and shadow_ascension to Stellar Testnet, then init policy.
+# Deploy groth16_verifier and cosmic_coder to Stellar Testnet, then init policy.
 # Requires: stellar CLI, SOURCE_ACCOUNT with XLM on testnet, WASM built (rustup).
 #
 # Usage:
@@ -39,7 +39,7 @@ if [ -z "$SOURCE_ACCOUNT" ]; then
   echo "stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network testnet -- init --game_hub $GAME_HUB"
   echo "stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network testnet -- set_verifier --verifier <VERIFIER_ID>"
   echo ""
-  echo "Then add to .env: VITE_SHADOW_ASCENSION_CONTRACT_ID=<POLICY_ID>"
+  echo "Then add to .env: VITE_COSMIC_CODER_CONTRACT_ID=<POLICY_ID>"
   exit 0
 fi
 
@@ -61,9 +61,9 @@ stellar contract invoke --id "$POLICY_ID" --source-account "$SOURCE_ACCOUNT" --n
 
 echo ""
 echo "Done. Add to .env:"
-echo "  VITE_SHADOW_ASCENSION_CONTRACT_ID=$POLICY_ID"
+echo "  VITE_COSMIC_CODER_CONTRACT_ID=$POLICY_ID"
 echo ""
 echo "Add to GitHub repo Secrets (Settings → Secrets and variables → Actions):"
-echo "  VITE_SHADOW_ASCENSION_CONTRACT_ID = $POLICY_ID"
+echo "  VITE_COSMIC_CODER_CONTRACT_ID = $POLICY_ID"
 echo "  VITE_ZK_PROVER_URL = <your prover URL after deploying to Render/Railway>"
 echo ""

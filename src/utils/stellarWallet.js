@@ -96,6 +96,19 @@ export function shortAddress(address, chars = 6) {
 }
 
 /**
+ * Short wallet format for leaderboard (first 4 + last 4 chars).
+ * Converts 0x1234567890ABCDEF1234 to 0x1234...1234
+ * @param {string} address - Full wallet address
+ * @returns {string} Shortened address
+ */
+export function shortWalletForLeaderboard(address) {
+  if (!address || address.length <= 10) return address || '';
+  const prefix = address.slice(0, 6); // includes 0x + 4 chars
+  const suffix = address.slice(-4);
+  return `${prefix}...${suffix}`;
+}
+
+/**
  * Sign a transaction XDR (for Soroban / Game Hub).
  * @param {string} xdr - base64 transaction XDR
  * @param {string} [networkPassphrase] - default testnet

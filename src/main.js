@@ -212,11 +212,11 @@ window.VIBE_LEGENDARIES = {
 // Initialize legendaries (empty until wallet connects and loads from API)
 window.VIBE_LEGENDARIES.loadDefaults();
 
-// Character selector - VibeCoder (default), Destroyer, Swordsman
+// Character selector - VibeCoder (default), Destroyer, StormMan
 window.VIBE_CHARACTERS = {
   vibecoder: { name: 'VibeCoder', textureKey: 'player', animPrefix: 'player' },
   destroyer: { name: 'Destroyer', textureKey: 'player-destroyer', animPrefix: 'player-destroyer' },
-  swordsman: { name: 'Swordsman', textureKey: 'player-swordsman', animPrefix: 'player-swordsman' }
+  swordsman: { name: 'StormMan', textureKey: 'player-swordsman', animPrefix: 'player-swordsman' }
 };
 // Selected character id (set by wallet progress or default)
 window.VIBE_SELECTED_CHARACTER = 'vibecoder';

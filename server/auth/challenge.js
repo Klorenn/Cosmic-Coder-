@@ -62,13 +62,33 @@ function buildChallengeTx(serverKeypair, clientAccountID, homeDomain, timeout, n
  * Response: { transaction: "<base64 XDR>", network_passphrase: "..." }.
  */
 export function buildChallenge(accountParam) {
+  console.log('[SEP-10] === Building challenge ===');
+  
   const clientAccountID = String(accountParam || '').trim();
+  console.log('[SEP-10] Client account:', clientAccountID);
+  
   if (!clientAccountID || (clientAccountID[0] !== 'G' && clientAccountID[0] !== 'M')) {
     throw new Error('account must be a Stellar public key (G...) or muxed account (M...)');
   }
 
-  const serverSecret = getServerSecretKey();
+  let serverSecret;
+  try {
+    serverSecret = getServerSecretKey();
+    console.log('[SEP-10] Server secret: OK');
+  } catch (err) {
+    console.error('[SEP-10] Server secret ERROR:', err.message);
+    throw err;
+  }
+  
   const serverKeypair = Keypair.fromSecret(serverSecret);
+  console.log('[SEP-10] Server public key:', serverKeypair.publicKey());
+
+  console.log('[SEP-10] Config:', {
+    homeDomain: SEP10_HOME_DOMAIN,
+    webAuthDomain: SEP10_WEB_AUTH_DOMAIN,
+    networkPassphrase: SEP10_NETWORK_PASSPHRASE,
+    timeout: SEP10_CHALLENGE_TIMEOUT
+  });
 
   const transactionXdr = buildChallengeTx(
     serverKeypair,
@@ -78,6 +98,9 @@ export function buildChallenge(accountParam) {
     SEP10_NETWORK_PASSPHRASE,
     SEP10_WEB_AUTH_DOMAIN
   );
+
+  console.log('[SEP-10] Challenge XDR length:', transactionXdr.length);
+  console.log('[SEP-10] === Challenge built OK ===');
 
   return {
     transaction: transactionXdr,

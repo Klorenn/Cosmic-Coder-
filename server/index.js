@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { Keypair } from '@stellar/stellar-base';
 import { generateProof } from './zkProve.js';
+import { generateSkillProof } from './skillProof.js';
 import authRoutes from './routes/auth.js';
 import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_WEB_AUTH_DOMAIN } from './config/sep10.js';
 
@@ -212,6 +213,28 @@ app.post('/zk/prove', (req, res) => {
   } catch (err) {
     console.error('ZK prove error:', err.message);
     res.status(500).json({ error: err.message || 'Proof generation failed' });
+  }
+});
+
+// --- Skill Proof endpoint for weapon unlock ---
+app.post('/skill-proof', (req, res) => {
+  const { score, wallet, nonce, threshold } = req.body || {};
+  if (score == null || !wallet || nonce == null || threshold == null) {
+    return res.status(400).json({
+      error: 'Missing required fields: score, wallet, nonce, threshold.'
+    });
+  }
+  try {
+    const payload = generateSkillProof({
+      score: Number(score),
+      wallet: String(wallet),
+      nonce: Number(nonce),
+      threshold: Number(threshold)
+    });
+    res.status(200).json(payload);
+  } catch (err) {
+    console.error('Skill proof error:', err.message);
+    res.status(500).json({ error: err.message || 'Skill proof generation failed' });
   }
 });
 

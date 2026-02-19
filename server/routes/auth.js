@@ -12,9 +12,51 @@ import { buildChallenge } from '../auth/challenge.js';
 import { verifyAndIssueToken } from '../auth/token.js';
 import { jwtAuth } from '../middleware/jwtAuth.js';
 import { findUserByPublicKey, updateUsername } from '../db/users.js';
-import { isSep10Configured } from '../config/sep10.js';
+import { isSep10Configured, SEP10_HOME_DOMAIN, SEP10_WEB_AUTH_DOMAIN, SEP10_NETWORK_PASSPHRASE, getServerSecretKey } from '../config/sep10.js';
+import { getSupabase, USERS_TABLE } from '../db/supabase.js';
+import { Keypair } from '@stellar/stellar-base';
 
 const router = Router();
+
+// --- Diagnostic endpoint: GET /auth/debug (check SEP-10 config without secrets) ---
+router.get('/debug', async (req, res) => {
+  const config = {
+    sep10Configured: isSep10Configured(),
+    homeDomain: SEP10_HOME_DOMAIN,
+    webAuthDomain: SEP10_WEB_AUTH_DOMAIN,
+    networkPassphrase: SEP10_NETWORK_PASSPHRASE,
+    serverKeyConfigured: false,
+    serverPublicKey: null,
+    jwtSecretConfigured: !!(process.env.JWT_SECRET || process.env.SECRET_SEP10_JWT_SECRET),
+    supabaseConfigured: !!getSupabase(),
+    supabaseTable: USERS_TABLE
+  };
+  
+  try {
+    const secret = getServerSecretKey();
+    config.serverKeyConfigured = true;
+    config.serverPublicKey = Keypair.fromSecret(secret).publicKey();
+  } catch (e) {
+    config.serverKeyError = e.message;
+  }
+  
+  // Test Supabase connection
+  if (getSupabase()) {
+    try {
+      const { count, error } = await getSupabase()
+        .from(USERS_TABLE)
+        .select('*', { count: 'exact', head: true });
+      config.supabaseConnected = !error;
+      config.supabaseUserCount = count;
+      if (error) config.supabaseError = error.message;
+    } catch (e) {
+      config.supabaseConnected = false;
+      config.supabaseError = e.message;
+    }
+  }
+  
+  return res.status(200).json(config);
+});
 
 function handleGetChallenge(req, res) {
   if (!isSep10Configured()) {

@@ -27,11 +27,34 @@ if (typeof readChallengeTx !== 'function' || typeof verifyChallengeTxSigners !==
  * Verify signed challenge per SEP-10, then issue JWT and upsert user.
  */
 export async function verifyAndIssueToken(signedChallengeXdr) {
-  const serverSecret = getServerSecretKey();
+  console.log('[SEP-10] === Starting token verification ===');
+  
+  let serverSecret;
+  try {
+    serverSecret = getServerSecretKey();
+    console.log('[SEP-10] Server secret key: OK (starts with S)');
+  } catch (err) {
+    console.error('[SEP-10] Server secret key ERROR:', err.message);
+    throw err;
+  }
+  
   const serverKeypair = Keypair.fromSecret(serverSecret);
   const serverAccountID = serverKeypair.publicKey();
+  console.log('[SEP-10] Server account ID:', serverAccountID);
 
-  if (!JWT_SECRET) throw new Error('JWT_SECRET is not configured');
+  if (!JWT_SECRET) {
+    console.error('[SEP-10] JWT_SECRET is not configured!');
+    throw new Error('JWT_SECRET is not configured');
+  }
+  console.log('[SEP-10] JWT_SECRET: OK');
+
+  console.log('[SEP-10] Config:', {
+    networkPassphrase: SEP10_NETWORK_PASSPHRASE,
+    homeDomain: SEP10_HOME_DOMAIN,
+    webAuthDomain: SEP10_WEB_AUTH_DOMAIN
+  });
+
+  console.log('[SEP-10] Signed XDR length:', signedChallengeXdr?.length || 0);
 
   let parsed;
   try {
@@ -42,7 +65,10 @@ export async function verifyAndIssueToken(signedChallengeXdr) {
       SEP10_HOME_DOMAIN,
       SEP10_WEB_AUTH_DOMAIN
     );
+    console.log('[SEP-10] readChallengeTx: SUCCESS');
+    console.log('[SEP-10] Client account:', parsed.clientAccountID);
   } catch (err) {
+    console.error('[SEP-10] readChallengeTx FAILED:', err.message);
     throw new Error(`Invalid challenge: ${err.message}`);
   }
 
@@ -58,7 +84,9 @@ export async function verifyAndIssueToken(signedChallengeXdr) {
       SEP10_HOME_DOMAIN,
       SEP10_WEB_AUTH_DOMAIN
     );
+    console.log('[SEP-10] verifyChallengeTxSigners: SUCCESS');
   } catch (err) {
+    console.error('[SEP-10] verifyChallengeTxSigners FAILED:', err.message);
     throw new Error(`Signature verification failed: ${err.message}`);
   }
 
@@ -70,10 +98,26 @@ export async function verifyAndIssueToken(signedChallengeXdr) {
     iss: `https://${SEP10_HOME_DOMAIN}`
   };
 
+  console.log('[SEP-10] Generating JWT for:', clientAccountID);
   const token = jwt.sign(payload, JWT_SECRET, { algorithm: 'HS256' });
+  console.log('[SEP-10] JWT generated, length:', token.length);
 
-  await upsertUser(clientAccountID);
-  await setUserToken(clientAccountID, token, new Date((now + JWT_EXPIRY_SEC) * 1000));
+  try {
+    console.log('[SEP-10] Upserting user to database...');
+    await upsertUser(clientAccountID);
+    console.log('[SEP-10] User upserted OK');
+  } catch (err) {
+    console.error('[SEP-10] upsertUser FAILED:', err.message);
+  }
 
+  try {
+    console.log('[SEP-10] Saving JWT to database...');
+    await setUserToken(clientAccountID, token, new Date((now + JWT_EXPIRY_SEC) * 1000));
+    console.log('[SEP-10] JWT saved to database OK');
+  } catch (err) {
+    console.error('[SEP-10] setUserToken FAILED:', err.message);
+  }
+
+  console.log('[SEP-10] === Token verification COMPLETE ===');
   return { token, public_key: clientAccountID };
 }
