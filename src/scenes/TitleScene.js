@@ -612,33 +612,43 @@ export default class TitleScene extends Phaser.Scene {
     const bg = this.add.rectangle(0, 0, w, h, 0x0a0a12, 0.45).setOrigin(0).setDepth(100).setInteractive();
     // Glass panel: semi-transparent, cyan border
     const panel = this.add.rectangle(x, y, panelW, panelH, 0x0d1b2a, 0.88).setDepth(101).setStrokeStyle(2, 0x00ffff, 0.7);
+    // Title: high-contrast white/cyan so "Choose your username" is easy to read
     const title = this.add.text(x, y - panelH / 2 + 22, t('auth.choose_username') || 'Choose your username', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 16,
-      color: '#00ffff'
-    }).setOrigin(0.5).setDepth(102);
+      fontSize: 18,
+      color: '#e0f7ff'
+    }).setOrigin(0.5).setDepth(102).setShadow(0, 1, '#000000', 4).setShadow(0, 0, '#0a0a12', 2);
     const inputEl = document.createElement('input');
     inputEl.type = 'text';
     inputEl.placeholder = t('auth.username_placeholder') || 'Username';
     inputEl.maxLength = 64;
-    inputEl.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:' + (panelW - 40) + 'px;padding:8px;font-size:14px;background:rgba(13,27,42,0.9);color:#fff;border:1px solid rgba(0,255,255,0.5);border-radius:6px;z-index:9999;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
+    inputEl.setAttribute('autocomplete', 'username');
+    inputEl.id = 'vibe-username-modal-input';
+    // Ensure placeholder is visible (light gray on dark background)
+    if (!document.getElementById('vibe-username-modal-styles')) {
+      const styleEl = document.createElement('style');
+      styleEl.id = 'vibe-username-modal-styles';
+      styleEl.textContent = '#vibe-username-modal-input::placeholder { color: #a0b8c8; opacity: 1; }';
+      document.head.appendChild(styleEl);
+    }
+    const inputStyles = [
+      'position:fixed', 'left:50%', 'top:50%', 'transform:translate(-50%,-50%)',
+      'width:' + (panelW - 40) + 'px', 'padding:10px 12px', 'font-size:16px',
+      'background:rgba(13,27,42,0.95)', 'color:#ffffff',
+      'border:2px solid rgba(0,255,255,0.8)', 'border-radius:8px',
+      'z-index:10000', 'outline:none', 'box-sizing:border-box',
+      'backdrop-filter:blur(8px)', '-webkit-backdrop-filter:blur(8px)',
+      'font-family:"Segoe UI",system-ui,sans-serif'
+    ].join(';');
+    inputEl.style.cssText = inputStyles;
+    // Placeholder contrast (via JS for browsers that support it)
+    try { inputEl.setAttribute('data-placeholder', inputEl.placeholder); } catch (_) {}
     this.usernameInputEl = inputEl;
     this.usernameInputEl.value = '';
     authApi.getMe().then(me => { if (me && me.username && this.usernameInputEl) this.usernameInputEl.value = me.username; }).catch(() => {});
     document.body.appendChild(inputEl);
-    const inputBounds = this.add.rectangle(x, y, panelW - 20, 36, 0x000000, 0).setDepth(101).setInteractive();
-    const saveBtn = this.add.text(x, y + panelH / 2 - 28, t('auth.save_username') || 'Save', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 14,
-      color: '#00ff88'
-    }).setOrigin(0.5).setDepth(102).setInteractive({ useHandCursor: true });
-    const closeModal = () => {
-      if (inputEl.parentNode) inputEl.parentNode.removeChild(inputEl);
-      this.usernameInputEl = null;
-      [bg, panel, title, inputBounds, saveBtn].forEach(o => o.destroy());
-      this.usernameModal = null;
-    };
-    saveBtn.on('pointerdown', async () => {
+
+    const doSave = async () => {
       const name = (inputEl.value || '').trim().slice(0, 64);
       if (!name) return;
       try {
@@ -648,9 +658,44 @@ export default class TitleScene extends Phaser.Scene {
       } catch (e) {
         if (this.sayQuote) this.sayQuote(e.message || 'Failed to save');
       }
-    });
+    };
+
+    const closeModal = () => {
+      inputEl.removeEventListener('keydown', onInputKeydown);
+      if (inputEl.parentNode) inputEl.parentNode.removeChild(inputEl);
+      this.usernameInputEl = null;
+      [bg, panel, title, inputBounds, saveBtn].forEach(o => o.destroy());
+      this.usernameModal = null;
+    };
+
+    const onInputKeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        e.stopPropagation();
+        doSave();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeModal();
+      }
+    };
+    inputEl.addEventListener('keydown', onInputKeydown);
+
+    const inputBounds = this.add.rectangle(x, y, panelW - 20, 40, 0x000000, 0).setDepth(101).setInteractive();
+    const saveBtn = this.add.text(x, y + panelH / 2 - 28, t('auth.save_username') || 'Save', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: 15,
+      color: '#00ff88'
+    }).setOrigin(0.5).setDepth(102).setInteractive({ useHandCursor: true });
+    saveBtn.on('pointerdown', doSave);
     bg.on('pointerdown', (ptr, localX, localY, ev) => { ev.stopPropagation(); });
-    inputBounds.on('pointerdown', () => inputEl.focus());
+    inputBounds.on('pointerdown', () => {
+      inputEl.focus();
+    });
+    // Focus the input so the "square" is selected and Enter goes to Save, not to menu
+    this.time.delayedCall(100, () => {
+      if (inputEl.parentNode && this.usernameModal) inputEl.focus();
+    });
     this.usernameModal = { bg, panel, title, inputEl, inputBounds, saveBtn, closeModal };
     this.events.once('shutdown', closeModal);
   }
@@ -1279,7 +1324,7 @@ export default class TitleScene extends Phaser.Scene {
       loop: true,
       callback: () => {
         // No spamear mientras hay menús abiertos o input de nombre
-        if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.nameInputOpen) return;
+        if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.nameInputOpen || this.usernameModal) return;
         const lang = window.VIBE_SETTINGS?.language || 'en';
         const pool = lang === 'es' ? this.gitQuotesEs : this.gitQuotesEn;
         if (!pool || pool.length === 0) return;
@@ -1780,7 +1825,7 @@ export default class TitleScene extends Phaser.Scene {
   setupInput() {
     // Navegación: flechas (ArrowUp/Down) y WASD — handler genérico para máxima compatibilidad
     this.onKeyDownHandler = (event) => {
-      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen) return;
+      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal) return;
       const k = event.key?.toLowerCase?.() || event.key;
       if (k === 'arrowup' || k === 'up' || k === 'w') this.moveSelection(-1);
       else if (k === 'arrowdown' || k === 'down' || k === 's') this.moveSelection(1);
@@ -1803,7 +1848,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   moveSelection(direction) {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal) return;
     Audio.initAudio();
 
     this.selectedOption += direction;
@@ -1870,7 +1915,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   selectOption() {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal) return;
     Audio.initAudio();
 
     const currentText = this.menuTexts?.[this.selectedOption];
@@ -2573,7 +2618,8 @@ export default class TitleScene extends Phaser.Scene {
 
   showNameInput(isFirstTime = false, callback = null) {
     this.nameInputOpen = true;
-    let currentName = '';
+    // Pre-fill: from backend username if logged in, else from local settings
+    let currentName = (window.VIBE_SETTINGS && window.VIBE_SETTINGS.playerName) ? window.VIBE_SETTINGS.playerName : '';
     const maxLength = 20;
 
     const cx = this.scale.width / 2;
@@ -2692,13 +2738,20 @@ export default class TitleScene extends Phaser.Scene {
     };
 
     const confirmName = () => {
-      window.VIBE_SETTINGS.setPlayerName(currentName.trim());
+      const name = currentName.trim();
+      window.VIBE_SETTINGS.setPlayerName(name);
+      // If user is logged in (Stellar wallet), update username in backend so it persists and shows everywhere
+      if (authApi.getStoredToken()) {
+        authApi.updateMeUsername(name.slice(0, 64)).then(() => {
+          if (this.updateWalletButton) this.updateWalletButton();
+        }).catch(() => {});
+      }
       closeInput();
-      if (callback) callback(currentName.trim());
+      if (callback) callback(name);
 
       // Show welcome message
       if (isFirstTime && this.idlePlayer) {
-        this.sayQuote(`Welcome,\n${currentName.trim()}!`);
+        this.sayQuote(`Welcome,\n${name}!`);
       }
     };
 
@@ -2721,6 +2774,15 @@ export default class TitleScene extends Phaser.Scene {
     window.addEventListener('keydown', keyHandler);
 
     updateNameDisplay();
+    // When opened from Settings, pre-fill with backend username if logged in
+    if (!isFirstTime && authApi.getStoredToken()) {
+      authApi.getMe().then(me => {
+        if (me && me.username) {
+          currentName = me.username.slice(0, maxLength);
+          updateNameDisplay();
+        }
+      }).catch(() => {});
+    }
   }
 
   showUpgrades() {
