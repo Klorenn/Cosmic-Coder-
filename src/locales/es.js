@@ -65,6 +65,11 @@ export default {
     zk_cta_hint: 'Modo competitivo con prueba criptográfica verificable on-chain.',
     arrows_esc: '[ IZQ/DER: Cambiar personaje | ESC: Cerrar ]'
   },
+  auth: {
+    choose_username: 'Elige tu nombre de usuario',
+    username_placeholder: 'Nombre de usuario',
+    save_username: 'Guardar'
+  },
   footer: {
     high_wave: 'OLA MÁX',
     bits: 'BITS',
@@ -111,7 +116,8 @@ export default {
     lang_en: 'English',
     lang_es: 'Español',
     on: '[SÍ]',
-    off: '[NO]'
+    off: '[NO]',
+    CHANGE_USERNAME: 'NOMBRE DE CUENTA'
   },
   name_input: {
     enter_name: 'ESCRIBE TU NOMBRE',

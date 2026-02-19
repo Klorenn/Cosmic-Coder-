@@ -275,12 +275,19 @@ export default class ArenaScene extends Phaser.Scene {
   /**
    * Phaser init method - receives data passed from scene.start()
    * @param {object} data - Data from scene transition
+   * data.gameMode: 'zk_ranked' | 'casual'
+   * data.continueGame: boolean (always false when only Start Game exists)
    */
   init(data) {
     this.isContinuedGame = data?.continueGame || false;
+    this.gameMode = data?.gameMode === 'zk_ranked' ? 'zk_ranked' : 'casual';
+    this.zkProofSubmitted = false;
   }
 
   create() {
+    console.log('[Cosmic Coder] Game start:', this.isContinuedGame ? 'continued' : 'new', 'mode:', this.gameMode === 'zk_ranked' ? 'ZK Ranked' : 'Casual');
+    if (typeof this.zkProofSubmitted === 'undefined') this.zkProofSubmitted = false;
+
     // Gameplay music mode — cambiar música del menú a gameplay al entrar
     Audio.setMusicMode('gameplay');
     if (window.VIBE_SETTINGS?.musicEnabled) {
@@ -461,9 +468,23 @@ export default class ArenaScene extends Phaser.Scene {
     console.log('Arena ready! WASD to move, auto-attack enabled. M for music. ESC/P to pause.');
   }
 
+  /**
+   * Arena background index by wave (reference: Fondos arena — Deep Space 1–3, Neon Orbit 4–6, etc.)
+   * Returns 0–5 for arena-bg-0 … arena-bg-5. Waves 13–15 use Solar Distortion (3).
+   */
+  getArenaBgIndex(waveNumber) {
+    if (waveNumber <= 3) return 0;   // Deep Space (1–3)
+    if (waveNumber <= 6) return 1;   // Neon Orbit (4–6)
+    if (waveNumber <= 9) return 2;   // Quantum Rift (7–9)
+    if (waveNumber <= 15) return 3;  // Solar Distortion (10–12), 13–15 same
+    if (waveNumber <= 18) return 4;  // Singularity Field (16–18)
+    return 5;                         // Void Collapse (19+)
+  }
+
   createBackground() {
     // Clear existing background elements
     if (this.bgTileSprite) this.bgTileSprite.destroy();
+    if (this.bgImageSprite) this.bgImageSprite.destroy();
     if (this.bgGraphics) this.bgGraphics.destroy();
     if (this.bgParticles) {
       this.bgParticles.forEach(p => p.destroy());
@@ -473,16 +494,24 @@ export default class ArenaScene extends Phaser.Scene {
     }
     this.bgParticles = [];
     this.dataStreams = [];
+    this.bgImageSprite = null;
 
     const stage = this.stages[this.currentStage];
+    const arenaBgIndex = this.getArenaBgIndex(this.waveNumber);
+    const arenaBgKey = `arena-bg-${arenaBgIndex}`;
 
-    // Generate tileable background texture for this stage
-    const texKey = this.generateBackgroundTexture(stage);
-
-    // Create TileSprite that covers the entire world
-    this.bgTileSprite = this.add.tileSprite(0, 0, this.worldWidth, this.worldHeight, texKey);
-    this.bgTileSprite.setOrigin(0, 0);
-    this.bgTileSprite.setDepth(-10);
+    if (this.textures.exists(arenaBgKey)) {
+      // Use preloaded cosmic/cyber space image — full world, centered, scaled to cover
+      this.bgImageSprite = this.add.image(this.worldWidth / 2, this.worldHeight / 2, arenaBgKey);
+      this.bgImageSprite.setDisplaySize(this.worldWidth, this.worldHeight);
+      this.bgImageSprite.setDepth(-10);
+    } else {
+      // Fallback: procedural tileable texture
+      const texKey = this.generateBackgroundTexture(stage);
+      this.bgTileSprite = this.add.tileSprite(0, 0, this.worldWidth, this.worldHeight, texKey);
+      this.bgTileSprite.setOrigin(0, 0);
+      this.bgTileSprite.setDepth(-10);
+    }
 
     // === ANIMATED FLOATING PARTICLES (spread across larger world) ===
     const particleCount = 40 + Math.floor(stage.glowIntensity * 50); // More for larger world
@@ -1548,6 +1577,11 @@ export default class ArenaScene extends Phaser.Scene {
 
       this.waveNumber++;
       this.waveText.setText(`WAVE ${this.waveNumber}`);
+
+      // Refresh arena background when crossing wave ranges (1–3, 4–6, 7–9, 10–12, 16–18, 19+)
+      const prevBgIndex = this.getArenaBgIndex(this.waveNumber - 1);
+      const nextBgIndex = this.getArenaBgIndex(this.waveNumber);
+      if (nextBgIndex !== prevBgIndex) this.createBackground();
 
       // Wave complete bonus XP (more for boss waves)
       const wassBossWave = (this.waveNumber - 1) % 20 === 0;
@@ -3929,6 +3963,8 @@ export default class ArenaScene extends Phaser.Scene {
     const state = window.VIBE_CODER;
     const settings = window.VIBE_SETTINGS;
 
+    console.log('[Cosmic Coder] Game over: wave=' + this.waveNumber + ' score=' + Math.floor(state.totalXP));
+
     // Save high score before going to menu
     const isNewHighWave = this.waveNumber > this.highWave;
     const isNewHighScore = state.totalXP > this.highScore;
@@ -4029,8 +4065,20 @@ export default class ArenaScene extends Phaser.Scene {
       }).setOrigin(0.5).setScrollFactor(0).setDepth(1000);
     }
 
-    // ZK proof generation can take 20–60+ s; casual submit ~5–15 s
-    const submitTimeoutMs = gameClient.isZkProverConfigured() ? 90000 : 25000;
+    const score = Math.floor(state.totalXP);
+    const wave = this.waveNumber;
+
+    const runZkProof =
+      this.gameMode === 'zk_ranked' &&
+      !this.isContinuedGame &&
+      score > 0 &&
+      !this.zkProofSubmitted &&
+      !!this.runSeed &&
+      gameClient.isZkProverConfigured() &&
+      gameClient.isContractConfigured() &&
+      validateGameRules(wave, state.totalXP).valid;
+
+    const submitTimeoutMs = runZkProof ? 90000 : 25000;
     const submitPromise = new Promise((resolve) => {
       const timeout = this.time.delayedCall(submitTimeoutMs, () => resolve('timeout'));
       if (!gameClient.isContractConfigured()) {
@@ -4038,25 +4086,24 @@ export default class ArenaScene extends Phaser.Scene {
         resolve(null);
         return;
       }
-      const { valid } = validateGameRules(this.waveNumber, state.totalXP);
-      if (!valid) {
+      if (!validateGameRules(wave, state.totalXP).valid) {
         timeout.destroy();
         resolve(null);
         return;
       }
       stellarWallet.getAddress().then(async (addr) => {
-        if (!addr) { resolve(null); return; }
+        if (!addr) { timeout.destroy(); resolve(null); return; }
         const sign = (xdr) => stellarWallet.signTransaction(xdr);
-        const score = Math.floor(state.totalXP);
-        const wave = this.waveNumber;
-        const triedZk = gameClient.isZkProverConfigured() && this.runSeed && (!this.isContinuedGame || this.runSeedRestoredFromSave);
         try {
-          if (triedZk) {
+          if (runZkProof) {
+            console.log('[Cosmic Coder] ZK proof triggered');
+            this.zkProofSubmitted = true;
             const run_hash_hex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
             const nonce = Date.now();
             const season_id = 1;
             await gameClient.submitZkFromProver(addr, sign, undefined, { run_hash_hex, score, wave, nonce, season_id });
             timeout.destroy();
+            console.log('[Cosmic Coder] ZK proof success');
             resolve('zk');
           } else {
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
@@ -4065,11 +4112,12 @@ export default class ArenaScene extends Phaser.Scene {
           }
         } catch (e) {
           const firstError = e?.message || String(e);
+          if (runZkProof) console.log('[Cosmic Coder] ZK proof failure:', firstError);
           console.warn('Submit failed:', firstError, e);
           try {
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
             timeout.destroy();
-            resolve(triedZk ? { status: 'zk_failed', error: firstError } : 'casual');
+            resolve(runZkProof ? { status: 'zk_failed', error: firstError } : 'casual');
           } catch (e2) {
             timeout.destroy();
             resolve({ status: 'failed', error: firstError + (e2?.message ? '; ' + e2.message : '') });

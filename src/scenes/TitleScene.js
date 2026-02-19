@@ -7,11 +7,20 @@ import { isConnected } from '../utils/socket.js';
 import { t, setLanguage } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
 import { loadProgressForWallet, resetProgressForDisconnect, progressStore, cycleCharacter, selectCharacter } from '../utils/walletProgressService.js';
+import * as authApi from '../utils/authApi.js';
 import * as gameClient from '../contracts/gameClient.js';
 import { getUIScale, getCameraZoom, anchorTopLeft, anchorTopRight, anchorBottomLeft, anchorBottomRight, anchorBottomCenter } from '../utils/layout.js';
 
 // Debug flag for TitleScene (FPS overlay, selection logs, etc.)
 const DEBUG = false;
+
+// —— Title menu UI state (deterministic, single source of truth) ———
+const MENU_SELECTED_SCALE = 1.05;
+const MENU_SELECTED_ALPHA = 1;
+const MENU_UNSELECTED_ALPHA = 0.7;
+const MENU_UNSELECTED_SCALE = 1;
+const MENU_ITEM_COLOR = '#00ffff';
+const MENU_MAX_WIDTH_PERCENT = 0.6;
 
 export default class TitleScene extends Phaser.Scene {
   constructor() {
@@ -58,9 +67,16 @@ export default class TitleScene extends Phaser.Scene {
     if (stellarWallet.isConnected()) {
       stellarWallet.getAddress().then((addr) => {
         if (addr) return loadProgressForWallet(addr);
-      }).then(() => {
+      }).then(async () => {
         this.updateContinueMenuOption?.();
         this.updateIdleCharacter?.();
+        // If wallet connected but user has no username in DB, show name modal (transparent overlay)
+        try {
+          const me = await authApi.getMe();
+          if (me && (me.username == null || me.username === '')) {
+            this.time.delayedCall(300, () => this.showUsernameModal?.());
+          }
+        } catch (_) {}
       });
     }
 
@@ -315,42 +331,45 @@ export default class TitleScene extends Phaser.Scene {
     this.menuMeta = [];
     this.menuPrimaryBg = null;
     this.zkHintText = null;
+    this.ctaGlowTween = null;
     if (!this.uiLayout) return;
 
     const uiScale = getUIScale(this);
-    // Alineado justo bajo la línea decorativa (titleLine en y=-135)
+    const w = this.scale.width || 800;
+    const centerX = w / 2;
+    const playerX = Math.max(120, Math.floor(w * 0.18));
+    const menuMaxWidth = Math.min(w * MENU_MAX_WIDTH_PERCENT, Math.max(200, 2 * (centerX - playerX - 80)));
+
     const ctaY = -100;
     const optionsStartY = -18;
     const optionSpacing = 32;
-
-    // Keep values for idle character logic (without changing behavior flow)
     this.menuStartY = optionsStartY;
     this.menuSpacing = optionSpacing;
 
     let secondaryRow = 0;
     let maxY = Number.NEGATIVE_INFINITY;
-    let maxHalfWidth = 0;
 
     this.menuOptions.forEach((option, index) => {
       const isPrimary = option === 'START_GAME';
       const label = t('menu.' + option);
-
       const y = isPrimary ? ctaY : optionsStartY + secondaryRow++ * optionSpacing;
       const isSelected = index === this.selectedOption;
+
+      const scale = isSelected ? MENU_SELECTED_SCALE : MENU_UNSELECTED_SCALE;
+      const alpha = isSelected ? MENU_SELECTED_ALPHA : MENU_UNSELECTED_ALPHA;
 
       const text = this.add.text(0, y, label, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: isPrimary ? '48px' : '28px',
-        color: '#00ffff',
-        fontStyle: isPrimary ? 'bold' : (isSelected ? 'bold' : 'normal')
-      }).setOrigin(0.5).setDepth(10).setAlpha(isSelected ? 1 : 0.7);
+        color: MENU_ITEM_COLOR,
+        fontStyle: 'bold',
+        wordWrap: { width: menuMaxWidth - 40 }
+      }).setOrigin(0.5).setDepth(10).setAlpha(alpha).setScale(scale);
 
-      text.setScale(isPrimary ? 1 : (isSelected ? 1.05 : 1));
       this.uiLayout.add(text);
       this.menuTexts.push(text);
       this.menuMeta.push({ option, isPrimary, y });
       maxY = Math.max(maxY, y);
-      maxHalfWidth = Math.max(maxHalfWidth, text.width * 0.5);
 
       if (isPrimary) {
         this._primaryBounds = text.getBounds();
@@ -358,18 +377,17 @@ export default class TitleScene extends Phaser.Scene {
       }
     });
 
-    // Recuadro CTA (START GAME): incluye hint ZK dentro si aplica
     const primaryIndex = this.menuOptions.indexOf('START_GAME');
     const primaryText = primaryIndex >= 0 ? this.menuTexts[primaryIndex] : null;
     if (primaryText && this._primaryBounds) {
       const bounds = this._primaryBounds;
-      const buttonW = Math.min(this.scale.width * 0.6, bounds.width + 80);
+      const buttonW = Math.min(menuMaxWidth, bounds.width + 80);
       const ctaY = this._primaryY;
 
       if (gameClient.isZkProverConfigured()) {
         this.zkHintText = this.add.text(0, 0, t('prompt.zk_cta_hint'), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '16px',
+          fontSize: `${Math.max(14, 16 * uiScale)}px`,
           color: '#ffffff',
           align: 'center',
           wordWrap: { width: Math.max(200, buttonW - 48) }
@@ -435,6 +453,8 @@ export default class TitleScene extends Phaser.Scene {
       yoyo: true,
       repeat: -1
     });
+
+    this.updateMenuVisuals();
   }
 
   createFooter() {
@@ -479,16 +499,28 @@ export default class TitleScene extends Phaser.Scene {
     this.walletBtn.on('pointerdown', async () => {
       if (stellarWallet.isConnected()) {
         stellarWallet.disconnect();
+        authApi.clearStoredToken();
         resetProgressForDisconnect();
         this.updateWalletButton();
         this.updateConnectionBadge();
         this.updateContinueMenuOption();
+        this.hideUsernameModal();
       } else {
         this.walletBtn.setText('...');
         const addr = await stellarWallet.connect();
         if (addr) {
           await loadProgressForWallet(addr);
           this.updateContinueMenuOption();
+          // SEP-10: authenticate with backend (challenge → sign with Freighter → token). Session is server-verified.
+          try {
+            await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase));
+            const me = await authApi.getMe();
+            if (me && (me.username == null || me.username === '')) {
+              this.showUsernameModal();
+            }
+          } catch (_) {
+            // Backend may not have SEP-10 configured; wallet connect and progress still work
+          }
         }
         this.updateWalletButton();
         this.updateConnectionBadge();
@@ -554,10 +586,76 @@ export default class TitleScene extends Phaser.Scene {
     if (!this.walletBtn || !this.walletBtn.scene) return;
     const addr = await stellarWallet.getAddress();
     if (addr) {
-      this.walletBtn.setText(stellarWallet.shortAddress(addr) + ' | ' + t('footer.wallet_disconnect'));
+      let label = stellarWallet.shortAddress(addr);
+      try {
+        const me = await authApi.getMe();
+        if (me && me.username) label = me.username + ' (' + label + ')';
+      } catch (_) {}
+      this.walletBtn.setText(label + ' | ' + t('footer.wallet_disconnect'));
     } else {
       this.walletBtn.setText(t('footer.wallet_connect'));
     }
+  }
+
+  showUsernameModal() {
+    if (this.usernameModal) return;
+    this.hideUsernameModal();
+    const w = this.cameras.main.width;
+    const h = this.cameras.main.height;
+    const panelW = Math.min(320, w * 0.85);
+    const panelH = 140;
+    const x = w / 2;
+    const y = h / 2;
+    // Glass overlay: transparent backdrop so game is visible underneath
+    const bg = this.add.rectangle(0, 0, w, h, 0x0a0a12, 0.45).setOrigin(0).setDepth(100).setInteractive();
+    // Glass panel: semi-transparent, cyan border
+    const panel = this.add.rectangle(x, y, panelW, panelH, 0x0d1b2a, 0.88).setDepth(101).setStrokeStyle(2, 0x00ffff, 0.7);
+    const title = this.add.text(x, y - panelH / 2 + 22, t('auth.choose_username') || 'Choose your username', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: 16,
+      color: '#00ffff'
+    }).setOrigin(0.5).setDepth(102);
+    const inputEl = document.createElement('input');
+    inputEl.type = 'text';
+    inputEl.placeholder = t('auth.username_placeholder') || 'Username';
+    inputEl.maxLength = 64;
+    inputEl.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);width:' + (panelW - 40) + 'px;padding:8px;font-size:14px;background:rgba(13,27,42,0.9);color:#fff;border:1px solid rgba(0,255,255,0.5);border-radius:6px;z-index:9999;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);';
+    this.usernameInputEl = inputEl;
+    this.usernameInputEl.value = '';
+    authApi.getMe().then(me => { if (me && me.username && this.usernameInputEl) this.usernameInputEl.value = me.username; }).catch(() => {});
+    document.body.appendChild(inputEl);
+    const inputBounds = this.add.rectangle(x, y, panelW - 20, 36, 0x000000, 0).setDepth(101).setInteractive();
+    const saveBtn = this.add.text(x, y + panelH / 2 - 28, t('auth.save_username') || 'Save', {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: 14,
+      color: '#00ff88'
+    }).setOrigin(0.5).setDepth(102).setInteractive({ useHandCursor: true });
+    const closeModal = () => {
+      if (inputEl.parentNode) inputEl.parentNode.removeChild(inputEl);
+      this.usernameInputEl = null;
+      [bg, panel, title, inputBounds, saveBtn].forEach(o => o.destroy());
+      this.usernameModal = null;
+    };
+    saveBtn.on('pointerdown', async () => {
+      const name = (inputEl.value || '').trim().slice(0, 64);
+      if (!name) return;
+      try {
+        await authApi.updateMeUsername(name);
+        this.updateWalletButton();
+        closeModal();
+      } catch (e) {
+        if (this.sayQuote) this.sayQuote(e.message || 'Failed to save');
+      }
+    });
+    bg.on('pointerdown', (ptr, localX, localY, ev) => { ev.stopPropagation(); });
+    inputBounds.on('pointerdown', () => inputEl.focus());
+    this.usernameModal = { bg, panel, title, inputEl, inputBounds, saveBtn, closeModal };
+    this.events.once('shutdown', closeModal);
+  }
+
+  hideUsernameModal() {
+    if (!this.usernameModal) return;
+    this.usernameModal.closeModal();
   }
 
   /** Badge LIVE cuando XP server o wallet conectada (modo online = avances on-chain/leaderboard). */
@@ -1722,23 +1820,40 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   updateMenuVisuals() {
+    const primaryIndex = this.menuMeta?.findIndex(m => m.isPrimary) ?? this.menuOptions.indexOf('START_GAME');
+
     this.menuTexts.forEach((text, index) => {
-      const meta = this.menuMeta?.[index] || {};
+      this.tweens.killTweensOf(text);
       const isSelected = index === this.selectedOption;
-      if (meta.isPrimary) {
-        text.setColor('#00ffff');
-        text.setFontStyle('bold');
-        text.setAlpha(1);
-        text.setScale(1);
-      } else {
-        text.setColor('#00ffff');
-        text.setFontStyle(isSelected ? 'bold' : 'normal');
-        text.setAlpha(isSelected ? 1 : 0.7);
-        text.setScale(isSelected ? 1.05 : 1.0);
-      }
+      const scale = isSelected ? MENU_SELECTED_SCALE : MENU_UNSELECTED_SCALE;
+      const alpha = isSelected ? MENU_SELECTED_ALPHA : MENU_UNSELECTED_ALPHA;
+      text.setColor(MENU_ITEM_COLOR);
+      text.setFontStyle('bold');
+      text.setAlpha(alpha);
+      text.setScale(scale);
+      text.setShadow(0, 0, null);
     });
 
-    // Reposicionar selector junto a la primera letra del texto seleccionado
+    if (primaryIndex >= 0 && this.menuTexts[primaryIndex]) {
+      if (this.ctaGlowTween) {
+        this.tweens.remove(this.ctaGlowTween);
+        this.ctaGlowTween = null;
+      }
+      const primaryText = this.menuTexts[primaryIndex];
+      const onlyCtaGetsGlow = primaryIndex === this.selectedOption;
+      if (onlyCtaGetsGlow) {
+        primaryText.setShadow(2, 2, '#00ffff', 8, true, true);
+        this.ctaGlowTween = this.tweens.add({
+          targets: primaryText,
+          alpha: { from: 0.95, to: MENU_SELECTED_ALPHA },
+          duration: 1200,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        });
+      }
+    }
+
     const target = this.menuTexts[this.selectedOption];
     if (target && this.selector) {
       const offset = this.menuSelectorArrowOffset ?? 20;
@@ -1746,14 +1861,9 @@ export default class TitleScene extends Phaser.Scene {
       this.selector.setX(target.x - target.width / 2 - offset);
     }
 
-    // Mantener el hint ZK alineado si cambia layout (por ejemplo, idioma)
-    if (this.zkHintText && this.menuMeta) {
-      const primaryIndex = this.menuMeta.findIndex(m => m.isPrimary);
-      const primaryText = primaryIndex >= 0 ? this.menuTexts[primaryIndex] : null;
-      if (primaryText) {
-        const gapBelowCta = 12;
-        this.zkHintText.setPosition(0, primaryText.y + primaryText.height / 2 + gapBelowCta);
-      }
+    if (this.zkHintText && primaryIndex >= 0 && this.menuTexts[primaryIndex]) {
+      const primaryText = this.menuTexts[primaryIndex];
+      this.zkHintText.setPosition(0, primaryText.y + primaryText.height / 2 + 12);
     }
   }
 
@@ -1761,14 +1871,15 @@ export default class TitleScene extends Phaser.Scene {
     if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen) return;
     Audio.initAudio();
 
-    // Flash neon rápido en el item seleccionado
     const currentText = this.menuTexts?.[this.selectedOption];
     if (currentText) {
+      this.tweens.killTweensOf(currentText);
       this.tweens.add({
         targets: currentText,
-        alpha: { from: 1, to: 0.2 },
+        alpha: { from: MENU_SELECTED_ALPHA, to: 0.2 },
         duration: 90,
-        yoyo: true
+        yoyo: true,
+        onComplete: () => this.updateMenuVisuals()
       });
     }
 
@@ -1780,6 +1891,10 @@ export default class TitleScene extends Phaser.Scene {
           this.sayQuote(t('prompt.link_wallet'));
           return;
         }
+        const gameMode = gameClient.isContractConfigured() && gameClient.isZkProverConfigured()
+          ? 'zk_ranked'
+          : 'casual';
+        console.log('[Cosmic Coder] Mode selected:', gameMode === 'zk_ranked' ? 'ZK Ranked' : 'Casual');
         Audio.playLevelUp();
         window.VIBE_CODER.reset();
         SaveManager.clearSave();
@@ -1794,7 +1909,7 @@ export default class TitleScene extends Phaser.Scene {
           }
           this.cameras.main.fade(500, 0, 0, 0);
           this.time.delayedCall(500, () => {
-            this.scene.start('ArenaScene', { continueGame: false });
+            this.scene.start('ArenaScene', { continueGame: false, gameMode });
           });
         })();
         break;
@@ -2243,6 +2358,7 @@ export default class TitleScene extends Phaser.Scene {
 
     const settingsData = [
       { key: 'playerName', labelKey: 'settings.NAME', type: 'input', getValue: () => settings.playerName || t('settings.NOT_SET') },
+      { key: 'username', labelKey: 'settings.CHANGE_USERNAME', type: 'action', getValue: () => (authApi.getStoredToken() ? 'Tap to change' : 'Connect wallet first'), action: () => { if (authApi.getStoredToken()) { close(); this.showUsernameModal(); } } },
       { key: 'language', labelKey: 'settings.LANGUAGE', type: 'select', options: ['en', 'es'], optionLabels: [t('settings.lang_en'), t('settings.lang_es')], getValue: () => settings.language || 'en', setValue: (v) => { setLanguage(v); close(); this.scene.start('TitleScene'); } },
       { key: 'music', labelKey: 'settings.MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); } },
       { key: 'sfx', labelKey: 'settings.SOUND_FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },
@@ -2273,6 +2389,7 @@ export default class TitleScene extends Phaser.Scene {
 
     const formatVal = (s) => {
       if (s.type === 'divider') return '';
+      if (s.type === 'action') return typeof getVal(s) === 'string' ? getVal(s) : '';
       if (s.type === 'toggle') return getVal(s) ? t('settings.on') : t('settings.off');
       if (s.type === 'slider') {
         const v = Math.round((getVal(s) || 0.5) * 100);
@@ -2320,6 +2437,9 @@ export default class TitleScene extends Phaser.Scene {
           } else if (s.type === 'input') {
             close();
             this.showNameInput(false, () => {});
+          } else if (s.type === 'action' && typeof s.action === 'function') {
+            s.action();
+            Audio.playHit();
           }
         });
       }
@@ -2456,36 +2576,45 @@ export default class TitleScene extends Phaser.Scene {
 
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
+    const boxW = 500;
+    const boxH = 280;
 
-    // Create overlay
-    const overlay = this.add.rectangle(cx, cy, 500, 280, 0x000000, 0.95);
-    overlay.setStrokeStyle(2, 0x00ffff);
+    // Create overlay: fill rect + Graphics border (avoids Phaser Rectangle stroke clipping at corners)
+    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x000000, 0.95);
+    overlay.setDepth(1000).setInteractive({ useHandCursor: false });
+    const borderG = this.add.graphics();
+    borderG.lineStyle(2, 0x00ffff);
+    borderG.strokeRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH);
+    borderG.setDepth(1000);
+
+    // All positions relative to center for correct layout on any resolution
+    const top = cy - boxH / 2;
 
     // Title
-    const title = this.add.text(cx, 190, isFirstTime ? t('name_input.enter_name') : t('name_input.change_name'), {
+    const title = this.add.text(cx, top + 50, isFirstTime ? t('name_input.enter_name') : t('name_input.change_name'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '24px',
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1001);
 
     // Subtitle for first time
-    const subtitle = isFirstTime ? this.add.text(cx, 225, t('name_input.welcome'), {
+    const subtitle = isFirstTime ? this.add.text(cx, top + 85, t('name_input.welcome'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '14px',
       color: '#888888'
-    }).setOrigin(0.5) : null;
+    }).setOrigin(0.5).setDepth(1001) : null;
 
     // Input display box
-    const inputBox = this.add.rectangle(cx, 290, 400, 50, 0x111122, 1);
-    inputBox.setStrokeStyle(2, 0x00ffff);
+    const inputBox = this.add.rectangle(cx, top + 150, 400, 50, 0x111122, 1);
+    inputBox.setStrokeStyle(2, 0x00ffff).setDepth(1001);
 
-    // Name text
-    const nameText = this.add.text(cx, 290, '_', {
+    // Name text (inside input area)
+    const nameText = this.add.text(cx, top + 150, '_', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '28px',
       color: '#ffffff'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setDepth(1002);
 
     // Cursor blink
     let cursorVisible = true;
@@ -2498,25 +2627,25 @@ export default class TitleScene extends Phaser.Scene {
       loop: true
     });
 
-    // Character counter
-    const counterText = this.add.text(580, 330, `0/${maxLength}`, {
+    // Character counter: inside overlay, bottom-right of input box (relative to center)
+    const counterText = this.add.text(cx + 195, top + 175, `0/${maxLength}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '12px',
       color: '#666666'
-    }).setOrigin(1, 0);
+    }).setOrigin(1, 0).setDepth(1002);
 
     // Help text
-    const helpText = this.add.text(cx, 380, t('prompt.name_help'), {
+    const helpText = this.add.text(cx, top + 220, t('prompt.name_help'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
-      color: '#666666'
-    }).setOrigin(0.5);
+      fontSize: '14px',
+      color: '#ffffff'
+    }).setOrigin(0.5).setDepth(1001);
 
-    const skipText = !isFirstTime ? this.add.text(cx, 410, t('prompt.esc_cancel'), {
+    const skipText = !isFirstTime ? this.add.text(cx, top + 250, t('prompt.esc_cancel'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '11px',
-      color: '#888888'
-    }).setOrigin(0.5) : null;
+      fontSize: '13px',
+      color: '#ffffff'
+    }).setOrigin(0.5).setDepth(1001) : null;
 
     const updateNameDisplay = () => {
       const cursor = cursorVisible ? '_' : ' ';
@@ -2575,6 +2704,7 @@ export default class TitleScene extends Phaser.Scene {
       window.removeEventListener('keydown', keyHandler);
       cursorBlink.destroy();
       overlay.destroy();
+      borderG.destroy();
       title.destroy();
       if (subtitle) subtitle.destroy();
       inputBox.destroy();

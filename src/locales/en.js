@@ -66,6 +66,11 @@ export default {
     zk_cta_hint: 'Competitive mode with verifiable on-chain cryptographic proof.',
     arrows_esc: '[ LEFT/RIGHT: Change character | ESC: Close ]'
   },
+  auth: {
+    choose_username: 'Choose your username',
+    username_placeholder: 'Username',
+    save_username: 'Save'
+  },
   footer: {
     high_wave: 'HIGH WAVE',
     bits: 'BITS',
@@ -112,7 +117,8 @@ export default {
     lang_en: 'English',
     lang_es: 'Español',
     on: '[ON]',
-    off: '[OFF]'
+    off: '[OFF]',
+    CHANGE_USERNAME: 'ACCOUNT USERNAME'
   },
   name_input: {
     enter_name: 'ENTER YOUR NAME',

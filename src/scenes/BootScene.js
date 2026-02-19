@@ -13,6 +13,19 @@ function getBackgroundBase() {
   return (trimmed === '.' ? '' : trimmed) + '/assets/backgrounds/blue';
 }
 
+/** Base path for arena (gameplay) space backgrounds — same resolution logic as blue pack. */
+function getArenaBackgroundBase() {
+  if (typeof window !== 'undefined' && window.location && window.location.pathname) {
+    const path = window.location.pathname;
+    const dir = path.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '/';
+    const prefix = dir === '/' ? '' : dir;
+    return `${prefix}/assets/backgrounds/arena`;
+  }
+  const base = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) ? import.meta.env.BASE_URL : '/';
+  const trimmed = base.endsWith('/') ? base.slice(0, -1) : base;
+  return (trimmed === '.' ? '' : trimmed) + '/assets/backgrounds/arena';
+}
+
 export default class BootScene extends Phaser.Scene {
   constructor() {
     super({ key: 'BootScene' });
@@ -85,6 +98,12 @@ export default class BootScene extends Phaser.Scene {
     this.load.image('bg-planet-big', `${bgBase}/prop-planet-big.png`);
     this.load.image('bg-asteroid-1', `${bgBase}/asteroid-1.png`);
     this.load.image('bg-asteroid-2', `${bgBase}/asteroid-2.png`);
+
+    // Arena (gameplay) space backgrounds — one per stage (0–5), seamless cosmic/cyber style
+    const arenaBgBase = getArenaBackgroundBase();
+    for (let i = 0; i < 6; i++) {
+      this.load.image(`arena-bg-${i}`, `${arenaBgBase}/arena-bg-${i}.png`);
+    }
 
     // We'll generate all textures procedurally (and with fallbacks) in create()
     this.time.delayedCall(500, () => {
