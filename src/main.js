@@ -454,8 +454,7 @@ window.addEventListener('xpserver-connected', () => {
 });
 
 window.addEventListener('xpserver-disconnected', () => {
-  console.log('⚠️ XP server disconnected. XP will pause until the server is back.');
+  // No log: avoids console spam when XP server is not running
 });
 
 console.log('Cosmic Coder initialized! Ready to code and conquer.');
-console.log('Start the XP server with: npm run server');

@@ -7,8 +7,8 @@ const WS_URL = 'ws://localhost:3001';
 let socket = null;
 let reconnectTimer = null;
 let connected = false;
-
 let connecting = false;
+let offlineLoggedOnce = false;
 
 export function connectToXPServer() {
   // Guard against concurrent connection attempts
@@ -23,7 +23,6 @@ export function connectToXPServer() {
   }
 
   connecting = true;
-  console.log('🔌 Connecting to XP server...');
 
   try {
     socket = new WebSocket(WS_URL);
@@ -31,6 +30,7 @@ export function connectToXPServer() {
     socket.onopen = () => {
       connected = true;
       connecting = false;
+      offlineLoggedOnce = false; // Reset so next offline we can log once
       console.log('✅ Connected to XP server!');
 
       // Dispatch connection event
@@ -66,13 +66,10 @@ export function connectToXPServer() {
     socket.onclose = () => {
       connected = false;
       connecting = false;
-      console.log('❌ Disconnected from XP server');
-
-      // Dispatch disconnection event
+      // Dispatch disconnection event (UI can react); no console spam
       window.dispatchEvent(new CustomEvent('xpserver-disconnected'));
 
-      // Schedule reconnect — keep reconnectTimer set until the next
-      // attempt starts so duplicate timers can't be created.
+      // Schedule reconnect
       if (!reconnectTimer) {
         reconnectTimer = setTimeout(() => {
           reconnectTimer = null;
@@ -82,12 +79,19 @@ export function connectToXPServer() {
     };
 
     socket.onerror = () => {
-      console.log('⚠️ XP server not available (is it running?)');
+      // Log only once per session when server is not available (avoid console spam)
+      if (!offlineLoggedOnce) {
+        offlineLoggedOnce = true;
+        console.log('💤 XP server offline (optional: run `npm run server` for live XP)');
+      }
       // onclose will fire after onerror, which handles reconnection
     };
   } catch (e) {
     connecting = false;
-    console.log('⚠️ Could not connect to XP server');
+    if (!offlineLoggedOnce) {
+      offlineLoggedOnce = true;
+      console.log('💤 XP server offline (optional: run `npm run server` for live XP)');
+    }
   }
 }
 
