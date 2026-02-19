@@ -16,6 +16,7 @@ export default {
     CONTROLS: 'CONTROLES',
     LEADERBOARD: 'RANKING',
     DOCUMENTATION: 'DOCUMENTACIÓN',
+    VIEW_HISTORY: 'VER HISTORIA',
     CREDITS: 'CRÉDITOS'
   },
   documentation: {
@@ -243,6 +244,11 @@ export default {
     music_off: '🔇 MÚSICA OFF',
     paused: 'PAUSADO',
     select_confirm: '[ FLECHAS/WASD SELECCIONAR // ENTER CONFIRMAR ]'
+  },
+  character: {
+    origin: 'ORIGEN:',
+    history: 'HISTORIA:',
+    mission: 'MISIÓN:'
   },
   game: {
     game_over: 'FIN DE PARTIDA',

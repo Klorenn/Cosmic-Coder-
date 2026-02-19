@@ -17,6 +17,7 @@ export default {
     CONTROLS: 'CONTROLS',
     LEADERBOARD: 'LEADERBOARD',
     DOCUMENTATION: 'DOCUMENTATION',
+    VIEW_HISTORY: 'VIEW HISTORY',
     CREDITS: 'CREDITS'
   },
   documentation: {
@@ -245,6 +246,11 @@ export default {
     music_off: '🔇 MUSIC OFF',
     paused: 'PAUSED',
     select_confirm: '[ ARROWS/WASD TO SELECT // ENTER TO CONFIRM ]'
+  },
+  character: {
+    origin: 'ORIGIN:',
+    history: 'HISTORY:',
+    mission: 'MISSION:'
   },
   game: {
     game_over: 'GAME OVER',

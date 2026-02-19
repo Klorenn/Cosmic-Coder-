@@ -2212,8 +2212,8 @@ export default class TitleScene extends Phaser.Scene {
     overlay.setInteractive({ useHandCursor: true });
     container.add(overlay);
 
-    // Title
-    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 36, t('leaderboard.title'), {
+    // Title - moved 10px lower to reduce top emptiness
+    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 46, t('leaderboard.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${24 * uiScale}px`,
       color: '#ffd700',
@@ -2221,19 +2221,31 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5);
     container.add(title);
 
-    // Headers
-    const headerY = overlayTop + 72;
+    // Headers - reduced top padding to sit closer to title
+    const headerY = overlayTop + 82;
     const fs = (n) => `${Math.round(n * uiScale)}px`;
     const colPos = overlayLeft + 20;
     const colRankIcon = overlayLeft + 50;
-    const colName = overlayLeft + 90;
+    const colName = overlayLeft + 100;  // Increased spacing between NAME and WALLET
     const colWallet = overlayLeft + overlayW - 180;
     const colRankName = overlayLeft + overlayW - 80;
 
-    container.add(this.add.text(colPos, headerY, t('leaderboard.position'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
-    container.add(this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
-    container.add(this.add.text(colWallet, headerY, t('leaderboard.short_wallet'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
-    container.add(this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' }));
+    // Add header texts with proper grid alignment
+    const posHeader = this.add.text(colPos, headerY, t('leaderboard.position'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    container.add(posHeader);
+    
+    const nameHeader = this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    container.add(nameHeader);
+    
+    const walletHeader = this.add.text(colWallet, headerY, t('leaderboard.short_wallet'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    container.add(walletHeader);
+    
+    const rankHeader = this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    container.add(rankHeader);
+    
+    // Add thin 1px pixel divider line under headers (cyan)
+    const dividerLine = this.add.rectangle(overlayLeft + 10, headerY + 20, overlayW - 20, 1, 0x00ffff, 1);
+    container.add(dividerLine);
 
     const walletConnected = stellarWallet.isConnected();
     let top;
@@ -2289,24 +2301,39 @@ export default class TitleScene extends Phaser.Scene {
 
     const lineHeight = 36 * uiScale;
     const maxRows = 10;
-    const tableStartY = overlayTop + 100;
+    const tableStartY = overlayTop + 110;  // Adjusted to align with new header layout
 
     if (top.length === 0) {
       const centerX = overlayLeft + overlayW / 2;
-      const centerY = overlayTop + overlayH / 2 - 20;
-      const msg = walletConnected ? t('leaderboard.empty_short') : t('leaderboard.connect_hint');
-      container.add(this.add.text(centerX, centerY, msg, {
+      // Move message slightly upward
+      const centerY = overlayTop + overlayH / 2 - 50;
+      
+      // Create hierarchy between headline and explanation
+      const headline = this.add.text(centerX, centerY, 'NO ENTRIES YET', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(walletConnected ? 16 : 13),
+        fontSize: fs(18),
+        color: '#ffffff',  // Brighter than before
+        fontStyle: 'bold',
+        align: 'center',
+        wordWrap: { width: overlayW - 80 }
+      }).setOrigin(0.5);
+      container.add(headline);
+      
+      // Subtext smaller and lighter
+      const subtext = this.add.text(centerX, centerY + 32, 'Play to rank!', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: fs(12),
         color: '#aaaaaa',
         align: 'center',
         wordWrap: { width: overlayW - 80 }
-      }).setOrigin(0.5));
+      }).setOrigin(0.5);
+      container.add(subtext);
+      
       if (walletConnected) {
-        container.add(this.add.text(centerX, centerY + 28, t('leaderboard.submit_hint'), {
+        container.add(this.add.text(centerX, centerY + 60, t('leaderboard.submit_hint'), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: fs(11),
-          color: '#666666',
+          fontSize: fs(10),
+          color: '#777777',
           align: 'center',
           wordWrap: { width: overlayW - 80 }
         }).setOrigin(0.5));
@@ -2339,22 +2366,24 @@ export default class TitleScene extends Phaser.Scene {
         const shortWallet = entry.wallet ? stellarWallet.shortWalletForLeaderboard(entry.wallet) : '';
         container.add(this.add.text(colWallet, y, shortWallet, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(11), color: '#aaaaaa' }));
 
-        // Rank name
+        // Rank name - aligned to right
         const rankName = isUnranked(entry.rank) ? t('ranks.unranked') : rankData.name;
         const rankColor = isUnranked(entry.rank) ? '#888888' : getRankColorCSS(entry.rank);
-        container.add(this.add.text(colRankName, y, rankName, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(11), color: rankColor }));
+        const rankText = this.add.text(colRankName, y, rankName, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(11), color: rankColor });
+        rankText.setOrigin(1, 0);  // Right align
+        container.add(rankText);
       });
     }
 
-    // Footer buttons
+    // Footer - separate into two zones
     const footerY = overlayTop + overlayH - 40;
-
-    // View Ranks button
-    const viewRanksText = this.add.text(overlayLeft + overlayW / 2 - 80, footerY, `[ ${t('leaderboard.view_ranks')} ]`, {
+    
+    // Left zone: View Ranks button (green)
+    const viewRanksText = this.add.text(overlayLeft + 40, footerY, `[ ${t('leaderboard.view_ranks')} ]`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: fs(12),
-      color: '#00ff88'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+      color: '#00ff88'  // Green color
+    }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true });
     container.add(viewRanksText);
 
     viewRanksText.on('pointerdown', () => {
@@ -2362,12 +2391,12 @@ export default class TitleScene extends Phaser.Scene {
       this.showRankSystem();
     });
 
-    // Close button
-    const closeText = this.add.text(overlayLeft + overlayW / 2 + 80, footerY, t('leaderboard.back'), {
+    // Right zone: Press Any Key to Close (cyan/neutral)
+    const closeText = this.add.text(overlayLeft + overlayW - 40, footerY, t('leaderboard.back'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: fs(12),
-      color: '#00aaff'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+      color: '#00ffff'  // Cyan color
+    }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
     container.add(closeText);
 
     const close = () => {
@@ -4092,7 +4121,7 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(1002);
 
     const spriteCenterX = cx;
-    // Nombre justo debajo del título PERSONAJE
+    // Nombre completo del personaje (con su nombre en español)
     const previewName = this.add.text(cx, overlayTop + 80 * uiScale, 'VibeCoder', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${20 * uiScale}px`,
@@ -4133,11 +4162,39 @@ export default class TitleScene extends Phaser.Scene {
       color: '#00ffff'
     }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
 
+    // Botón para mostrar la historia del personaje (localized)
+    const loreButton = this.add.text(cx, overlayTop + overlayH - 120, t('menu.VIEW_HISTORY'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${16 * uiScale}px`,
+      color: '#00ffff',
+      backgroundColor: '#002233',
+      padding: {
+        left: 15,
+        right: 15,
+        top: 8,
+        bottom: 8
+      }
+    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
+
     const updatePreview = () => {
       const charId = CHAR_IDS[selectedIndex];
-      const fallbackChar = { name: 'VibeCoder', textureKey: 'player', animPrefix: 'player' };
+      const fallbackChar = { 
+        name: 'VibeCoder', 
+        displayName: 'VibeCoder (El Sintonizador)',
+        displayName_en: 'VibeCoder (The Tuner)',
+        textureKey: 'player', 
+        animPrefix: 'player',
+        origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
+        origin_en: 'A former network architect who discovered that code is not just written, it is felt.',
+        history: 'Mientras navegaba por los límites del "Sector Estelar", su nave fue infectada por un glitch rítmico. En lugar de morir, su conciencia se fusionó con la terminal. Ahora, lucha fluyendo con la latencia del universo.',
+        history_en: 'While navigating the borders of the "Stellar Sector", his ship was infected by a rhythmic glitch. Rather than dying, his consciousness merged with the terminal. Now, he fights flowing with the latency of the universe.',
+        mission: 'Mantener la armonía entre el hardware y el alma.',
+        mission_en: 'Maintain harmony between hardware and soul.'
+      };
       const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS?.vibecoder || fallbackChar;
-      previewName.setText(char.name);
+      const lang = window.VIBE_SETTINGS?.language || 'en';
+      const displayName = lang === 'es' ? (char.displayName || char.name) : (char.displayName_en || char.displayName || char.name);
+      previewName.setText(displayName);
       if (!this.textures.exists(char.textureKey)) {
         previewSprite.setVisible(false);
         placeholder.setVisible(true);
@@ -4190,6 +4247,126 @@ export default class TitleScene extends Phaser.Scene {
 
     arrowLeft.on('pointerdown', () => { cycle(-1); });
     arrowRight.on('pointerdown', () => { cycle(1); });
+
+    // Función para mostrar la historia del personaje
+    const showCharacterLore = () => {
+      const charId = CHAR_IDS[selectedIndex];
+      const fallbackChar = { 
+        name: 'VibeCoder', 
+        displayName: 'VibeCoder (El Sintonizador)',
+        displayName_en: 'VibeCoder (The Tuner)',
+        textureKey: 'player', 
+        animPrefix: 'player',
+        origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
+        origin_en: 'A former network architect who discovered that code is not just written, it is felt.',
+        history: 'Mientras navegaba por los límites del "Sector Estelar", su nave fue infectada por un glitch rítmico. En lugar de morir, su conciencia se fusionó con la terminal. Ahora, lucha fluyendo con la latencia del universo.',
+        history_en: 'While navigating the borders of the "Stellar Sector", his ship was infected by a rhythmic glitch. Rather than dying, his consciousness merged with the terminal. Now, he fights flowing with the latency of the universe.',
+        mission: 'Mantener la armonía entre el hardware y el alma.',
+        mission_en: 'Maintain harmony between hardware and soul.'
+      };
+      const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS?.vibecoder || fallbackChar;
+      
+      // Crear un overlay para mostrar la información del personaje
+      const loreBackdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.95);
+      loreBackdrop.setDepth(1005).setInteractive({ useHandCursor: true });
+      
+      const loreBoxW = Math.min(600, w - 60);
+      const loreBoxH = Math.min(500, h - 60);
+      const loreBox = this.add.rectangle(cx, cy, loreBoxW, loreBoxH, 0x0a0a14, 1);
+      loreBox.setStrokeStyle(2, 0x00ffff);
+      loreBox.setDepth(1006);
+      
+      // Título del personaje en el idioma apropiado
+      const lang = window.VIBE_SETTINGS?.language || 'en';
+      const loreTitleText = lang === 'es' ? (char.displayName || char.name) : (char.displayName_en || char.displayName || char.name);
+      const loreTitle = this.add.text(cx, cy - loreBoxH/2 + 40, loreTitleText, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${24 * uiScale}px`,
+        color: '#00ffff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setDepth(1007);
+      
+      // Origin (localized)
+      const originLabel = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 90, t('character.origin') || 'Origin:', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${16 * uiScale}px`,
+        color: '#ffffff',
+        fontStyle: 'bold'
+      }).setOrigin(0, 0).setDepth(1007);
+      
+      // Get localized character info based on current language (lang already declared above)
+      const originText = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 120, 
+        lang === 'es' ? (char.origin || '') : (char.origin_en || char.origin || ''), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${14 * uiScale}px`,
+        color: '#cccccc',
+        wordWrap: { width: loreBoxW - 60 }
+      }).setOrigin(0, 0).setDepth(1007);
+      
+      // History (localized)
+      const historyLabel = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 180, t('character.history') || 'History:', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${16 * uiScale}px`,
+        color: '#ffffff',
+        fontStyle: 'bold'
+      }).setOrigin(0, 0).setDepth(1007);
+      
+      const historyText = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 210, 
+        lang === 'es' ? (char.history || '') : (char.history_en || char.history || ''), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${14 * uiScale}px`,
+        color: '#cccccc',
+        wordWrap: { width: loreBoxW - 60 }
+      }).setOrigin(0, 0).setDepth(1007);
+      
+      // Mission (localized)
+      const missionLabel = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 320, t('character.mission') || 'Mission:', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${16 * uiScale}px`,
+        color: '#ffffff',
+        fontStyle: 'bold'
+      }).setOrigin(0, 0).setDepth(1007);
+      
+      const missionText = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 350, 
+        lang === 'es' ? (char.mission || '') : (char.mission_en || char.mission || ''), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${14 * uiScale}px`,
+        color: '#cccccc',
+        wordWrap: { width: loreBoxW - 60 }
+      }).setOrigin(0, 0).setDepth(1007);
+      
+      // Botón de cerrar (localized)
+      const closeButton = this.add.text(cx, cy + loreBoxH/2 - 30, t('prompt.esc_close').replace('[', '').replace(']', '').trim() || (lang === 'es' ? 'Cerrar' : 'Close'), {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${18 * uiScale}px`,
+        color: '#00ffff',
+        backgroundColor: '#002233',
+        padding: {
+          left: 20,
+          right: 20,
+          top: 10,
+          bottom: 10
+        }
+      }).setOrigin(0.5).setDepth(1008).setInteractive({ useHandCursor: true });
+      
+      const closeLore = () => {
+        loreBackdrop.destroy();
+        loreBox.destroy();
+        loreTitle.destroy();
+        originLabel.destroy();
+        originText.destroy();
+        historyLabel.destroy();
+        historyText.destroy();
+        missionLabel.destroy();
+        missionText.destroy();
+        closeButton.destroy();
+      };
+      
+      closeButton.on('pointerdown', closeLore);
+      loreBackdrop.on('pointerdown', closeLore);
+    };
+    
+    loreButton.on('pointerdown', showCharacterLore);
 
     const instructions = this.add.text(cx, overlayTop + overlayH - 44, t('prompt.arrows_esc'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',

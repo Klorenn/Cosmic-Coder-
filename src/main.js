@@ -212,11 +212,47 @@ window.VIBE_LEGENDARIES = {
 // Initialize legendaries (empty until wallet connects and loads from API)
 window.VIBE_LEGENDARIES.loadDefaults();
 
-// Character selector - VibeCoder (default), Destroyer, StormMan
+// Character selector - VibeCoder (default), VoidNull, SyncStorm
 window.VIBE_CHARACTERS = {
-  vibecoder: { name: 'VibeCoder', textureKey: 'player', animPrefix: 'player' },
-  destroyer: { name: 'Destroyer', textureKey: 'player-destroyer', animPrefix: 'player-destroyer' },
-  swordsman: { name: 'StormMan', textureKey: 'player-swordsman', animPrefix: 'player-swordsman' }
+  vibecoder: { 
+    name: 'VibeCoder', 
+    displayName: 'VibeCoder (El Sintonizador)',
+    displayName_en: 'VibeCoder (The Tuner)',
+    textureKey: 'player', 
+    animPrefix: 'player',
+    origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
+    origin_en: 'A former network architect who discovered that code is not just written, it is felt.',
+    history: 'Mientras navegaba por los límites del "Sector Estelar", su nave fue infectada por un glitch rítmico. En lugar de morir, su conciencia se fusionó con la terminal. Ahora, lucha fluyendo con la latencia del universo.',
+    history_en: 'While navigating the borders of the "Stellar Sector", his ship was infected by a rhythmic glitch. Rather than dying, his consciousness merged with the terminal. Now, he fights flowing with the latency of the universe.',
+    mission: 'Mantener la armonía entre el hardware y el alma.',
+    mission_en: 'Maintain harmony between hardware and soul.'
+  },
+  destroyer: { 
+    name: 'VoidNull', 
+    displayName: 'VoidNull (El Ejecutor del Vacío)',
+    displayName_en: 'VoidNull (The Void Executor)',
+    textureKey: 'player-destroyer', 
+    animPrefix: 'player-destroyer',
+    origin: 'El protocolo de seguridad definitivo, diseñado para borrar registros corruptos de forma permanente.',
+    origin_en: 'The ultimate security protocol, designed to permanently erase corrupted records.',
+    history: 'Fue enviado al sector más oscuro del espacio para eliminar un virus ancestral, pero el vacío lo cambió. Ahora, VoidNull no solo borra datos, borra la existencia. Es el "punto final" de cualquier algoritmo enemigo.',
+    history_en: 'He was sent to the darkest sector of space to eliminate an ancestral virus, but the void changed him. Now, VoidNull doesn\'t just erase data, it erases existence. He is the "final end" of any enemy algorithm.',
+    mission: 'Reducir toda amenaza a cero absoluto.',
+    mission_en: 'Reduce all threats to absolute zero.'
+  },
+  swordsman: { 
+    name: 'SyncStorm', 
+    displayName: 'SyncStorm (El Pulso Atmosférico)',
+    displayName_en: 'SyncStorm (The Atmospheric Pulse)',
+    textureKey: 'player-swordsman', 
+    animPrefix: 'player-swordsman',
+    origin: 'Una tormenta eléctrica de datos que cobró conciencia tras una colisión en la Testnet de Stellar.',
+    origin_en: 'An electrical storm of data that gained consciousness after a collision on the Stellar Testnet.',
+    history: 'No es humano ni máquina; es un evento sistémico. Aparece donde el flujo de datos es inestable, descargando ráfagas de energía que sincronizan la realidad a la fuerza. Es el caos controlado que el espacio necesita.',
+    history_en: 'He is neither human nor machine; he is a systemic event. He appears where data flow is unstable, discharging energy bursts that synchronize reality by force. He is the controlled chaos that space needs.',
+    mission: 'Sobrecargar los sistemas enemigos hasta que solo quede estática.',
+    mission_en: 'Overload enemy systems until only static remains.'
+  }
 };
 // Selected character id (set by wallet progress or default)
 window.VIBE_SELECTED_CHARACTER = 'vibecoder';
