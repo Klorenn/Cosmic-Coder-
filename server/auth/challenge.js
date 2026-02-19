@@ -1,11 +1,17 @@
 /**
- * SEP-10 Challenge endpoint: GET /auth/challenge?account=G...
- * Returns a challenge transaction (XDR) signed by the server for the client to sign.
+ * SEP-10 Challenge: build challenge transaction for GET /auth/challenge?account=G...
+ * Uses @stellar/stellar-base only (no WebAuth), compatible with SDK v14 and Render.
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md#challenge
  */
 
-import { Keypair } from '@stellar/stellar-base';
-import * as WebAuth from '@stellar/stellar-sdk';
+import { randomBytes } from 'crypto';
+import {
+  Keypair,
+  Account,
+  TransactionBuilder,
+  Operation,
+  BASE_FEE
+} from '@stellar/stellar-base';
 import {
   getServerSecretKey,
   SEP10_HOME_DOMAIN,
@@ -15,10 +21,45 @@ import {
 } from '../config/sep10.js';
 
 /**
- * Build and return SEP-10 challenge transaction.
- * Compliant with SEP-10: server account as source, sequence 0 (invalid), timebounds,
- * first op Manage Data (client account, "<home_domain> auth", 64-byte nonce),
- * second op Manage Data (server, "web_auth_domain", webAuthDomain). Server signs.
+ * Build a SEP-10 challenge transaction (server signs, client must sign too).
+ * Returns base64 XDR of the transaction envelope.
+ */
+function buildChallengeTx(serverKeypair, clientAccountID, homeDomain, timeout, networkPassphrase, webAuthDomain) {
+  const account = new Account(serverKeypair.publicKey(), '-1');
+  const now = Math.floor(Date.now() / 1000);
+  const nonce = randomBytes(48).toString('base64');
+
+  const builder = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase,
+    timebounds: {
+      minTime: now,
+      maxTime: now + timeout
+    }
+  })
+    .addOperation(
+      Operation.manageData({
+        name: `${homeDomain} auth`,
+        value: nonce,
+        source: clientAccountID
+      })
+    )
+    .addOperation(
+      Operation.manageData({
+        name: 'web_auth_domain',
+        value: webAuthDomain,
+        source: account.accountId()
+      })
+    );
+
+  const transaction = builder.build();
+  transaction.sign(serverKeypair);
+  return transaction.toEnvelope().toXDR('base64').toString();
+}
+
+/**
+ * Build and return SEP-10 challenge for GET /auth/challenge?account=G...
+ * Response: { transaction: "<base64 XDR>", network_passphrase: "..." }.
  */
 export function buildChallenge(accountParam) {
   const clientAccountID = String(accountParam || '').trim();
@@ -29,17 +70,13 @@ export function buildChallenge(accountParam) {
   const serverSecret = getServerSecretKey();
   const serverKeypair = Keypair.fromSecret(serverSecret);
 
-  // buildChallengeTx(serverKeypair, clientAccountID, homeDomain, timeout, networkPassphrase, webAuthDomain, memo?, clientDomain?, clientSigningKey?)
-  const transactionXdr = WebAuth.buildChallengeTx(
+  const transactionXdr = buildChallengeTx(
     serverKeypair,
     clientAccountID,
     SEP10_HOME_DOMAIN,
     SEP10_CHALLENGE_TIMEOUT,
     SEP10_NETWORK_PASSPHRASE,
-    SEP10_WEB_AUTH_DOMAIN,
-    null, // memo
-    null, // client_domain
-    null  // clientSigningKey
+    SEP10_WEB_AUTH_DOMAIN
   );
 
   return {
