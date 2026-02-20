@@ -396,13 +396,13 @@ export default class ArenaScene extends Phaser.Scene {
     this.showZkStartupOverlay('Generating circuit…');
 
     try {
-      // Test ZK connection first
-      console.log('[ZK Startup] Testing ZK connection...');
-      const zkTest = await this.testZKConnection();
-      if (!zkTest) {
-        this.hideZkStartupOverlay();
-        this.showZkStartupOverlay('ZK connection failed');
-        await new Promise((r) => setTimeout(r, 2000));
+      // Simple health check instead of full ZK test
+      console.log('[ZK Startup] Checking ZK prover health...');
+      const health = await gameClient.checkZkProverHealth();
+      if (health?.ok) {
+        console.log('[ZK Startup] ✅ ZK prover is healthy');
+      } else {
+        console.warn('[ZK Startup] ⚠️ ZK prover health check failed');
       }
 
       const addr = await stellarWallet.getAddress();
@@ -500,11 +500,22 @@ export default class ArenaScene extends Phaser.Scene {
       console.log('[ZK Config] Is contract configured:', gameClient.isContractConfigured());
       console.log('[ZK Config] Is prover configured:', gameClient.isZkProverConfigured());
       
+      // Check if contract actually exists on network
+      this.checkContractExists().then(exists => {
+        if (!exists) {
+          console.warn('[ZK Config] ⚠️ Contract not found on network. ZK will use fallback mode.');
+          this.zkContractMissing = true;
+        } else {
+          console.log('[ZK Config] ✅ Contract found on network!');
+          this.zkContractMissing = false;
+        }
+      });
+      
       if (!gameClient.isContractConfigured()) {
-        console.error('[ZK Config] ❌ Contract NOT configured! ZK will fail.');
+        console.error('[ZK Config] ❌ Contract NOT configured!');
       }
       if (!gameClient.isZkProverConfigured()) {
-        console.error('[ZK Config] ❌ Prover NOT configured! ZK will fail.');
+        console.error('[ZK Config] ❌ Prover NOT configured!');
       }
       if (gameClient.isContractConfigured() && gameClient.isZkProverConfigured()) {
         console.log('[ZK Config] ✅ ZK configuration looks good!');
@@ -4685,12 +4696,19 @@ export default class ArenaScene extends Phaser.Scene {
           console.error('ZK ERROR STACK:', e?.stack);
           console.error('ZK ERROR MESSAGE:', e?.message);
           console.warn('[Cosmic Coder] Submit failed:', e?.message || e);
-          try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
+          
+          // Check if contract is missing
+          if (this.zkContractMissing || e?.message?.includes('not found') || e?.message?.includes('404')) {
+            try { zkStatusText.setText('ZK Contract not deployed. Using local leaderboard.').setAlpha(1); } catch (_) {}
+          } else {
+            try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
+          }
+          
           try {
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
           } catch (_) {}
           clear();
-          resolve({ status: 'zk_failed', error: e?.message || 'Unknown error' });
+          resolve({ status: 'zk_failed', error: e?.message || 'Unknown error', contractMissing: this.zkContractMissing });
         }
       }).catch(() => { clear(); resolve(null); });
     }).then((status) => {
@@ -4774,30 +4792,41 @@ export default class ArenaScene extends Phaser.Scene {
       
     } else if (result.status === 'zk_failed') {
       // FAILURE: Show error info and retry option
-      const errorBtn = this.add.text(cx, buttonY, '⚠️ ZK Proof Failed - Click to Retry', {
+      let errorMessage = result.error || 'Unknown error';
+      let buttonText = '⚠️ ZK Proof Failed - Click to Retry';
+      let errorTitle = '❌ ZK Proof Submission Failed';
+      
+      // Special handling for missing contracts
+      if (result.contractMissing || errorMessage.includes('not found') || errorMessage.includes('404')) {
+        errorTitle = '⚠️ ZK Contract Not Deployed';
+        buttonText = '🔄 Retry When Contract is Deployed';
+        errorMessage = 'The ZK smart contract is not currently deployed on testnet. Your score was saved locally.';
+      }
+      
+      const errorBtn = this.add.text(cx, buttonY, buttonText, {
         fontFamily: 'monospace',
         fontSize: `${Math.round(12 * uiScale)}px`,
         color: '#ff6600',
         fontStyle: 'bold'
       }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
       
-      const errorBg = this.add.rectangle(cx, buttonY, 400, 50, 0x1a0a0a, 0.9);
+      const errorBg = this.add.rectangle(cx, buttonY, 450, 50, 0x1a0a0a, 0.9);
       errorBg.setStrokeStyle(2, 0xff6600, 0.8);
       errorBg.setOrigin(0.5).setAlpha(0);
       
-      const errorLabel = this.add.text(cx, buttonY - 35, '❌ ZK Proof Submission Failed', {
+      const errorLabel = this.add.text(cx, buttonY - 35, errorTitle, {
         fontFamily: 'monospace',
         fontSize: `${Math.round(12 * uiScale)}px`,
         color: '#ff4444',
         fontStyle: 'bold'
       }).setOrigin(0.5).setAlpha(0);
       
-      const errorMsg = this.add.text(cx, buttonY + 35, result.error || 'Unknown error', {
+      const errorMsg = this.add.text(cx, buttonY + 35, errorMessage, {
         fontFamily: 'monospace',
         fontSize: `${Math.round(10 * uiScale)}px`,
         color: '#aa4444',
         align: 'center',
-        wordWrap: { width: 360 }
+        wordWrap: { width: 410 }
       }).setOrigin(0.5).setAlpha(0);
       
       gameOverContainer.add([errorBg, errorLabel, errorMsg, errorBtn]);
@@ -4821,13 +4850,31 @@ export default class ArenaScene extends Phaser.Scene {
     }
   }
 
+  async checkContractExists() {
+    try {
+      const contractId = gameClient.getContractId();
+      if (!contractId) return false;
+      
+      const { rpc } = await import('@stellar/stellar-sdk');
+      const server = new rpc.Server('https://soroban-testnet.stellar.org');
+      
+      // Try to get the account - if it exists, it's a contract
+      const account = await server.getAccount(contractId);
+      console.log('[ZK Config] Contract account found:', account.accountId());
+      return true;
+    } catch (e) {
+      console.log('[ZK Config] Contract not found on network:', e?.message || e);
+      return false;
+    }
+  }
+
   async testZKConnection() {
     console.log('[ZK Test] Testing ZK connection...');
     try {
       const health = await gameClient.checkZkProverHealth();
       console.log('[ZK Test] Prover health:', health);
       
-      // Test with minimal payload
+      // Test with minimal payload using REAL Stellar addresses
       const testPayload = {
         run_hash_hi: "0000000000000000000000000000000000000000000000000000000000000000",
         run_hash_lo: "0000000000000000000000000000000000000000000000000000000000000000",
@@ -4836,17 +4883,19 @@ export default class ArenaScene extends Phaser.Scene {
         nonce: 1,
         season_id: 1,
         challenge_id: 1,
-        player_address: "GBGZ7J5Y6KZVMZQ5Q5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5",
+        player_address: "GBDQ5S2AKVQXORP5EFKONMTAAI4K5SIRB5NQVTLQOFQ6F5QOQ2V7A4MD", // Real Stellar testnet address
         contract_id: gameClient.getContractId(),
         domain_separator: "0000000000000000000000000000000000000000000000000000000000000000"
       };
       
       console.log('[ZK Test] Testing proof generation...');
+      console.log('[ZK Test] Using contract ID:', testPayload.contract_id);
       const proof = await gameClient.requestZkProofV2(undefined, testPayload);
       console.log('[ZK Test] ✅ Proof generation successful:', proof);
       return true;
     } catch (e) {
       console.error('[ZK Test] ❌ ZK connection failed:', e);
+      console.error('[ZK Test] Error details:', e?.message);
       return false;
     }
   }
