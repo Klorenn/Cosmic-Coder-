@@ -157,6 +157,12 @@ function ensureBytes(val) {
  * Works in browser (Uint8Array) and Node (Buffer). Tolerates API returning arrays/objects.
  */
 function contractProofToZk(payload) {
+  // Debug logging to see what we're receiving
+  console.log('[contractProofToZk] Raw payload:', JSON.stringify(payload, null, 2));
+  console.log('[contractProofToZk] Payload.proof:', payload.proof);
+  console.log('[contractProofToZk] Payload.vk:', payload.vk);
+  console.log('[contractProofToZk] Payload.pub_signals:', payload.pub_signals);
+  
   // Handle both proof formats: alpha/beta/gamma OR pi_a/pi_b/pi_c
   const pi_a = payload.proof.pi_a || payload.proof.alpha;
   const pi_b = payload.proof.pi_b || payload.proof.beta;
@@ -164,11 +170,24 @@ function contractProofToZk(payload) {
   
   // Validate required proof fields
   if (!pi_a || !pi_b || !pi_c) {
+    console.error('[contractProofToZk] Missing proof fields:', { pi_a, pi_b, pi_c });
     throw new Error('Invalid proof format received from prover: missing pi_a/pi_b/pi_c or alpha/beta/gamma');
+  }
+  
+  // Validate verification key exists
+  if (!payload.vk) {
+    console.error('[contractProofToZk] payload.vk is undefined');
+    throw new Error('Invalid verification key format received from prover: payload.vk is undefined');
   }
   
   // Validate verification key fields
   if (!payload.vk.alpha || !payload.vk.beta || !payload.vk.gamma || !payload.vk.delta) {
+    console.error('[contractProofToZk] Missing vk fields:', {
+      alpha: payload.vk.alpha,
+      beta: payload.vk.beta,
+      gamma: payload.vk.gamma,
+      delta: payload.vk.delta
+    });
     throw new Error('Invalid verification key format received from prover: missing required vk fields');
   }
   
