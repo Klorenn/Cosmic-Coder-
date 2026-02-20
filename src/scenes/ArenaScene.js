@@ -4468,10 +4468,13 @@ export default class ArenaScene extends Phaser.Scene {
           if (deathSprite.anims) deathSprite.anims.stop();
           // Validate frame exists before setting it
           const texture = this.textures.get(deathSpriteKey);
-          if (texture && lastDeathFrame < texture.frameTotal) {
-            deathSprite.setFrame(lastDeathFrame);
+          const frameToUse = Math.min(lastDeathFrame, (texture?.frameTotal || 1) - 1);
+          
+          if (texture && frameToUse >= 0 && frameToUse < texture.frameTotal) {
+            deathSprite.setFrame(frameToUse);
+            console.log(`[Death Animation] Setting frame ${frameToUse} for ${deathSpriteKey}`);
           } else {
-            console.warn(`[Death Animation] Frame ${lastDeathFrame} not found in ${deathSpriteKey} (total: ${texture?.frameTotal}), using frame 0`);
+            console.warn(`[Death Animation] Frame ${frameToUse} not found in ${deathSpriteKey} (total: ${texture?.frameTotal}), using frame 0`);
             deathSprite.setFrame(0);
           }
         } catch (e) {
@@ -4859,21 +4862,35 @@ export default class ArenaScene extends Phaser.Scene {
       
       console.log('[ZK Config] Checking contract:', contractId);
       
-      // Use Stellar Expert API which works
-      const response = await fetch(`https://api.stellar.expert/explorer/testnet/contract/${contractId}`);
-      const data = await response.json();
+      // Use Soroban RPC directly (no CORS issues)
+      const { rpc } = await import('@stellar/stellar-sdk');
+      const server = new rpc.Server('https://soroban-testnet.stellar.org');
       
-      if (data.contract === contractId) {
-        console.log('[ZK Config] ✅ Contract found on Stellar Expert:', data.contract);
-        console.log('[ZK Config] Contract creator:', data.creator);
-        console.log('[ZK Config] Contract invocations:', data.subinvocation);
+      try {
+        // Try to get the account - if it exists, it's a contract
+        const account = await server.getAccount(contractId);
+        console.log('[ZK Config] ✅ Contract found on Soroban RPC:', account.accountId());
+        console.log('[ZK Config] Contract sequence:', account.sequence);
         return true;
-      } else {
-        console.log('[ZK Config] ❌ Contract ID mismatch');
+      } catch (rpcError) {
+        // Try alternative method - get ledger data
+        try {
+          const ledger = await server.getLedgerEntries({
+            contract: contractId
+          });
+          if (ledger.entries && ledger.entries.length > 0) {
+            console.log('[ZK Config] ✅ Contract found via ledger entries:', contractId);
+            return true;
+          }
+        } catch (ledgerError) {
+          console.log('[ZK Config] ❌ Contract not found via ledger entries either');
+        }
+        
+        console.log('[ZK Config] ❌ Contract not found on Soroban RPC:', rpcError?.message || rpcError);
         return false;
       }
     } catch (e) {
-      console.log('[ZK Config] Contract not found on network:', e?.message || e);
+      console.log('[ZK Config] Contract check failed:', e?.message || e);
       return false;
     }
   }
