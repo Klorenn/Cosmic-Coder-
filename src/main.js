@@ -216,8 +216,8 @@ window.VIBE_LEGENDARIES.loadDefaults();
 window.VIBE_CHARACTERS = {
   vibecoder: { 
     name: 'VibeCoder', 
-    displayName: 'VibeCoder (El Sintonizador)',
-    displayName_en: 'VibeCoder (The Tuner)',
+    displayName: 'VibeCoder',
+    displayName_en: 'VibeCoder',
     textureKey: 'player', 
     animPrefix: 'player',
     origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
@@ -229,8 +229,8 @@ window.VIBE_CHARACTERS = {
   },
   destroyer: { 
     name: 'VoidNull', 
-    displayName: 'VoidNull (El Ejecutor del Vacío)',
-    displayName_en: 'VoidNull (The Void Executor)',
+    displayName: 'VoidNull',
+    displayName_en: 'VoidNull',
     textureKey: 'player-destroyer', 
     animPrefix: 'player-destroyer',
     origin: 'El protocolo de seguridad definitivo, diseñado para borrar registros corruptos de forma permanente.',
@@ -242,8 +242,8 @@ window.VIBE_CHARACTERS = {
   },
   swordsman: { 
     name: 'SyncStorm', 
-    displayName: 'SyncStorm (El Pulso Atmosférico)',
-    displayName_en: 'SyncStorm (The Atmospheric Pulse)',
+    displayName: 'SyncStorm',
+    displayName_en: 'SyncStorm',
     textureKey: 'player-swordsman', 
     animPrefix: 'player-swordsman',
     origin: 'Una tormenta eléctrica de datos que cobró conciencia tras una colisión en la Testnet de Stellar.',

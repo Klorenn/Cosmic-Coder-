@@ -2530,9 +2530,9 @@ export default class TitleScene extends Phaser.Scene {
     backdrop.setInteractive({ useHandCursor: false });
     container.add(backdrop);
 
-    // Book-style panel dimensions (pixel art aesthetic)
-    const panelW = Math.min(520, w - 40);
-    const panelH = Math.min(420, h - 40);
+    // Book-style panel dimensions (pixel art aesthetic) - Auto-height based on content
+    const panelW = Math.min(640, w - 40);
+    const panelH = Math.min(560, h - 40);
     const panelLeft = cx - panelW / 2;
     const panelTop = cy - panelH / 2;
 
@@ -2547,21 +2547,65 @@ export default class TitleScene extends Phaser.Scene {
     innerPanel.setStrokeStyle(2, 0x8b7355); // Lighter brown inner border
     container.add(innerPanel);
 
+    // RIGID GRID SYSTEM: Equivalent to CSS Grid with consistent spacing
+    const padding = 32; // Fixed internal padding
+    const gap = 24; // Consistent gap between sections
+    const gridPaddingLeft = panelLeft + padding;
+    const gridPaddingRight = panelLeft + panelW - padding;
+    const col1Left = gridPaddingLeft; // Left column
+    const col2Right = gridPaddingRight; // Right column
+    
+    // Calculate column widths for info section
+    const infoColWidth = (panelW - padding * 2) / 2;
+    
+    // Column positions for info section - left and right columns within the content area
+    const col1Left = gridPaddingLeft;                    // Left column starts at left padding
+    const col2Left = gridPaddingLeft + infoColWidth;     // Right column starts in the middle
+    
+    // Fixed square size for close button
+    const closeBtnSize = 24 * uiScale;
+    
+    // Close button (X) in top-right corner - integrated into header area
+    const closeBtn = this.add.rectangle(gridPaddingRight - 16, panelTop + 24, closeBtnSize, closeBtnSize, 0xff0000);
+    closeBtn.setStrokeStyle(2, 0x990000);
+    closeBtn.setInteractive({ useHandCursor: true });
+    container.add(closeBtn);
+    
+    // X symbol inside close button - vertically aligned with title
+    const closeSymbol = this.add.text(gridPaddingRight - 16, panelTop + 24, '✕', {
+      fontFamily: 'monospace',
+      fontSize: `${Math.round(16 * uiScale)}px`,
+      color: '#ffffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(closeSymbol);
+
     const fs = (n) => `${Math.round(n * uiScale)}px`;
 
-    // Title - Pixel font style (monospace, high contrast)
-    const titleY = panelTop + 30;
-    const titleText = this.add.text(cx, titleY, t('zk_popup.title'), {
+    // === GRID AREAS EQUIVALENT SYSTEM ===
+    // grid-template-areas:
+    //   "header header"
+    //   "info-left info-right"
+    //   "description description"
+    //   "controls controls"
+    //   "buttons buttons";
+    // grid-template-columns: 1fr 1fr;
+
+    // === HEADER AREA ===
+    const headerTop = panelTop + padding;
+    
+    // Title - Pixel font style (monospace, high contrast) - Main heading
+    const titleText = this.add.text(cx, headerTop, t('zk_popup.title'), {
       fontFamily: 'monospace',
-      fontSize: fs(20),
+      fontSize: fs(24),
       color: '#2d1810',
       fontStyle: 'bold'
     }).setOrigin(0.5);
     container.add(titleText);
 
-    // Divider line
-    const dividerY = titleY + 25;
-    const divider = this.add.rectangle(cx, dividerY, panelW - 40, 2, 0x4a2c2a);
+    // Divider line - perfectly aligned under title
+    const dividerY = headerTop + 30;
+    const divider = this.add.rectangle(cx, dividerY, panelW - padding * 2, 2, 0x4a2c2a);
     container.add(divider);
 
     // Get wallet and rank info
@@ -2578,135 +2622,190 @@ export default class TitleScene extends Phaser.Scene {
       }
     }
 
-    // Mode section (left side)
-    const leftColX = panelLeft + 30;
-    const modeY = dividerY + 30;
-
+    // === INFO-LEFT AREA ===
+    const infoSectionTop = dividerY + gap;
+    
+    // Left column: Mode info
     const modeText = isZkMode ? t('zk_popup.mode_ranked') : t('zk_popup.mode_casual');
     const modeColor = isZkMode ? '#228b22' : '#8b4513'; // Green for ranked, brown for casual
-    const modeDisplay = this.add.text(leftColX, modeY, modeText, {
+    const modeDisplay = this.add.text(col1Left, infoSectionTop, modeText, {
       fontFamily: 'monospace',
-      fontSize: fs(14),
+      fontSize: fs(16),
       color: modeColor,
       fontStyle: 'bold'
-    });
+    }).setOrigin(0, 0);
     container.add(modeDisplay);
 
     const zkStatusText = isZkMode ? t('zk_popup.zk_enabled') : t('zk_popup.zk_disabled');
     const zkStatusColor = isZkMode ? '#228b22' : '#8b0000'; // Green or dark red
-    const zkStatus = this.add.text(leftColX, modeY + 20, zkStatusText, {
+    const zkStatus = this.add.text(col1Left, infoSectionTop + 28, zkStatusText, {
       fontFamily: 'monospace',
-      fontSize: fs(12),
-      color: zkStatusColor
-    });
+      fontSize: fs(14),
+      color: zkStatusColor,
+      fontStyle: 'bold'
+    }).setOrigin(0, 0);
     container.add(zkStatus);
 
-    // Description text
-    const descY = modeY + 55;
-    const descLines = t('zk_popup.description').split('\n');
-    descLines.forEach((line, i) => {
-      const descText = this.add.text(leftColX, descY + i * 16, line, {
-        fontFamily: 'monospace',
-        fontSize: fs(10),
-        color: '#4a4a4a'
-      });
-      container.add(descText);
-    });
-
-    // Rank section (right side)
-    const rightColX = panelLeft + panelW - 30;
-    const rankY = dividerY + 30;
-
-    const rankTitle = this.add.text(rightColX, rankY, t('zk_popup.rank_title'), {
+    // === INFO-RIGHT AREA ===
+    // Right column: Rank info - Block vertical layout
+    const rankTitle = this.add.text(col2Left, infoSectionTop, t('zk_popup.rank_title'), {
       fontFamily: 'monospace',
-      fontSize: fs(12),
+      fontSize: fs(14),
       color: '#4a2c2a',
       fontStyle: 'bold'
-    }).setOrigin(1, 0);
+    }).setOrigin(0, 0);
     container.add(rankTitle);
 
     if (!isUnranked(playerRank)) {
-      // Show rank icon
+      // Show rank info with proper vertical alignment
       const rankData = getRankById(playerRank);
-      if (this.textures.exists(rankData.sprite)) {
-        const rankIcon = this.add.image(rightColX - 40, rankY + 35, rankData.sprite);
-        rankIcon.setDisplaySize(48, 48);
-        container.add(rankIcon);
-      }
-
-      // Show rank name
-      const rankNameText = this.add.text(rightColX, rankY + 25, rankData.name, {
+      
+      // Rank name - aligned with left column
+      const rankNameY = infoSectionTop + 24;
+      const rankNameText = this.add.text(col2Left, rankNameY, rankData.name, {
         fontFamily: 'monospace',
-        fontSize: fs(14),
+        fontSize: fs(16),
         color: getRankColorCSS(playerRank),
         fontStyle: 'bold'
-      }).setOrigin(1, 0);
+      }).setOrigin(0, 0);
       container.add(rankNameText);
+      
+      // Rank icon positioned to the right of the text with proper separation - no overlap
+      if (this.textures.exists(rankData.sprite)) {
+        const rankIcon = this.add.image(col2Left + 100, rankNameY + 5, rankData.sprite);
+        rankIcon.setDisplaySize(32, 32);
+        container.add(rankIcon);
+      }
     } else {
       // Unranked
-      const unrankedText = this.add.text(rightColX, rankY + 35, t('ranks.unranked'), {
+      const unrankedText = this.add.text(col2Left, infoSectionTop + 24, t('ranks.unranked'), {
         fontFamily: 'monospace',
-        fontSize: fs(14),
+        fontSize: fs(16),
         color: '#888888',
         fontStyle: 'bold'
-      }).setOrigin(1, 0);
+      }).setOrigin(0, 0);
       container.add(unrankedText);
     }
 
-    // Controls section (bottom left)
-    const controlsY = panelTop + panelH - 140;
-    const controlsTitle = this.add.text(leftColX, controlsY, t('zk_popup.controls_title'), {
+    // === DESCRIPTION AREA ===
+    const descTop = infoSectionTop + 100;
+    const descMaxWidth = panelW - padding * 2;
+    
+    // Description text - Left aligned for perfect consistency, using full width
+    const descLines = t('zk_popup.description').split('\n');
+    descLines.forEach((line, i) => {
+      const descText = this.add.text(gridPaddingLeft, descTop + i * 24, line, {
+        fontFamily: 'monospace',
+        fontSize: fs(11),
+        color: '#4a4a4a',
+        wordWrap: { width: descMaxWidth }
+      }).setOrigin(0, 0);
+      container.add(descText);
+    });
+
+    // === CONTROLS AREA ===
+    const controlsTop = descTop + 40 + (descLines.length * 24);
+    
+    // Controls title
+    const controlsTitle = this.add.text(gridPaddingLeft, controlsTop, t('zk_popup.controls_title'), {
       fontFamily: 'monospace',
-      fontSize: fs(12),
+      fontSize: fs(14),
       color: '#4a2c2a',
       fontStyle: 'bold'
-    });
+    }).setOrigin(0, 0);
     container.add(controlsTitle);
 
-    // Controls lines
+    // Controls grid (table-like layout with perfect alignment)
+    const controlsStartY = controlsTop + 24;
+    const col1X = gridPaddingLeft;
+    const col2X = gridPaddingLeft + 140; // Precise distance for perfect alignment
+    
+    // Controls lines with table-like alignment
     const controlsLines = [
       t('zk_popup.controls_move'),
       t('zk_popup.controls_menu'),
       t('zk_popup.controls_menu_note')
     ];
+    
+    // Parse and display controls with precise alignment
     controlsLines.forEach((line, i) => {
-      const controlText = this.add.text(leftColX, controlsY + 18 + i * 14, line, {
-        fontFamily: 'monospace',
-        fontSize: fs(10),
-        color: '#5a4a3a'
-      });
-      container.add(controlText);
+      // For each line, split on the dash to separate controls from description
+      if (i < 2) {
+        const parts = line.split('-');
+        if (parts.length >= 2) {
+          const controlKeys = parts[0].trim();
+          const controlDesc = parts[1].trim();
+          
+          const controlKeysText = this.add.text(col1X, controlsStartY + i * 24, controlKeys, {
+            fontFamily: 'monospace',
+            fontSize: fs(11),
+            color: '#5a4a3a',
+            fontStyle: 'bold'
+          }).setOrigin(0, 0);
+          container.add(controlKeysText);
+          
+          const controlDescText = this.add.text(col2X, controlsStartY + i * 24, controlDesc, {
+            fontFamily: 'monospace',
+            fontSize: fs(11),
+            color: '#5a4a3a'
+          }).setOrigin(0, 0);
+          container.add(controlDescText);
+        }
+      } else {
+        // Handle (Game Continues) - aligned with col1X
+        const controlNoteText = this.add.text(col1X, controlsStartY + i * 24, line, {
+          fontFamily: 'monospace',
+          fontSize: fs(10),
+          color: '#6a5a4a'
+        }).setOrigin(0, 0);
+        container.add(controlNoteText);
+      }
     });
 
-    // Auto-Shoot info (subtle, neutral color)
-    const autoShootText = this.add.text(leftColX, controlsY + 18 + controlsLines.length * 14 + 8, t('zk_popup.controls_auto_shoot'), {
+    // Auto-Shoot info - Separate block below controls
+    const autoShootText = this.add.text(gridPaddingLeft, controlsStartY + controlsLines.length * 24 + 16, t('zk_popup.controls_auto_shoot'), {
       fontFamily: 'monospace',
-      fontSize: fs(9),
+      fontSize: fs(10),
       color: '#6a5a4a'
-    });
+    }).setOrigin(0, 0);
     container.add(autoShootText);
 
-    // Buttons (bottom center)
-    const buttonsY = panelTop + panelH - 45;
-
-    // Play button (Ranked or Casual)
+    // === BUTTONS AREA ===
+    // Calculate bottom position to anchor buttons to the bottom of the panel
+    const buttonsBottomPadding = 40;
+    const buttonsTop = panelTop + panelH - buttonsBottomPadding;
+    
+    // Play button (Ranked or Casual) - Primary CTA with consistent pixel art style
     const playButtonText = isZkMode ? t('zk_popup.play_ranked') : t('zk_popup.play_casual');
     const playButtonColor = isZkMode ? '#228b22' : '#8b4513';
-    const playButton = this.add.text(cx - 70, buttonsY, playButtonText, {
+    const playButton = this.add.text(cx - 80, buttonsTop, playButtonText, {
       fontFamily: 'monospace',
-      fontSize: fs(12),
+      fontSize: fs(14),
       color: playButtonColor,
       fontStyle: 'bold',
-      backgroundColor: '#f5e6c8'
+      backgroundColor: '#f5e6c8',
+      padding: {
+        left: 24,
+        right: 24,
+        top: 12,
+        bottom: 12
+      }
     }).setOrigin(0.5).setInteractive({ useHandCursor: true });
     container.add(playButton);
 
-    // Close button
-    const closeButton = this.add.text(cx + 70, buttonsY, t('zk_popup.close'), {
+    // Close button - Secondary with identical pixel art style
+    const closeButton = this.add.text(cx + 80, buttonsTop, t('zk_popup.close'), {
       fontFamily: 'monospace',
-      fontSize: fs(12),
+      fontSize: fs(14),
       color: '#8b0000',
-      fontStyle: 'bold'
+      fontStyle: 'bold',
+      backgroundColor: '#f0f0f0',
+      padding: {
+        left: 24,
+        right: 24,
+        top: 12,
+        bottom: 12
+      }
     }).setOrigin(0.5).setInteractive({ useHandCursor: true });
     container.add(closeButton);
 
@@ -2716,7 +2815,7 @@ export default class TitleScene extends Phaser.Scene {
     closeButton.on('pointerover', () => closeButton.setColor('#ff0000'));
     closeButton.on('pointerout', () => closeButton.setColor('#8b0000'));
 
-    // Close function
+    // Close function - Only closes this modal, doesn't use ESC
     const closePopup = () => {
       container.destroy();
       this.menuBlocked = false;
@@ -2735,7 +2834,7 @@ export default class TitleScene extends Phaser.Scene {
         this.startCasualGame();
       } else {
         // Wallet required for ranked, show message
-        const warningText = this.add.text(cx, buttonsY - 30, t('zk_popup.wallet_required'), {
+        const warningText = this.add.text(cx, buttonsTop - 30, t('zk_popup.wallet_required'), {
           fontFamily: 'monospace',
           fontSize: fs(11),
           color: '#ff0000'
@@ -2751,11 +2850,9 @@ export default class TitleScene extends Phaser.Scene {
     closeButton.on('pointerdown', closePopup);
     backdrop.on('pointerdown', closePopup);
 
-    // Keyboard handler
+    // Keyboard handler - ESC no longer closes the popup, only Enter starts game
     const handleKeydown = (event) => {
-      if (event.code === 'Escape') {
-        closePopup();
-      } else if (event.code === 'Enter') {
+      if (event.code === 'Enter') {
         startGame();
       }
     };
@@ -4101,8 +4198,8 @@ export default class TitleScene extends Phaser.Scene {
     const cx = w / 2;
     const cy = h / 2;
 
-    const overlayW = Math.min(620, w - 40);
-    const overlayH = Math.min(560, h - 40);
+    const overlayW = Math.min(680, w - 40);
+    const overlayH = Math.min(620, h - 40);
     const overlayLeft = cx - overlayW / 2;
     const overlayTop = cy - overlayH / 2;
 
@@ -4113,24 +4210,38 @@ export default class TitleScene extends Phaser.Scene {
     overlay.setStrokeStyle(2, 0x00ffff);
     overlay.setDepth(1001).setInteractive({ useHandCursor: false });
 
-    const title = this.add.text(cx, overlayTop + 36, t('menu.CHARACTER'), {
+    const title = this.add.text(cx, overlayTop + 32, t('menu.CHARACTER'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${26 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
 
-    const spriteCenterX = cx;
-    // Nombre completo del personaje (con su nombre en español)
-    const previewName = this.add.text(cx, overlayTop + 80 * uiScale, 'VibeCoder', {
+    // Nombre completo del personaje (centrado debajo del título, con menos espacio)
+    const previewName = this.add.text(cx, overlayTop + 65 * uiScale, 'VibeCoder', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${20 * uiScale}px`,
+      fontSize: `${22 * uiScale}px`,
       color: '#ffffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
 
-    // Robot centrado horizontal y suficientemente separado del borde inferior
-    const spriteCenterY = overlayTop + overlayH * 0.41;
+    // Botón para mostrar la historia del personaje (localized), centrado debajo del nombre con menos separación
+    const loreButton = this.add.text(cx, overlayTop + 95 * uiScale, t('menu.VIEW_HISTORY'), {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: `${14 * uiScale}px`,
+      color: '#00ffff',
+      backgroundColor: '#002233',
+      padding: {
+        left: 15,
+        right: 15,
+        top: 8,
+        bottom: 8
+      }
+    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
+
+    // Posición para el personaje, centrado verticalmente para mejor balance
+    const spriteCenterX = cx;
+    const spriteCenterY = overlayTop + overlayH * 0.40;
     const previewSprite = this.add.sprite(spriteCenterX, spriteCenterY, 'player', 0);
     previewSprite.setScale(2.8 * uiScale).setDepth(1004).setVisible(true).setAlpha(1);
 
@@ -4162,26 +4273,12 @@ export default class TitleScene extends Phaser.Scene {
       color: '#00ffff'
     }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
 
-    // Botón para mostrar la historia del personaje (localized)
-    const loreButton = this.add.text(cx, overlayTop + overlayH - 120, t('menu.VIEW_HISTORY'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${16 * uiScale}px`,
-      color: '#00ffff',
-      backgroundColor: '#002233',
-      padding: {
-        left: 15,
-        right: 15,
-        top: 8,
-        bottom: 8
-      }
-    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
-
     const updatePreview = () => {
       const charId = CHAR_IDS[selectedIndex];
       const fallbackChar = { 
         name: 'VibeCoder', 
-        displayName: 'VibeCoder (El Sintonizador)',
-        displayName_en: 'VibeCoder (The Tuner)',
+        displayName: 'VibeCoder',
+        displayName_en: 'VibeCoder',
         textureKey: 'player', 
         animPrefix: 'player',
         origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
@@ -4248,13 +4345,22 @@ export default class TitleScene extends Phaser.Scene {
     arrowLeft.on('pointerdown', () => { cycle(-1); });
     arrowRight.on('pointerdown', () => { cycle(1); });
 
+    // Variable de estado para controlar la vista actual
+    let currentView = "menu"; // Valores posibles: "menu", "history"
+    
     // Función para mostrar la historia del personaje
     const showCharacterLore = () => {
+      // Si ya estamos en la vista de historia, no hacer nada
+      if (currentView === "history") return;
+      
+      // Cambiar el estado a history
+      currentView = "history";
+      
       const charId = CHAR_IDS[selectedIndex];
       const fallbackChar = { 
         name: 'VibeCoder', 
-        displayName: 'VibeCoder (El Sintonizador)',
-        displayName_en: 'VibeCoder (The Tuner)',
+        displayName: 'VibeCoder',
+        displayName_en: 'VibeCoder',
         textureKey: 'player', 
         animPrefix: 'player',
         origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
@@ -4266,28 +4372,64 @@ export default class TitleScene extends Phaser.Scene {
       };
       const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS?.vibecoder || fallbackChar;
       
+      // Create a copy of the current character sprite to animate separately
+      const animatedSprite = this.add.sprite(previewSprite.x, previewSprite.y, previewSprite.texture.key, previewSprite.frame.name);
+      animatedSprite.setScale(previewSprite.scaleX).setDepth(1008);
+      
+      // Copy the animation from the original sprite
+      if (previewSprite.anims.currentAnim) {
+        animatedSprite.play(previewSprite.anims.currentAnim.key);
+      }
+      
+      // Define two-column grid layout
+      const gridPadding = 32;
+      const characterWidth = loreBoxW * 0.35; // 35% para el personaje
+      const textWidth = loreBoxW * 0.55;      // 55% para el texto
+      const horizontalGap = 32;               // Separación entre columnas
+      
+      // Position character in left column
+      const characterX = (cx - loreBoxW/2) + characterWidth/2 + gridPadding;
+      const characterY = cy - loreBoxH/2 + gridPadding + 40; // Align with top of text block
+      
+      // Animate the character sprite to its designated position in left column
+      this.tweens.add({
+        targets: animatedSprite,
+        x: characterX,
+        y: characterY,
+        duration: 800,
+        ease: 'Power2',
+        onComplete: () => {
+          // Optionally change animation to facing left if side-walking animation exists
+          const walkSideKey = char.animPrefix + '-walk-side';
+          if (this.anims.exists(walkSideKey)) {
+            animatedSprite.play(walkSideKey);
+          }
+        }
+      });
+      
       // Crear un overlay para mostrar la información del personaje
       const loreBackdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.95);
       loreBackdrop.setDepth(1005).setInteractive({ useHandCursor: true });
       
-      const loreBoxW = Math.min(600, w - 60);
-      const loreBoxH = Math.min(500, h - 60);
+      const loreBoxW = Math.min(700, w - 60);
+      const loreBoxH = Math.min(520, h - 60);
       const loreBox = this.add.rectangle(cx, cy, loreBoxW, loreBoxH, 0x0a0a14, 1);
       loreBox.setStrokeStyle(2, 0x00ffff);
       loreBox.setDepth(1006);
       
-      // Título del personaje en el idioma apropiado
+      // Título del personaje en el idioma apropiado - columna derecha
       const lang = window.VIBE_SETTINGS?.language || 'en';
+      const textStartX = (cx - loreBoxW/2) + (loreBoxW * 0.35) + 32; // Columna derecha
       const loreTitleText = lang === 'es' ? (char.displayName || char.name) : (char.displayName_en || char.displayName || char.name);
-      const loreTitle = this.add.text(cx, cy - loreBoxH/2 + 40, loreTitleText, {
+      const loreTitle = this.add.text(textStartX, cy - loreBoxH/2 + 40, loreTitleText, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${24 * uiScale}px`,
         color: '#00ffff',
         fontStyle: 'bold'
-      }).setOrigin(0.5).setDepth(1007);
+      }).setOrigin(0, 0).setDepth(1007);
       
-      // Origin (localized)
-      const originLabel = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 90, t('character.origin') || 'Origin:', {
+      // Origin (localized) - columna derecha
+      const originLabel = this.add.text(textStartX, cy - loreBoxH/2 + 90, t('character.origin') || 'Origin:', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${16 * uiScale}px`,
         color: '#ffffff',
@@ -4295,44 +4437,44 @@ export default class TitleScene extends Phaser.Scene {
       }).setOrigin(0, 0).setDepth(1007);
       
       // Get localized character info based on current language (lang already declared above)
-      const originText = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 120, 
+      const originText = this.add.text(textStartX, cy - loreBoxH/2 + 120, 
         lang === 'es' ? (char.origin || '') : (char.origin_en || char.origin || ''), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${14 * uiScale}px`,
         color: '#cccccc',
-        wordWrap: { width: loreBoxW - 60 }
+        wordWrap: { width: (loreBoxW * 0.55) - 32 } // Width for right column
       }).setOrigin(0, 0).setDepth(1007);
       
-      // History (localized)
-      const historyLabel = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 180, t('character.history') || 'History:', {
+      // History (localized) - columna derecha
+      const historyLabel = this.add.text(textStartX, cy - loreBoxH/2 + 180, t('character.history') || 'History:', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${16 * uiScale}px`,
         color: '#ffffff',
         fontStyle: 'bold'
       }).setOrigin(0, 0).setDepth(1007);
       
-      const historyText = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 210, 
+      const historyText = this.add.text(textStartX, cy - loreBoxH/2 + 210, 
         lang === 'es' ? (char.history || '') : (char.history_en || char.history || ''), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${14 * uiScale}px`,
         color: '#cccccc',
-        wordWrap: { width: loreBoxW - 60 }
+        wordWrap: { width: (loreBoxW * 0.55) - 32 } // Width for right column
       }).setOrigin(0, 0).setDepth(1007);
       
-      // Mission (localized)
-      const missionLabel = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 320, t('character.mission') || 'Mission:', {
+      // Mission (localized) - columna derecha
+      const missionLabel = this.add.text(textStartX, cy - loreBoxH/2 + 320, t('character.mission') || 'Mission:', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${16 * uiScale}px`,
         color: '#ffffff',
         fontStyle: 'bold'
       }).setOrigin(0, 0).setDepth(1007);
       
-      const missionText = this.add.text(cx - loreBoxW/2 + 30, cy - loreBoxH/2 + 350, 
+      const missionText = this.add.text(textStartX, cy - loreBoxH/2 + 350, 
         lang === 'es' ? (char.mission || '') : (char.mission_en || char.mission || ''), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${14 * uiScale}px`,
         color: '#cccccc',
-        wordWrap: { width: loreBoxW - 60 }
+        wordWrap: { width: (loreBoxW * 0.55) - 32 }
       }).setOrigin(0, 0).setDepth(1007);
       
       // Botón de cerrar (localized)
@@ -4350,6 +4492,9 @@ export default class TitleScene extends Phaser.Scene {
       }).setOrigin(0.5).setDepth(1008).setInteractive({ useHandCursor: true });
       
       const closeLore = () => {
+        // Restaurar el estado a menu
+        currentView = "menu";
+        
         loreBackdrop.destroy();
         loreBox.destroy();
         loreTitle.destroy();
@@ -4360,6 +4505,7 @@ export default class TitleScene extends Phaser.Scene {
         missionLabel.destroy();
         missionText.destroy();
         closeButton.destroy();
+        animatedSprite.destroy(); // Destroy the animated character sprite
       };
       
       closeButton.on('pointerdown', closeLore);
@@ -4389,6 +4535,7 @@ export default class TitleScene extends Phaser.Scene {
       title.destroy();
       previewSprite.destroy();
       previewName.destroy();
+      loreButton.destroy(); // Destroy the lore button as well
       placeholder.destroy();
       placeText.destroy();
       arrowLeft.destroy();
