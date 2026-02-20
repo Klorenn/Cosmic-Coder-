@@ -33,8 +33,66 @@ const config = {
       debug: false // Set to true to see hitboxes
     }
   },
-  scene: [BootScene, TitleScene, ArenaScene]
+  scene: [BootScene, TitleScene, ArenaScene],
+  // Manejo de errores de renderizado
+  render: {
+    failIfMajorPerformanceCaveat: false,
+    antialias: true,
+    pixelArt: true,
+    roundPixels: true
+  },
+  callbacks: {
+    postBoot: function(game) {
+      console.log('🎮 Phaser boot completado');
+    }
+  }
 };
+
+// Verificar soporte WebGL antes de iniciar
+function checkWebGLSupport() {
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    return !!gl;
+  } catch (e) {
+    console.error('❌ Error al verificar WebGL:', e);
+    return false;
+  }
+}
+
+// Si no hay soporte WebGL, usar Canvas
+if (!checkWebGLSupport()) {
+  console.warn('⚠️ WebGL no soportado, usando Canvas en su lugar');
+  config.type = Phaser.CANVAS;
+}
+
+function getStatusOverlay() {
+  if (typeof document === 'undefined') return null;
+  let el = document.getElementById('vibe-status-overlay');
+  if (el) return el;
+  el = document.createElement('div');
+  el.id = 'vibe-status-overlay';
+  el.style.position = 'fixed';
+  el.style.left = '12px';
+  el.style.bottom = '12px';
+  el.style.padding = '8px 10px';
+  el.style.background = 'rgba(0,0,0,0.55)';
+  el.style.border = '1px solid rgba(0,255,255,0.35)';
+  el.style.borderRadius = '8px';
+  el.style.color = '#e8ffff';
+  el.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+  el.style.fontSize = '12px';
+  el.style.zIndex = '10001';
+  el.style.pointerEvents = 'none';
+  el.textContent = 'Booting…';
+  document.body.appendChild(el);
+  return el;
+}
+
+function setOverlayText(text) {
+  const el = getStatusOverlay();
+  if (el) el.textContent = String(text || '');
+}
 
 // Meta-progression upgrades (persistent across runs)
 window.VIBE_UPGRADES = {
@@ -456,15 +514,67 @@ function showRotateOverlay(show) {
 
 function startGame() {
   if (window.__VIBE_GAME__) return;
+  
+  console.log('🎮 Iniciando juego con configuración:', config);
+  setOverlayText('Starting Phaser…');
+  
   showRotateOverlay(false);
   if (isMobileDevice() && typeof screen !== 'undefined' && screen.orientation && typeof screen.orientation.lock === 'function') {
     screen.orientation.lock('landscape').catch(() => {});
   }
-  const game = new Phaser.Game(config);
-  window.__VIBE_GAME__ = game;
+  
+  try {
+    const game = new Phaser.Game(config);
+    setOverlayText('Phaser created. Waiting ready…');
+    
+    // Agregar listeners para manejar errores de renderizado
+    game.events.on('ready', () => {
+      console.log('✅ Juego listo y renderizando');
+      setOverlayText('Running');
+    });
+    
+    game.events.on('resize', (gameSize) => {
+      console.log('🔄 Juego redimensionado:', gameSize);
+    });
+    
+    // Manejar errores críticos
+    window.addEventListener('error', (event) => {
+      console.error('❌ Error crítico en el juego:', event.error);
+      setOverlayText('Error: ' + (event.error?.message || event.message || 'unknown'));
+    });
+    
+    window.addEventListener('unhandledrejection', (event) => {
+      console.error('❌ Promesa rechazada sin manejar:', event.reason);
+      setOverlayText('Unhandled: ' + (event.reason?.message || String(event.reason || 'unknown')));
+    });
+    
+    window.__VIBE_GAME__ = game;
+  } catch (error) {
+    console.error('❌ Error al iniciar el juego:', error);
+    setOverlayText('Start failed: ' + (error?.message || String(error)));
+    
+    // Mostrar mensaje de error en la página
+    const errorDiv = document.createElement('div');
+    errorDiv.style.position = 'fixed';
+    errorDiv.style.top = '50%';
+    errorDiv.style.left = '50%';
+    errorDiv.style.transform = 'translate(-50%, -50%)';
+    errorDiv.style.color = '#ff0000';
+    errorDiv.style.fontSize = '18px';
+    errorDiv.style.fontFamily = 'Arial, sans-serif';
+    errorDiv.style.textAlign = 'center';
+    errorDiv.style.backgroundColor = '#0a0a0f';
+    errorDiv.style.padding = '20px';
+    errorDiv.style.border = '2px solid #ff0000';
+    errorDiv.style.zIndex = '10000';
+    errorDiv.innerHTML = '<p>❌ Error al cargar el juego</p><p>Verifica la consola para más detalles</p>';
+    document.body.appendChild(errorDiv);
+  }
 }
 
 loadRuntimeConfig().then(() => {
+  console.log('⚙️ Configuración cargada:', window.__VITE_CONFIG__);
+  
   if (isMobileDevice() && isPortrait()) {
     showRotateOverlay(true);
     const onOrientation = () => {
@@ -477,6 +587,12 @@ loadRuntimeConfig().then(() => {
     window.addEventListener('orientationchange', onOrientation);
     window.addEventListener('resize', onOrientation);
   } else {
+    startGame();
+  }
+}).catch((error) => {
+  console.error('❌ Error al cargar la configuración:', error);
+  // Intentar iniciar igualmente con valores por defecto
+  if (!isMobileDevice() || !isPortrait()) {
     startGame();
   }
 });

@@ -273,6 +273,197 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Track if rebirth prompt was shown this run
     this.rebirthPromptShown = false;
+
+    this.zkStartupInProgress = false;
+    this.zkStartupOverlay = null;
+  }
+
+  showZkStartupOverlay(text) {
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const uiScale = getUIScale(this);
+    const boxW = Math.min(520, w - 60);
+    const boxH = 140;
+
+    const overlay = this.add.container(0, 0);
+    overlay.setDepth(5000);
+
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 0.65);
+    const panel = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
+    panel.setStrokeStyle(2, 0x00ffff);
+
+    const label = this.add.text(cx, cy - 18, 'ZK', {
+      fontFamily: 'monospace',
+      fontSize: `${Math.round(20 * uiScale)}px`,
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+
+    const msg = this.add.text(cx, cy + 18, String(text || ''), {
+      fontFamily: 'monospace',
+      fontSize: `${Math.round(12 * uiScale)}px`,
+      color: '#ffffff',
+      align: 'center',
+      wordWrap: { width: boxW - 40 }
+    }).setOrigin(0.5);
+
+    overlay.add([backdrop, panel, label, msg]);
+    this.zkStartupOverlay = overlay;
+    return overlay;
+  }
+
+  hideZkStartupOverlay() {
+    if (this.zkStartupOverlay) {
+      this.zkStartupOverlay.destroy();
+      this.zkStartupOverlay = null;
+    }
+  }
+
+  spawnSpecificWeaponDropNearPlayer(weaponType, dx = 48, dy = 0) {
+    if (!this.player || !this.weaponDrops) return;
+    const x = this.player.x + dx;
+    const y = this.player.y + dy;
+    const textureKey = `weapon-${weaponType}`;
+    if (!this.textures.exists(textureKey)) return;
+    const drop = this.weaponDrops.create(x, y, textureKey);
+    drop.weaponType = weaponType;
+    drop.isRare = false;
+    drop.isMelee = false;
+    drop.isZkDrop = true;
+    drop.zkForcePickup = false;
+
+    const ring = this.add.circle(x, y, 26, 0x00ffff, 0.12);
+    ring.setStrokeStyle(2, 0x00ffff, 0.55);
+    drop.zkRing = ring;
+    this.createTrackedTween({
+      targets: ring,
+      alpha: { from: 0.18, to: 0.45 },
+      scale: { from: 1, to: 1.18 },
+      duration: 650,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+
+    this.tweens.add({
+      targets: drop,
+      y: y - 16,
+      duration: 250,
+      yoyo: true,
+      ease: 'Sine.easeOut'
+    });
+    this.createTrackedTween({
+      targets: drop,
+      scale: 1.3,
+      alpha: 0.75,
+      duration: 500,
+      yoyo: true,
+      repeat: -1
+    });
+
+    // ZK pickup prompt (shown when player is close; pickup requires pressing E)
+    const prompt = this.add.text(x, y - 44, '🔫 ZK WEAPON\nPRESS E', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#00ffff',
+      fontStyle: 'bold',
+      stroke: '#000000',
+      strokeThickness: 4,
+      align: 'center'
+    }).setOrigin(0.5);
+    prompt.setVisible(false);
+    drop.zkPromptText = prompt;
+    this.createTrackedTween({
+      targets: prompt,
+      alpha: { from: 0.65, to: 1 },
+      duration: 550,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
+    });
+  }
+
+  async startZkRankedStartup() {
+    if (this.zkStartupInProgress) return;
+    this.zkStartupInProgress = true;
+
+    this.physics.world.pause();
+    this.time.timeScale = 0;
+
+    this.showZkStartupOverlay('Generating circuit…');
+
+    try {
+      const addr = await stellarWallet.getAddress();
+      if (addr) {
+        // Local fallback: if player has completed a ranked run before on this device,
+        // always treat as returning even if on-chain queries fail.
+        let localRankedHistory = false;
+        try {
+          const raw = localStorage.getItem('cosmicCoderRankedHistory');
+          const map = raw ? JSON.parse(raw) : {};
+          localRankedHistory = !!map?.[addr];
+        } catch (_) {}
+
+        const health = await gameClient.checkZkProverHealth();
+        if (!health?.ok) {
+          this.hideZkStartupOverlay();
+          this.showZkStartupOverlay('ZK prover not ready');
+          await new Promise((r) => setTimeout(r, 900));
+        }
+
+        // Only grant ZK starter drop if the player has played at least once on-chain.
+        // Primary source: player stats. Fallback: presence in on-chain leaderboard.
+        let stats = { gamesPlayed: 0 };
+        try {
+          stats = await weaponClient.getPlayerStats(addr);
+          console.log('[ZK Startup] Player stats:', JSON.stringify(stats));
+        } catch (e) {
+          console.warn('[ZK Startup] getPlayerStats failed:', e);
+          stats = { gamesPlayed: 0 };
+        }
+
+        let hasPlayedBefore = localRankedHistory || (stats?.gamesPlayed || 0) >= 1;
+
+        // Local-dev fallback: if the wallet appears in the backend leaderboard API, treat as returning.
+        if (!hasPlayedBefore) {
+          try {
+            const entries = await LeaderboardManager.fetchOnChain();
+            hasPlayedBefore = Array.isArray(entries) && entries.some((e) => String(e?.address || '') === String(addr));
+            console.log('[ZK Startup] Local leaderboard API match:', hasPlayedBefore);
+          } catch (e) {
+            console.warn('[ZK Startup] Local leaderboard API fallback failed:', e?.message || e);
+          }
+        }
+
+        if (!hasPlayedBefore && gameClient.isContractConfigured()) {
+          try {
+            const lb = await gameClient.getLeaderboardBySeason(1, 50);
+            hasPlayedBefore = Array.isArray(lb) && lb.some((e) => String(e?.player || '') === String(addr));
+            console.log('[ZK Startup] Leaderboard fallback match:', hasPlayedBefore);
+          } catch (e) {
+            console.warn('[ZK Startup] Leaderboard fallback failed:', e?.message || e);
+          }
+        }
+
+        if (hasPlayedBefore) {
+          console.log('[ZK Startup] Dropping ZK Plasma Rifle');
+          this.spawnSpecificWeaponDropNearPlayer('rapid', 52, 0);
+        } else {
+          console.log('[ZK Startup] No weapon drop (no prior history detected)');
+        }
+      }
+    } catch (_) {
+      // ignore
+    } finally {
+      this.hideZkStartupOverlay();
+      this.time.timeScale = 1;
+      this.physics.world.resume();
+      this.zkStartupInProgress = false;
+      this.startWave();
+    }
   }
 
   /**
@@ -345,6 +536,9 @@ export default class ArenaScene extends Phaser.Scene {
       right: Phaser.Input.Keyboard.KeyCodes.D
     });
 
+    // ZK weapon pickup interaction
+    this.zkPickupKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+
     // Secret creator key - Press G to unlock Hunter's Warglaive
     this.input.keyboard.on('keydown-G', () => {
       const legendaries = window.VIBE_LEGENDARIES;
@@ -402,7 +596,11 @@ export default class ArenaScene extends Phaser.Scene {
     }
 
     // Start spawning enemies
-    this.startWave();
+    if (!this.isContinuedGame && this.gameMode === 'zk_ranked') {
+      this.startZkRankedStartup();
+    } else {
+      this.startWave();
+    }
 
     // Listen for XP events from hooks (store references for cleanup)
     this.xpPopupHandler = (e) => this.showXPPopup(e.detail.amount);
@@ -2816,6 +3014,25 @@ export default class ArenaScene extends Phaser.Scene {
   destroyWithTweenCleanup(entity) {
     if (!entity) return;
 
+    // Cleanup attached prompt (used by ZK weapon drops)
+    if (entity.zkPromptText && entity.zkPromptText.destroy) {
+      try {
+        entity.zkPromptText.destroy();
+      } catch (_) {
+        // ignore
+      }
+      entity.zkPromptText = null;
+    }
+
+    if (entity.zkRing && entity.zkRing.destroy) {
+      try {
+        entity.zkRing.destroy();
+      } catch (_) {
+        // ignore
+      }
+      entity.zkRing = null;
+    }
+
     // Stop all tweens on this entity
     if (entity.trackedTweens) {
       entity.trackedTweens.forEach(tween => {
@@ -2929,6 +3146,15 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   pickupWeapon(player, drop) {
+    // ZK drops require pressing E to pick up
+    if (drop?.isZkDrop && !drop?.zkForcePickup) {
+      return;
+    }
+    if (drop?.isZkDrop) {
+      drop.zkForcePickup = false;
+      if (drop.zkPromptText && drop.zkPromptText.scene) drop.zkPromptText.destroy();
+      drop.zkPromptText = null;
+    }
     const weaponType = drop.weaponType;
     const isRare = drop.isRare;
     this.destroyWithTweenCleanup(drop);
@@ -4019,21 +4245,17 @@ export default class ArenaScene extends Phaser.Scene {
     this.waveTimer = null;
     this.enemies.clear(true, true);
 
-    // Robot death animation: play hurt + fall + fade
+    // Stop and hide the in-world player sprite immediately.
+    // The Game Over overlay will play the dedicated death animation once.
     this.player.setVelocity(0, 0);
     this.player.body.checkCollision.none = true;
-    const hurtKey = (this.playerAnimPrefix || 'player') + '-hurt';
-    if (this.anims.exists(hurtKey)) {
-      this.player.play(hurtKey, true);
-    }
-    this.tweens.add({
-      targets: this.player,
-      y: this.player.y + 30,
-      alpha: 0.4,
-      scale: this.player.scale * 0.7,
-      duration: 600,
-      ease: 'Power2.In'
-    });
+    try {
+      this.tweens.killTweensOf(this.player);
+      if (this.player.anims) this.player.anims.stop();
+      if (this.player.disableBody) this.player.disableBody(true, true);
+      this.player.setActive(false);
+      this.player.setVisible(false);
+    } catch (_) {}
 
     const state = window.VIBE_CODER;
     const settings = window.VIBE_SETTINGS;
@@ -4056,12 +4278,36 @@ export default class ArenaScene extends Phaser.Scene {
       if (addr) saveProgressToWallet(addr, { highWave: this.highWave, highScore: this.highScore });
     });
 
-    // Add run to leaderboard (local: wallet short address si hay, si no nombre; on-chain si hay wallet)
+    // Add run to leaderboard — save locally immediately, then submit on-chain (no duplicate local entries)
+    const localName = settings.playerName || 'Anonymous';
+    const runScore = Math.floor(state.totalXP);
+    const runWave = this.waveNumber;
+    const runDate = Date.now();
+    LeaderboardManager.addEntry(localName, runWave, runScore);
     stellarWallet.getAddress().then((addr) => {
-      const displayName = addr ? stellarWallet.shortAddress(addr) : (settings.playerName || 'Anonymous');
-      LeaderboardManager.addEntry(displayName, this.waveNumber, state.totalXP);
-      if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP).catch(() => {});
-    });
+      if (addr) {
+        // Persist ranked-history locally so returning players always get the ZK starter drop
+        // even if on-chain queries/API are temporarily unavailable.
+        try {
+          if (this.gameMode === 'zk_ranked') {
+            const raw = localStorage.getItem('cosmicCoderRankedHistory');
+            const map = raw ? JSON.parse(raw) : {};
+            map[addr] = true;
+            localStorage.setItem('cosmicCoderRankedHistory', JSON.stringify(map));
+          }
+        } catch (_) {}
+
+        try {
+          const entries = LeaderboardManager.load();
+          const idx = entries.findIndex((e) => e && e.score === runScore && e.wave === runWave && (runDate - (e.date || 0)) < 5000);
+          if (idx >= 0) {
+            entries[idx].name = stellarWallet.shortAddress(addr).slice(0, 20);
+            LeaderboardManager.save(entries);
+          }
+        } catch (_) {}
+        LeaderboardManager.submitOnChain(addr, runWave, runScore, localName).catch(() => {});
+      }
+    }).catch(() => {});
 
     // Award currency (BITS) based on performance (balance.js: más difícil conseguir)
     const waveBits = this.waveNumber * (BALANCE.BITS_PER_WAVE ?? 3);
@@ -4069,148 +4315,243 @@ export default class ArenaScene extends Phaser.Scene {
     const xpBits = Math.floor(state.totalXP * ((BALANCE.BITS_PER_100_XP ?? 0.5) / 100));
     let totalBits = waveBits + killBits + xpBits;
 
-    // Game over UI: Pixel-art style black screen
+    // Award bits immediately (don't defer — scene may be destroyed before promise resolves)
+    window.VIBE_UPGRADES.addCurrency(totalBits);
+
+    // Game over UI
     const cx = this.scale.width / 2;
     const cy = this.scale.height / 2;
     const w = this.scale.width || 800;
     const h = this.scale.height || 600;
+    const score = runScore;
+    const wave = runWave;
 
-    // Create game over container
+    // Random phrases
+    const phrases = [
+      'The code compiles... but at what cost?',
+      'Every bug fixed makes you stronger.',
+      'You fought well, coder.',
+      'The frontier awaits your return.',
+      '404: Survival not found.',
+      'Segfault in sector 7. Rebooting...',
+      'git commit -m "died heroically"',
+      'Runtime error. But you will be back.',
+      'The stars remember your name.',
+      'Connection lost. Reconnecting soul...',
+      'Even the best coders need a respawn.',
+      'Your legacy echoes through the cluster.'
+    ];
+    const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+
+    // Create game over container - scroll-factor 0 so it stays on screen
     const gameOverContainer = this.add.container(0, 0);
-    gameOverContainer.setDepth(2000);
+    gameOverContainer.setDepth(2000).setScrollFactor(0);
 
-    // Full black background
+    // Full black background (opaque immediately; do not show gameplay background)
     const blackBg = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 1);
     blackBg.setInteractive({ useHandCursor: false });
     gameOverContainer.add(blackBg);
 
-    // Character death animation - show the sprite playing death animation
-    const characterId = window.VIBE_SETTINGS?.character || 'robot';
-    let deathSprite = null;
+    const gameOverTopY = Math.max(86, Math.floor(h * 0.18));
+    // Put the death animation clearly below the title
+    const deathBaseY = Math.min(Math.floor(h * 0.52), gameOverTopY + 260);
+    // Stats block always below the death sprite (avoid overlap)
+    const statsStartY = Math.min(h - 210, deathBaseY + 200);
 
-    // Determine which death animation to use based on character
+    // --- Phase 1: Death sprite animation ---
+    const characterId = progressStore?.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
     let deathAnimKey = null;
     let deathSpriteKey = null;
-    let lastFrame = 4; // Default last frame
-
+    let lastDeathFrame = 4;
     if (characterId === 'destroyer') {
       deathAnimKey = 'destroyer-death';
       deathSpriteKey = 'destroyer-death';
-      lastFrame = 5;
-    } else if (characterId === 'vibecoder' || characterId === 'robot') {
-      deathAnimKey = 'robot-death';
-      deathSpriteKey = 'robot-death';
-      lastFrame = 4;
+      lastDeathFrame = 5;
+    } else if (characterId === 'sync') {
+      deathAnimKey = 'sync-death';
+      deathSpriteKey = 'sync-death';
+      lastDeathFrame = 3;
+    } else if (characterId === 'voidnull') {
+      deathAnimKey = 'voidnull-death';
+      deathSpriteKey = 'voidnull-death';
+      lastDeathFrame = 6;
     } else if (characterId === 'swordsman') {
       deathAnimKey = 'swordsman-death';
       deathSpriteKey = 'swordsman-death';
-      lastFrame = 4;
+      lastDeathFrame = 4;
+    } else if (characterId === 'vibecoder' || characterId === 'robot') {
+      deathAnimKey = 'robot-death';
+      deathSpriteKey = 'robot-death';
+      lastDeathFrame = 4;
+    } else {
+      // Fallback to robot assets
+      deathAnimKey = 'robot-death';
+      deathSpriteKey = 'robot-death';
+      lastDeathFrame = 4;
     }
 
-    if (deathAnimKey && deathSpriteKey && this.anims.exists(deathAnimKey)) {
-      // Create sprite and play death animation
-      deathSprite = this.add.sprite(cx, cy - 140, deathSpriteKey, 0);
-      deathSprite.setScale(1.5);
-      deathSprite.play(deathAnimKey);
+    // If spritesheet is loaded, prefer the real last frame
+    try {
+      const total = this.textures.get(deathSpriteKey)?.frameTotal;
+      if (typeof total === 'number' && total > 0) {
+        lastDeathFrame = Math.max(0, total - 1);
+      }
+    } catch (_) {}
 
-      // On animation complete, show the last frame (character lying on ground)
-      deathSprite.once('animationcomplete', () => {
-        deathSprite.setFrame(lastFrame); // Last frame - character on ground
+    // Duration of the death anim before showing GAME OVER UI (ms)
+    let animDurationMs = 1200;
+
+    if (deathSpriteKey && this.textures.exists(deathSpriteKey) && this.anims.exists(deathAnimKey)) {
+      const deathSprite = this.add.sprite(cx, deathBaseY, deathSpriteKey, 0);
+      deathSprite.setScale(2.5).setAlpha(0);
+      gameOverContainer.add(deathSprite);
+
+      // Fade sprite in then play animation
+      this.tweens.add({
+        targets: deathSprite,
+        alpha: 1,
+        duration: 300,
+        delay: 400,
+        ease: 'Power2',
+        onComplete: () => {
+          deathSprite.play(deathAnimKey);
+        }
       });
 
-      gameOverContainer.add(deathSprite);
+      // After animation ends, hold the last frame (never snap back to frame 0)
+      deathSprite.once(`animationcomplete-${deathAnimKey}`, () => {
+        try {
+          if (deathSprite.anims) deathSprite.anims.stop();
+          deathSprite.setFrame(lastDeathFrame);
+        } catch (_) {}
+        // Keep sprite positioned safely below the title
+        this.tweens.add({
+          targets: deathSprite,
+          y: deathBaseY,
+          scale: 2,
+          duration: 500,
+          ease: 'Sine.easeInOut'
+        });
+      });
+
+      animDurationMs = 2000;
     }
 
-    // Pixel-art style GAME OVER text (red, monospace, no effects)
-    const gameOverTextY = deathSprite ? cy - 60 : cy - 100;
-    const gameOverText = this.add.text(cx, gameOverTextY, t('game_over_screen.title'), {
+    // --- Phase 2: GAME OVER UI (appears after death animation) ---
+    const uiDelay = animDurationMs;
+
+    // GAME OVER title (top)
+    const gameOverText = this.add.text(cx, gameOverTopY, 'GAME OVER', {
       fontFamily: 'monospace',
-      fontSize: '48px',
+      fontSize: '54px',
       color: '#ff0000',
       fontStyle: 'bold'
-    }).setOrigin(0.5);
+    }).setOrigin(0.5).setAlpha(0);
     gameOverContainer.add(gameOverText);
+    this.tweens.add({ targets: gameOverText, alpha: 1, duration: 800, delay: uiDelay, ease: 'Power2' });
 
-    // Stats section (pixel font, simple)
-    const statsY = cy - 20;
-    const lineHeight = 28;
+    this.time.delayedCall(uiDelay + 200, () => {
+      if (!gameOverText.scene) return;
+      this.tweens.add({
+        targets: gameOverText,
+        x: { from: cx - 2, to: cx + 2 },
+        y: { from: gameOverTopY - 2, to: gameOverTopY + 2 },
+        duration: 120,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+    });
 
-    // Final Score
-    const scoreText = this.add.text(cx, statsY, `${t('game_over_screen.final_score')}: ${Math.floor(state.totalXP)}`, {
+    // Random phrase (italic, dimmer)
+    const phraseText = this.add.text(cx, gameOverTopY + 54, phrase, {
+      fontFamily: '"Segoe UI", system-ui, sans-serif',
+      fontSize: '15px',
+      color: '#777777',
+      fontStyle: 'italic',
+      align: 'center',
+      wordWrap: { width: Math.min(480, w - 60) }
+    }).setOrigin(0.5).setAlpha(0);
+    gameOverContainer.add(phraseText);
+    this.tweens.add({ targets: phraseText, alpha: 1, duration: 800, delay: uiDelay + 300, ease: 'Power2' });
+
+    // Stats: SCORE and WAVE
+    const scoreLabel = this.add.text(cx, statsStartY, `SCORE: ${score}   |   WAVE: ${wave}`, {
       fontFamily: 'monospace',
-      fontSize: '16px',
+      fontSize: '17px',
       color: '#ffffff'
-    }).setOrigin(0.5);
-    gameOverContainer.add(scoreText);
+    }).setOrigin(0.5).setAlpha(0);
+    gameOverContainer.add(scoreLabel);
+    this.tweens.add({ targets: scoreLabel, alpha: 1, duration: 600, delay: uiDelay + 200, ease: 'Power2' });
 
-    // Wave Reached
-    const waveText = this.add.text(cx, statsY + lineHeight, `${t('game_over_screen.wave_reached')}: ${this.waveNumber}`, {
+    // BITS earned (green)
+    const bitsLabel = this.add.text(cx, statsStartY + 28, `+${totalBits} BITS`, {
       fontFamily: 'monospace',
-      fontSize: '16px',
+      fontSize: '15px',
+      color: '#00ff88'
+    }).setOrigin(0.5).setAlpha(0);
+    gameOverContainer.add(bitsLabel);
+    this.tweens.add({ targets: bitsLabel, alpha: 1, duration: 600, delay: uiDelay + 300, ease: 'Power2' });
+
+    const kills = Math.floor(state.kills || 0);
+    const killsLabel = this.add.text(cx, statsStartY + 56, `KILLS: ${kills}`, {
+      fontFamily: 'monospace',
+      fontSize: '17px',
       color: '#ffffff'
-    }).setOrigin(0.5);
-    gameOverContainer.add(waveText);
+    }).setOrigin(0.5).setAlpha(0);
+    gameOverContainer.add(killsLabel);
+    this.tweens.add({ targets: killsLabel, alpha: 1, duration: 600, delay: uiDelay + 350, ease: 'Power2' });
 
-    // Bits Earned
-    const bitsText = this.add.text(cx, statsY + lineHeight * 2, `${t('game_over_screen.bits_earned')}: ${totalBits}`, {
+    let localRank = null;
+    try {
+      const entries = LeaderboardManager.load();
+      const idx = entries.findIndex((e) => e && e.score === runScore && e.wave === runWave && (runDate - (e.date || 0)) < 5000);
+      if (idx >= 0) localRank = idx + 1;
+    } catch (_) {}
+    const rankTextStr = localRank ? `RANK: #${localRank}` : '';
+    const rankLabel = rankTextStr ? this.add.text(cx, statsStartY + 86, rankTextStr, {
       fontFamily: 'monospace',
-      fontSize: '16px',
-      color: '#00ff00'
-    }).setOrigin(0.5);
-    gameOverContainer.add(bitsText);
-
-    const friendlySubmitError = (errStr, t) => {
-      const e = errStr.toLowerCase();
-      if (/reject|cancel|denied|user|firma rechazada|signature rejected/i.test(e)) return t('game.submit_error_rejected');
-      if (/contract|transaction|errorresult|host function|soroban|insufficient/i.test(e)) return t('game.submit_error_contract');
-      if (/fetch|network|timeout|failed to fetch/i.test(e)) return t('game.submit_error_network');
-      return null;
-    };
-    let submitStatusText = null;
-    let submitErrorText = null;
-    const showSubmitStatus = (status, errorMessage) => {
-      const s = typeof status === 'object' ? status.status : status;
-      const err = typeof status === 'object' ? status.error : errorMessage;
-      const msg = s === 'zk' ? t('game.submit_zk_ranked') : s === 'zk_failed' ? t('game.submit_zk_fallback') : s === 'casual' ? t('game.submit_casual') : s === 'timeout' ? t('game.submit_timeout') : s === 'no_wallet' ? t('game.submit_no_wallet') : t('game.submit_failed');
-      const color = (s === 'failed' || s === 'timeout' || s === 'no_wallet') ? '#ff6666' : s === 'zk' ? '#ffd700' : '#88ff88';
-      submitStatusText = this.add.text(cx, cy + 60, msg, {
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        color,
-        fontStyle: 'bold',
-        align: 'center'
-      }).setOrigin(0.5, 0);
-      submitStatusText.setWordWrapWidth(480);
-      gameOverContainer.add(submitStatusText);
-      if (err && (s === 'failed' || s === 'zk_failed' || s === 'no_wallet')) {
-        const friendly = friendlySubmitError(String(err), t);
-        const short = friendly || String(err).slice(0, 80);
-        submitErrorText = this.add.text(cx, cy + 80, short, {
-          fontFamily: 'monospace',
-          fontSize: '10px',
-          color: '#cc8888',
-          align: 'center',
-          wordWrap: { width: 460 }
-        }).setOrigin(0.5, 0);
-        gameOverContainer.add(submitErrorText);
-      }
-    };
-
-    // Only show "Submitting..." when contract is set, wallet is connected, and score is valid
-    const willSubmit = gameClient.isContractConfigured() && stellarWallet.isConnected() && validateGameRules(this.waveNumber, state.totalXP).valid;
-    let submittingText = null;
-    if (willSubmit) {
-      submittingText = this.add.text(cx, cy + 60, t('game.submitting'), {
-        fontFamily: 'monospace',
-        fontSize: '12px',
-        color: '#aaaaaa'
-      }).setOrigin(0.5);
-      gameOverContainer.add(submittingText);
+      fontSize: '15px',
+      color: '#aaaaaa'
+    }).setOrigin(0.5).setAlpha(0) : null;
+    if (rankLabel) {
+      gameOverContainer.add(rankLabel);
+      this.tweens.add({ targets: rankLabel, alpha: 1, duration: 600, delay: uiDelay + 420, ease: 'Power2' });
     }
 
-    const score = Math.floor(state.totalXP);
-    const wave = this.waveNumber;
+    // BACK TO MENU button (only shown after ZK submission completes or fails)
+    const returnMenuBtn = this.add.text(cx, statsStartY + 146, 'BACK TO MENU', {
+      fontFamily: 'monospace',
+      fontSize: '18px',
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
+    gameOverContainer.add(returnMenuBtn);
+    // Do NOT fade in yet; will be shown after ZK submission
 
+    returnMenuBtn.on('pointerover', () => returnMenuBtn.setColor('#ffffff'));
+    returnMenuBtn.on('pointerout', () => returnMenuBtn.setColor('#00ffff'));
+
+    // goToMenu — reliable scene transition
+    let returned = false;
+    const goToMenu = () => {
+      if (returned) return;
+      returned = true;
+      this.input.keyboard.off('keydown', handleKeydown);
+      gameOverContainer.destroy();
+      SaveManager.clearSave();
+      this.cameras.main.fade(400, 0, 0, 0);
+      this.time.delayedCall(400, () => {
+        this.scene.start('TitleScene');
+      });
+    };
+
+    returnMenuBtn.on('pointerdown', goToMenu);
+
+    // Only allow click-anywhere-to-exit and keyboard after ZK submission completes
+    // We'll enable these in the ZK promise resolution/failure
+
+    // On-chain submit runs fully in background — never blocks UI
     const runZkProof =
       this.gameMode === 'zk_ranked' &&
       !this.isContinuedGame &&
@@ -4222,140 +4563,102 @@ export default class ArenaScene extends Phaser.Scene {
       validateGameRules(wave, state.totalXP).valid;
 
     const submitTimeoutMs = runZkProof ? 90000 : 25000;
-    const submitPromise = new Promise((resolve) => {
-      const timeout = this.time.delayedCall(submitTimeoutMs, () => resolve('timeout'));
-      if (!gameClient.isContractConfigured()) {
-        timeout.destroy();
-        resolve(null);
-        return;
-      }
-      if (!validateGameRules(wave, state.totalXP).valid) {
-        timeout.destroy();
-        resolve(null);
-        return;
-      }
-      stellarWallet.getAddress().then(async (addr) => {
-        if (!addr) {
-          timeout.destroy();
-          resolve({ status: 'no_wallet', error: 'Wallet not connected' });
-          return;
+
+    const zkStatusText = this.add.text(cx, statsStartY + 110, '', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#777777'
+    }).setOrigin(0.5).setAlpha(0);
+    gameOverContainer.add(zkStatusText);
+    new Promise((resolve) => {
+      let timeoutId = null;
+      const clear = () => {
+        if (timeoutId != null) {
+          try { clearTimeout(timeoutId); } catch (_) {}
+          timeoutId = null;
         }
+      };
+
+      timeoutId = setTimeout(() => resolve('timeout'), submitTimeoutMs);
+
+      if (!gameClient.isContractConfigured() || !validateGameRules(wave, state.totalXP).valid) {
+        clear();
+        resolve(null);
+        return;
+      }
+
+      stellarWallet.getAddress().then(async (addr) => {
+        if (!addr) { clear(); resolve(null); return; }
         const sign = (xdr) => stellarWallet.signTransaction(xdr);
         try {
           if (runZkProof) {
-            console.log('[Cosmic Coder] ZK proof triggered');
             this.zkProofSubmitted = true;
-            const run_hash_hex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
+            console.log('[ZK Submit V2] Starting ZK prover flow');
+            try { zkStatusText.setText('Compiling ZK Proof of Survival... Please wait.').setAlpha(1); } catch (_) {}
+            // Derive run_hash_hi/lo from computeGameHash
+            const runHashHex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
+            const runHashHi = runHashHex.slice(0, 64);
+            const runHashLo = runHashHex.slice(64, 128);
             const nonce = Date.now();
-            const season_id = 1;
-            await gameClient.submitZkFromProver(addr, sign, undefined, { run_hash_hex, score, wave, nonce, season_id });
-            timeout.destroy();
-            console.log('[Cosmic Coder] ZK proof success');
+            const seasonId = 1;
+            const challengeId = 1;
+            const contractId = gameClient.getContractId();
+            // Derive domain_separator: SHA256(challenge_id || player_address || nonce || contract_id)
+            const domainStr = `${challengeId}${addr}${nonce}${contractId}`;
+            const domainBuf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(domainStr));
+            const domainSeparator = Array.from(new Uint8Array(domainBuf)).map(b => b.toString(16).padStart(2, '0')).join('');
+            const payload = {
+              run_hash_hi: runHashHi,
+              run_hash_lo: runHashLo,
+              score,
+              wave,
+              nonce,
+              season_id: seasonId,
+              challenge_id: challengeId,
+              player_address: addr,
+              contract_id: contractId,
+              domain_separator: domainSeparator
+            };
+            // TODO: load vk_hash from environment or contract storage; for now use placeholder
+            const vkHash = '0000000000000000000000000000000000000000000000000000000000000000';
+            await gameClient.submitZkFromProverV2(addr, sign, undefined, payload, vkHash);
+            console.log('[ZK Submit V2] submitZkFromProverV2 success');
+            try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
+            clear();
             resolve('zk');
           } else {
+            console.log('[Score Submit] submitResult starting');
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
-            timeout.destroy();
+            console.log('[Score Submit] submitResult success');
+            clear();
             resolve('casual');
           }
         } catch (e) {
-          const firstError = e?.message || String(e);
-          if (runZkProof) console.log('[Cosmic Coder] ZK proof failure:', firstError);
-          console.warn('Submit failed:', firstError, e);
+          console.warn('[Cosmic Coder] Submit failed:', e?.message || e);
+          try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
           try {
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
-            timeout.destroy();
-            resolve(runZkProof ? { status: 'zk_failed', error: firstError } : 'casual');
-          } catch (e2) {
-            timeout.destroy();
-            resolve({ status: 'failed', error: firstError + (e2?.message ? '; ' + e2.message : '') });
-          }
+          } catch (_) {}
+          clear();
+          resolve(null);
         }
-      }).catch((e) => { timeout.destroy(); resolve({ status: 'failed', error: e?.message || 'Unknown error' }); });
-    });
-
-    // Pixel-art style buttons
-    const buttonsY = cy + 110;
-
-    // View Ranking button
-    const viewRankingBtn = this.add.text(cx - 100, buttonsY, t('game_over_screen.view_ranking'), {
-      fontFamily: 'monospace',
-      fontSize: '14px',
-      color: '#00aaff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    gameOverContainer.add(viewRankingBtn);
-
-    // Return to Menu button
-    const returnMenuBtn = this.add.text(cx + 100, buttonsY, t('game_over_screen.return_menu'), {
-      fontFamily: 'monospace',
-      fontSize: '14px',
-      color: '#ff6666',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    gameOverContainer.add(returnMenuBtn);
-
-    // Button hover effects (simple color change)
-    viewRankingBtn.on('pointerover', () => viewRankingBtn.setColor('#00ffff'));
-    viewRankingBtn.on('pointerout', () => viewRankingBtn.setColor('#00aaff'));
-    returnMenuBtn.on('pointerover', () => returnMenuBtn.setColor('#ff9999'));
-    returnMenuBtn.on('pointerout', () => returnMenuBtn.setColor('#ff6666'));
-
-    // Press any key hint
-    const pressKeyHint = this.add.text(cx, cy + 160, t('game_over_screen.press_any_key'), {
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#666666'
-    }).setOrigin(0.5);
-    gameOverContainer.add(pressKeyHint);
-
-    submitPromise.then((status) => {
-      if (submittingText && submittingText.scene) submittingText.destroy();
-      window.VIBE_UPGRADES.addCurrency(totalBits);
-      const s = typeof status === 'object' ? status?.status : status;
-      if (s === 'zk' || s === 'casual' || s === 'failed' || s === 'zk_failed' || s === 'timeout' || s === 'no_wallet') {
-        showSubmitStatus(status);
-        if (s === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
-          const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));
-          window.VIBE_UPGRADES.addCurrency(bonus);
-          bitsText.setText(`${t('game_over_screen.bits_earned')}: ${totalBits + bonus} (+${bonus} ZK)`);
-        }
-      }
-
-      let returned = false;
-      const goToMenu = () => {
-        if (returned) return;
-        returned = true;
-        gameOverContainer.destroy();
-        this.input.keyboard.off('keydown', handleKeydown);
-        SaveManager.clearSave();
-        this.cameras.main.fade(500, 0, 0, 0);
-        this.time.delayedCall(500, () => this.scene.start('TitleScene'));
-      };
-
-      const goToRanking = () => {
-        if (returned) return;
-        returned = true;
-        gameOverContainer.destroy();
-        this.input.keyboard.off('keydown', handleKeydown);
-        SaveManager.clearSave();
-        this.cameras.main.fade(500, 0, 0, 0);
-        this.time.delayedCall(500, () => {
-          // Start TitleScene and then show leaderboard
-          this.scene.start('TitleScene', { showLeaderboard: true });
-        });
-      };
-
-      // Button handlers
-      viewRankingBtn.on('pointerdown', goToRanking);
-      returnMenuBtn.on('pointerdown', goToMenu);
-
-      // Keyboard handler
+      }).catch(() => { clear(); resolve(null); });
+    }).then((status) => {
+      // Show BACK TO MENU button and enable exit after ZK submission completes or fails
+      this.tweens.add({ targets: returnMenuBtn, alpha: 1, duration: 600, ease: 'Power2' });
       const handleKeydown = (event) => {
-        if (event.code === 'Enter') {
+        const code = event?.code;
+        if (code === 'Enter' || code === 'Escape' || code === 'Space') {
           goToMenu();
         }
       };
-      this.input.keyboard.once('keydown', handleKeydown);
+      this.input.keyboard.on('keydown', handleKeydown);
+      blackBg.on('pointerdown', goToMenu);
+
+      if (status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
+        const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));
+        window.VIBE_UPGRADES.addCurrency(bonus);
+      }
     });
   }
 
@@ -5053,6 +5356,38 @@ export default class ArenaScene extends Phaser.Scene {
     // Update ShrineManager (proximity checks)
     if (this.shrineManager) {
       this.shrineManager.update(this.time.now, 0);
+    }
+
+    // ZK weapon pickup prompt + interaction (press E)
+    if (this.weaponDrops && this.zkPickupKey) {
+      let nearestZkDrop = null;
+      let nearestDist = Infinity;
+      const drops = this.weaponDrops.getChildren?.() || [];
+      for (const d of drops) {
+        if (!d || !d.active || !d.isZkDrop) continue;
+        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, d.x, d.y);
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestZkDrop = d;
+        }
+      }
+
+      // Show prompt only when close
+      for (const d of drops) {
+        if (!d || !d.active || !d.isZkDrop) continue;
+        if (d.zkRing && d.zkRing.scene) {
+          d.zkRing.setPosition(d.x, d.y);
+        }
+        if (d.zkPromptText && d.zkPromptText.scene) {
+          d.zkPromptText.setPosition(d.x, d.y - 44);
+          d.zkPromptText.setVisible(d === nearestZkDrop && nearestDist <= 70);
+        }
+      }
+
+      if (nearestZkDrop && nearestDist <= 70 && Phaser.Input.Keyboard.JustDown(this.zkPickupKey)) {
+        nearestZkDrop.zkForcePickup = true;
+        this.pickupWeapon(this.player, nearestZkDrop);
+      }
     }
   }
 

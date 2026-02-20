@@ -1,0 +1,21 @@
+[package]
+name = "application"
+version = "0.2.0"
+description = "Application contract v2 — state transition gated by verifier+policy; no crypto, no anti-replay"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "25.1"
+zk_types = { path = "../zk_types" }
+
+[dev-dependencies]
+soroban-sdk = { version = "25.1", features = ["testutils"] }
+
+[profile.release]
+lto = true
+opt-level = 3
+strip = "symbols"

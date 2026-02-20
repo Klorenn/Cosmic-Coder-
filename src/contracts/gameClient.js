@@ -96,26 +96,32 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
 
 /**
  * Request ZK proof from backend (option B). Backend runs fullprove and returns contract_proof format.
+ * V2: includes challenge_id, player_address, contract_id, domain_separator.
  * @param {string} [baseUrl] - Prover server URL (default VITE_ZK_PROVER_URL or http://localhost:3333)
- * @param {{ run_hash_hex: string, score: number, wave: number, nonce: number, season_id?: number }} payload
+ * @param {{ run_hash_hi: string, run_hash_lo: string, score: number, wave: number, nonce: number, season_id?: number, challenge_id?: number, player_address?: string, contract_id?: string, domain_separator?: string }} payload
  * @returns {Promise<{ proof: { a, b, c }, vk: object, pub_signals: string[] }>} hex strings
  */
-export async function requestZkProof(baseUrl, payload) {
-  const url = (baseUrl || getZkProverUrl()).replace(/\/$/, '') + '/zk/prove';
+export async function requestZkProofV2(baseUrl, payload) {
+  const url = (baseUrl || getZkProverUrl()).replace(/\/$/, '') + '/zk/prove_v2';
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      run_hash_hex: payload.run_hash_hex,
+      run_hash_hi: payload.run_hash_hi,
+      run_hash_lo: payload.run_hash_lo,
       score: payload.score,
       wave: payload.wave,
       nonce: payload.nonce,
-      season_id: payload.season_id != null ? payload.season_id : 1
+      season_id: payload.season_id != null ? payload.season_id : 1,
+      challenge_id: payload.challenge_id != null ? payload.challenge_id : 1,
+      player_address: payload.player_address,
+      contract_id: payload.contract_id || getContractId(),
+      domain_separator: payload.domain_separator
     })
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || `ZK prover ${res.status}`);
+    throw new Error(err.error || `ZK prover V2 ${res.status}`);
   }
   return res.json();
 }
@@ -200,75 +206,122 @@ function pubSignalsToScVal(pubSignals, xdr) {
 }
 
 /**
- * Submit ZK run (submit_zk). Requires Groth16 proof + VK + pub_signals from off-chain circuit.
- * Anti-replay: nonce must be unique per player. Bind proof to run_hash and season_id.
- * Contract and client enforce: score >= wave * MIN_SCORE_PER_WAVE.
- * @param {object} zk - { proof, vk, pubSignals } (BN254-encoded)
- * @param {number} nonce - unique per run (e.g. timestamp or counter)
- * @param {string} runHashHex - run hash binding (e.g. from gameProof.computeGameHash)
- * @param {number} seasonId - optional season
+ * Submit ZK run V2 (application.submit_proof). Requires Groth16 proof + public inputs (10 values) + domain binding.
+ * @param {string} signerPublicKey
+ * @param {function} signTransaction
+ * @param {object} zk - { proof, vk, pubSignals } (BN254 Groth16)
+ * @param {object} domain - { challenge_id, player_address, contract_id, domain_separator }
+ * @param {object} publicInputs - { run_hash_hi, run_hash_lo, score, wave, nonce, season_id, challenge_id, player_address, contract_id, domain_separator }
+ * @param {string} vkHash - verification key hash (stored in verifier contract)
  * @param {number} score - final score (must match circuit public output)
  * @param {number} wave - wave (must match circuit)
+ * @param {number} seasonId - season
  */
-export async function submitZk(
+export async function submitZkV2(
   signerPublicKey,
   signTransaction,
   zk,
-  nonce,
-  runHashHex,
-  seasonId,
+  domain,
+  publicInputs,
+  vkHash,
   score,
-  wave
+  wave,
+  seasonId
 ) {
   const contractId = getContractId();
   if (!contractId) throw new Error('VITE_COSMIC_CODER_CONTRACT_ID not set');
   if (!zk?.proof || !zk?.vk || !zk?.pubSignals) {
-    throw new Error('submitZk requires zk.proof, zk.vk, zk.pubSignals (BN254 Groth16)');
+    throw new Error('submitZkV2 requires zk.proof, zk.vk, zk.pubSignals (BN254 Groth16)');
   }
   const { validateGameRules } = await import('../zk/gameProof.js');
   const { valid, reason } = validateGameRules(wave, score);
-  if (!valid) throw new Error(`submit_zk rules: ${reason || 'score >= wave * MIN_SCORE_PER_WAVE'}`);
-  const { xdr } = await import('@stellar/stellar-sdk');
-  const runHashHexClean = String(runHashHex).replace(/^0x/, '').slice(0, 64).padStart(64, '0');
-  const runHashBuf = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) runHashBuf[i] = parseInt(runHashHexClean.slice(i * 2, i * 2 + 2), 16);
-  const runHashBytes = xdr.ScVal.scvBytes(runHashBuf);
-  // Contract expects xdr.ScVal; passing raw proof/vk/pubSignals causes "union name undefined, not ScVal"
+  if (!valid) throw new Error(`submit_zk_v2 rules: ${reason || 'score >= wave * MIN_SCORE_PER_WAVE'}`);
+  const { xdr, Address } = await import('@stellar/stellar-sdk');
+
+  // Domain binding ScVal (map)
+  const domainMap = [
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('challenge_id'), val: xdr.ScVal.scvU32(domain.challenge_id) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('player_address'), val: new Address(domain.player_address).toScVal() }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('nonce'), val: xdr.ScVal.scvU64(BigInt(domain.nonce)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('contract_id'), val: new Address(domain.contract_id).toScVal() }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('domain_separator'), val: xdr.ScVal.scvBytes(hexToBytes(domain.domain_separator)) })
+  ];
+
+  // ZkPublicInputs ScVal (map)
+  const inputsMap = [
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('run_hash_hi'), val: xdr.ScVal.scvBytes(hexToBytes(publicInputs.run_hash_hi)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('run_hash_lo'), val: xdr.ScVal.scvBytes(hexToBytes(publicInputs.run_hash_lo)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('score'), val: xdr.ScVal.scvU32(publicInputs.score) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('wave'), val: xdr.ScVal.scvU32(publicInputs.wave) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('nonce'), val: xdr.ScVal.scvU64(BigInt(publicInputs.nonce)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('season_id'), val: xdr.ScVal.scvU32(publicInputs.season_id) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('challenge_id'), val: xdr.ScVal.scvU32(publicInputs.challenge_id) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('player_address'), val: xdr.ScVal.scvBytes(hexToBytes(publicInputs.player_address)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('contract_id'), val: xdr.ScVal.scvBytes(hexToBytes(publicInputs.contract_id)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('domain_separator'), val: xdr.ScVal.scvBytes(hexToBytes(publicInputs.domain_separator)) })
+  ];
+
   const args = [
-    await playerScVal(signerPublicKey),
+    xdr.ScVal.scvMap(domainMap), // domain
     proofToScVal(zk.proof, xdr),
-    vkToScVal(zk.vk, xdr),
-    pubSignalsToScVal(zk.pubSignals, xdr),
-    xdr.ScVal.scvU64(BigInt(nonce)),
-    runHashBytes,
-    xdr.ScVal.scvU32(seasonId),
+    xdr.ScVal.scvMap(inputsMap), // public_inputs
+    xdr.ScVal.scvBytes(hexToBytes(vkHash)),
     xdr.ScVal.scvU32(Math.max(0, Math.floor(score))),
     xdr.ScVal.scvU32(wave),
+    xdr.ScVal.scvU32(seasonId)
   ];
-  return invoke(contractId, 'submit_zk', args, signerPublicKey, signTransaction);
+  return invoke(contractId, 'submit_proof', args, signerPublicKey, signTransaction);
+}
+
+/** Helper: convert hex string to Uint8Array (32 bytes) */
+function hexToBytes(hex) {
+  const h = String(hex).replace(/^0x/, '').slice(0, 64).padStart(64, '0');
+  const arr = new Uint8Array(32);
+  for (let i = 0; i < 32; i++) arr[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  return arr;
 }
 
 /**
- * Ranked submit (option B): request proof from backend, then submit_zk.
+ * Ranked submit V2 (option B): request proof from backend, then submit_proof (v2 contracts).
  * @param {string} signerPublicKey
  * @param {function} signTransaction
  * @param {string} [proverUrl] - default VITE_ZK_PROVER_URL
- * @param {{ run_hash_hex: string, score: number, wave: number, nonce: number, season_id?: number }} payload
+ * @param {{ run_hash_hi: string, run_hash_lo: string, score: number, wave: number, nonce: number, season_id?: number, challenge_id?: number, player_address?: string, contract_id?: string, domain_separator?: string }} payload
+ * @param {string} vkHash - verification key hash (stored in verifier contract)
  */
-export async function submitZkFromProver(signerPublicKey, signTransaction, proverUrl, payload) {
-  const raw = await requestZkProof(proverUrl, payload);
+export async function submitZkFromProverV2(signerPublicKey, signTransaction, proverUrl, payload, vkHash) {
+  const raw = await requestZkProofV2(proverUrl, payload);
   const zk = contractProofToZk(raw);
-  const runHashHex = payload.run_hash_hex.slice(0, 64);
+  const domain = {
+    challenge_id: payload.challenge_id != null ? payload.challenge_id : 1,
+    player_address: payload.player_address,
+    nonce: payload.nonce,
+    contract_id: payload.contract_id || getContractId(),
+    domain_separator: payload.domain_separator
+  };
+  const publicInputs = {
+    run_hash_hi: payload.run_hash_hi,
+    run_hash_lo: payload.run_hash_lo,
+    score: payload.score,
+    wave: payload.wave,
+    nonce: payload.nonce,
+    season_id: payload.season_id != null ? payload.season_id : 1,
+    challenge_id: payload.challenge_id != null ? payload.challenge_id : 1,
+    player_address: payload.player_address,
+    contract_id: payload.contract_id || getContractId(),
+    domain_separator: payload.domain_separator
+  };
   const seasonId = payload.season_id != null ? payload.season_id : 1;
-  return submitZk(
+  return submitZkV2(
     signerPublicKey,
     signTransaction,
     zk,
-    payload.nonce,
-    runHashHex,
-    seasonId,
+    domain,
+    publicInputs,
+    vkHash,
     payload.score,
-    payload.wave
+    payload.wave,
+    seasonId
   );
 }
 

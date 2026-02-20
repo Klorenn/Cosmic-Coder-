@@ -6,6 +6,12 @@ import { generateProof } from './zkProve.js';
 import { generateSkillProof } from './skillProof.js';
 import authRoutes from './routes/auth.js';
 import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_WEB_AUTH_DOMAIN } from './config/sep10.js';
+import * as snarkjs from 'snarkjs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
@@ -169,20 +175,28 @@ app.get('/leaderboard', (req, res) => {
 });
 
 app.post('/leaderboard', (req, res) => {
-  const { address, wave, score } = req.body || {};
+  const { address, wave, score, name } = req.body || {};
   if (!address || typeof wave !== 'number' || typeof score !== 'number') {
+    console.warn('[leaderboard] invalid body:', req.body);
     return res.status(400).json({ error: 'address, wave, score required' });
   }
   const entry = {
     address: String(address).slice(0, 56),
+    name: (name != null ? String(name) : '').trim().slice(0, 20),
     wave: Math.max(0, Math.floor(wave)),
     score: Math.max(0, Math.floor(score)),
     date: Date.now()
   };
+
+  console.log('[leaderboard] submit:', entry.address, 'wave=' + entry.wave, 'score=' + entry.score);
   const existing = leaderboardEntries.findIndex((e) => e.address === entry.address);
   if (existing >= 0) {
     const prev = leaderboardEntries[existing];
     if (entry.score <= prev.score && entry.wave <= prev.wave) {
+      // Still allow updating the display name even if score doesn't improve.
+      if (entry.name && entry.name !== prev.name) {
+        leaderboardEntries[existing] = { ...prev, name: entry.name, date: Date.now() };
+      }
       return res.status(200).json({ success: true, entries: leaderboardEntries.sort(leaderboardSort).slice(0, 10) });
     }
     leaderboardEntries[existing] = entry;
@@ -213,6 +227,59 @@ app.post('/zk/prove', (req, res) => {
   } catch (err) {
     console.error('ZK prove error:', err.message);
     res.status(500).json({ error: err.message || 'Proof generation failed' });
+  }
+});
+
+// --- ZK Proof V2 (GameRunV2) ---
+app.post('/zk/prove_v2', async (req, res) => {
+  const {
+    run_hash_hi,
+    run_hash_lo,
+    score,
+    wave,
+    nonce,
+    season_id,
+    challenge_id,
+    player_address,
+    contract_id,
+    domain_separator
+  } = req.body || {};
+
+  const required = ['run_hash_hi', 'run_hash_lo', 'score', 'wave', 'nonce', 'season_id', 'challenge_id', 'player_address', 'contract_id', 'domain_separator'];
+  const missing = required.filter(k => req.body[k] == null);
+  if (missing.length) {
+    return res.status(400).json({
+      error: `Missing required fields: ${missing.join(', ')}`,
+      required
+    });
+  }
+
+  // Build input object for GameRunV2 circuit (order must match circuit inputs)
+  const circuitInput = {
+    run_hash_hi: String(run_hash_hi),
+    run_hash_lo: String(run_hash_lo),
+    score: Number(score),
+    wave: Number(wave),
+    nonce: Number(nonce),
+    season_id: Number(season_id),
+    challenge_id: Number(challenge_id),
+    player_address: String(player_address),
+    contract_id: String(contract_id),
+    domain_separator: String(domain_separator)
+  };
+
+  // Paths to GameRunV2 artifacts
+  const wasmPath = path.join(__dirname, '../circuits/build/GameRunV2_js/GameRunV2_js/GameRunV2.wasm');
+  const zkeyPath = path.join(__dirname, '../circuits/build/GameRunV2_js/GameRunV2.zkey');
+
+  try {
+    console.log('[ZK V2] Generating proof for:', { score: circuitInput.score, wave: circuitInput.wave, nonce: circuitInput.nonce });
+    const { proof, publicSignals } = await snarkjs.groth16.fullProve(circuitInput, wasmPath, zkeyPath);
+    console.log('[ZK V2] Proof generated, publicSignals length:', publicSignals.length);
+    res.status(200).json({ proof, publicSignals });
+  } catch (err) {
+    console.error('[ZK V2] Proof generation failed:', err);
+    res.status(500).json({ error: err.message || 'ZK V2 proof generation failed' });
   }
 });
 

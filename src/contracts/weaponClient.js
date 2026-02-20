@@ -35,35 +35,45 @@ export async function getPlayerStats(publicKey) {
     throw new Error('CosmicCoder contract not configured');
   }
 
+  const stats = { gamesPlayed: 0, bestScore: 0, tier: 1, rank: 0, canStartMatch: false };
+
+  // Helper to extract a number from simulateTransaction result
+  const simNum = async (method) => {
+    try {
+      const { rpc } = await import('@stellar/stellar-sdk');
+      const server = new rpc.Server(TESTNET_RPC);
+      const sim = await server.simulateTransaction(
+        await buildQueryTx(publicKey, method, [publicKey])
+      );
+      if (sim.error) return 0;
+      const retval = sim.result?.retval;
+      if (!retval) return 0;
+      const name = retval.switch?.()?.name;
+      if (name === 'scvU32') return retval.u32();
+      if (name === 'scvU64') return Number(retval.u64());
+      if (name === 'scvI128') {
+        const lo = retval.i128().lo().toBigInt?.() ?? BigInt(retval.i128().lo());
+        return Number(lo);
+      }
+      return parseInt(String(retval.value?.())) || 0;
+    } catch (_) { return 0; }
+  };
+
   try {
-    const { rpc, Contract } = await import('@stellar/stellar-sdk');
-    const server = new rpc.Server(TESTNET_RPC);
-    const contract = new Contract(contractId);
-
-    // Simulate contract calls to get player stats
-    const gamesPlayedResult = await server.simulateTransaction(
-      await buildQueryTx(publicKey, 'get_games_played', [publicKey])
-    );
-    const bestScoreResult = await server.simulateTransaction(
-      await buildQueryTx(publicKey, 'get_best_score', [publicKey])
-    );
-    const tierResult = await server.simulateTransaction(
-      await buildQueryTx(publicKey, 'get_player_tier', [publicKey])
-    );
-    const canStartResult = await server.simulateTransaction(
-      await buildQueryTx(publicKey, 'can_start_match', [publicKey])
-    );
-
-    return {
-      gamesPlayed: parseInt(gamesPlayedResult.results[0]) || 0,
-      bestScore: parseInt(bestScoreResult.results[0]) || 0,
-      tier: parseInt(tierResult.results[0]) || 1,
-      canStartMatch: canStartResult.results[0] === 'true'
-    };
+    const [gamesPlayed, bestScore, tier] = await Promise.all([
+      simNum('get_games_played'),
+      simNum('get_best_score'),
+      simNum('get_player_tier')
+    ]);
+    stats.gamesPlayed = gamesPlayed;
+    stats.bestScore = bestScore;
+    stats.tier = tier || 1;
+    stats.rank = tier || 0;
   } catch (e) {
     console.warn('[WeaponClient] Failed to get player stats:', e);
-    return { gamesPlayed: 0, bestScore: 0, tier: 1, canStartMatch: false };
   }
+
+  return stats;
 }
 
 /**
@@ -302,7 +312,7 @@ export async function selectStartingWeapon(publicKey) {
 
 // Helper function to build query transactions
 async function buildQueryTx(publicKey, method, args) {
-  const { Contract, TransactionBuilder, Account, BASE_FEE } = await import('@stellar/stellar-sdk');
+  const { Contract, TransactionBuilder, Account, BASE_FEE, Address } = await import('@stellar/stellar-sdk');
   const { rpc } = await import('@stellar/stellar-sdk');
   
   const server = new rpc.Server(TESTNET_RPC);
@@ -310,7 +320,15 @@ async function buildQueryTx(publicKey, method, args) {
   const account = new Account(publicKey, String(source.sequence ?? '0'));
   const contract = new Contract(getCosmicCoderContractId());
   
-  const op = contract.call(method, ...args);
+  // Convert string args to proper ScVal (Address for public keys)
+  const scArgs = args.map(arg => {
+    if (typeof arg === 'string' && arg.startsWith('G') && arg.length === 56) {
+      return new Address(arg).toScVal();
+    }
+    return arg;
+  });
+  
+  const op = contract.call(method, ...scArgs);
   
   return new TransactionBuilder(account, {
     fee: BASE_FEE,

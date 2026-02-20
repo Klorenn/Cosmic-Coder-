@@ -1,0 +1,21 @@
+[package]
+name = "verifier"
+version = "0.2.0"
+description = "Verifier contract v2 (BN254/Groth16) — crypto-only, loads VK from storage, emits structured event"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+soroban-sdk = "25.1"
+zk_types = { path = "../zk_types" }
+
+[dev-dependencies]
+soroban-sdk = { version = "25.1", features = ["testutils"] }
+
+[profile.release]
+lto = true
+opt-level = 3
+strip = "symbols"

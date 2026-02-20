@@ -41,3 +41,31 @@ pub struct ZkVerificationKey {
     pub delta: BytesN<128>,
     pub ic: Vec<BytesN<64>>,
 }
+
+/// Domain binding for v2 ZK proofs.
+#[derive(Clone)]
+#[contracttype]
+pub struct DomainBinding {
+    pub challenge_id: u32,
+    pub player_address: soroban_sdk::Address,
+    pub nonce: u64,
+    pub contract_id: soroban_sdk::Address,
+    pub domain_separator: BytesN<32>,
+}
+
+/// Public inputs order matching GameRunV2.circom outputs.
+/// Used to map between circuit and contracts.
+#[derive(Clone)]
+#[contracttype]
+pub struct ZkPublicInputs {
+    pub run_hash_hi: BytesN<32>,
+    pub run_hash_lo: BytesN<32>,
+    pub score: u32,
+    pub wave: u32,
+    pub nonce: u64,
+    pub season_id: u32,
+    pub challenge_id: u32,
+    pub player_address: BytesN<32>,
+    pub contract_id: BytesN<32>,
+    pub domain_separator: BytesN<32>,
+}

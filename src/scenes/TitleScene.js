@@ -76,11 +76,30 @@ export default class TitleScene extends Phaser.Scene {
         // If wallet connected but user has no username in DB, show name modal (transparent overlay)
         try {
           const me = await authApi.getMe();
+          if (me && me.username && window.VIBE_SETTINGS) {
+            const name = String(me.username).slice(0, 20);
+            if (name && window.VIBE_SETTINGS.playerName !== name) {
+              window.VIBE_SETTINGS.setPlayerName(name);
+            }
+          }
           if (me && (me.username == null || me.username === '')) {
             this.time.delayedCall(300, () => this.showUsernameModal?.());
           }
         } catch (_) {}
       });
+    }
+
+    // If token exists (backend session), sync username even without wallet being connected yet
+    if (typeof authApi.getStoredToken === 'function' && authApi.getStoredToken()) {
+      authApi.getMe().then((me) => {
+        if (me && me.username && window.VIBE_SETTINGS) {
+          const name = String(me.username).slice(0, 20);
+          if (name && window.VIBE_SETTINGS.playerName !== name) {
+            window.VIBE_SETTINGS.setPlayerName(name);
+            if (this.updateWalletButton) this.updateWalletButton();
+          }
+        }
+      }).catch(() => {});
     }
 
     // Create animated background
@@ -2187,7 +2206,8 @@ export default class TitleScene extends Phaser.Scene {
     container.add(backHint);
   }
 
-  async showLeaderboard() {
+  async showLeaderboard(opts = {}) {
+    const showAll = !!opts.showAll;
     const uiScale = getUIScale(this);
     const w = this.scale.width || 800;
     const h = this.scale.height || 600;
@@ -2202,8 +2222,8 @@ export default class TitleScene extends Phaser.Scene {
     backdrop.setInteractive({ useHandCursor: true });
     container.add(backdrop);
 
-    const overlayW = Math.min(720, w - 40);
-    const overlayH = Math.min(520, h - 40);
+    const overlayW = Math.min(820, w - 40);
+    const overlayH = Math.min(540, h - 40);
     const overlayLeft = cx - overlayW / 2;
     const overlayTop = cy - overlayH / 2;
 
@@ -2221,30 +2241,36 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5);
     container.add(title);
 
-    // Headers - reduced top padding to sit closer to title
-    const headerY = overlayTop + 82;
+    // Headers
+    const headerY = overlayTop + 86;
     const fs = (n) => `${Math.round(n * uiScale)}px`;
-    const colPos = overlayLeft + 20;
-    const colRankIcon = overlayLeft + 50;
-    const colName = overlayLeft + 100;  // Increased spacing between NAME and WALLET
-    const colWallet = overlayLeft + overlayW - 180;
-    const colRankName = overlayLeft + overlayW - 80;
+    const rightPad = 48;
+    const colPos = overlayLeft + 28;
+    const colIcon = overlayLeft + 86;
+    const colName = overlayLeft + 126;
+    const colWallet = overlayLeft + overlayW - 210;
+    const colRankName = overlayLeft + overlayW - rightPad;
 
-    // Add header texts with proper grid alignment
-    const posHeader = this.add.text(colPos, headerY, t('leaderboard.position'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    // Add header texts with table-like alignment (monospace)
+    const tableFont = 'monospace';
+    const posHeader = this.add.text(colPos, headerY, '#', { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
     container.add(posHeader);
     
-    const nameHeader = this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    const iconHeader = this.add.text(colIcon, headerY, '[ICON]', { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' }).setOrigin(0.5, 0);
+    container.add(iconHeader);
+    
+    const nameHeader = this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
     container.add(nameHeader);
     
-    const walletHeader = this.add.text(colWallet, headerY, t('leaderboard.short_wallet'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    const walletHeader = this.add.text(colWallet, headerY, t('leaderboard.short_wallet'), { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
     container.add(walletHeader);
     
-    const rankHeader = this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#00ffff' });
+    const rankHeader = this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
+    rankHeader.setOrigin(1, 0);
     container.add(rankHeader);
     
     // Add thin 1px pixel divider line under headers (cyan)
-    const dividerLine = this.add.rectangle(overlayLeft + 10, headerY + 20, overlayW - 20, 1, 0x00ffff, 1);
+    const dividerLine = this.add.rectangle(overlayLeft + overlayW / 2, headerY + 20, overlayW - 2 * rightPad, 1, 0x00ffff, 1);
     container.add(dividerLine);
 
     const walletConnected = stellarWallet.isConnected();
@@ -2252,31 +2278,50 @@ export default class TitleScene extends Phaser.Scene {
     let hasRankData = false;
 
     if (walletConnected && gameClient.isContractConfigured()) {
-      // Fetch leaderboard with rank data from contract
-      const onChain = await gameClient.getLeaderboardBySeason(1, 50);
-      if (onChain.length === 0) {
-        const legacy = await gameClient.getLeaderboard(50);
-        onChain.push(...legacy);
+      // Fetch leaderboard with rank data from contract; fallback to local API if empty/unavailable
+      let onChain = [];
+      try {
+        onChain = await gameClient.getLeaderboardBySeason(1, 50);
+        if (onChain.length === 0) {
+          const legacy = await gameClient.getLeaderboard(50);
+          onChain.push(...legacy);
+        }
+      } catch (e) {
+        console.warn('[Leaderboard] On-chain fetch failed, falling back to API:', e?.message || e);
+        onChain = [];
       }
-      // Map to new format with rank support
-      top = onChain.map((e, i) => ({
-        position: i + 1,
-        name: e.player_name || 'Unknown',
-        wallet: e.player || '',
-        rank: e.rank !== undefined ? e.rank : 0,
-        bestScore: e.score ?? e.bestScore ?? 0,
-        gamesPlayed: e.gamesPlayed ?? 0
-      }));
-      hasRankData = true;
+
+      if (onChain.length > 0) {
+        // Map to new format with rank support
+        top = onChain.map((e, i) => ({
+          position: i + 1,
+          name: e.player_name || 'Unknown',
+          wallet: e.player || '',
+          rank: e.rank !== undefined ? e.rank : 0,
+          bestScore: e.score ?? e.bestScore ?? 0,
+          gamesPlayed: e.gamesPlayed ?? 0
+        }));
+        hasRankData = true;
+      } else {
+        const entries = await LeaderboardManager.fetchOnChain();
+        top = entries.map((e, i) => ({
+          position: i + 1,
+          name: e.name || 'Unknown',
+          wallet: e.address || '',
+          rank: 0,
+          bestScore: e.score ?? 0,
+          gamesPlayed: 0
+        }));
+      }
     } else if (walletConnected) {
       const entries = await LeaderboardManager.fetchOnChain();
       top = entries.map((e, i) => ({
         position: i + 1,
         name: e.name || 'Unknown',
-        wallet: e.wallet || '',
-        rank: e.rank || 0,
+        wallet: e.address || '',
+        rank: 0,
         bestScore: e.score ?? 0,
-        gamesPlayed: e.gamesPlayed ?? 0
+        gamesPlayed: 0
       }));
     } else {
       const entries = LeaderboardManager.getTop(50);
@@ -2299,9 +2344,63 @@ export default class TitleScene extends Phaser.Scene {
     // Re-assign positions after sort
     top.forEach((entry, i) => entry.position = i + 1);
 
-    const lineHeight = 36 * uiScale;
-    const maxRows = 10;
-    const tableStartY = overlayTop + 110;  // Adjusted to align with new header layout
+    const lineHeight = showAll ? (28 * uiScale) : (36 * uiScale);
+    const maxRows = showAll ? 16 : 10;
+    const tableStartY = overlayTop + 120;
+
+    const rowObjects = [];
+    const clearRows = () => {
+      while (rowObjects.length) {
+        const obj = rowObjects.pop();
+        if (obj && obj.destroy) obj.destroy();
+      }
+    };
+
+    const drawRows = (pageIndex = 0) => {
+      clearRows();
+      const toShow = showAll
+        ? top.slice(pageIndex * maxRows, pageIndex * maxRows + maxRows)
+        : top.slice(0, maxRows);
+
+      if (toShow.length === 0) return;
+
+      toShow.forEach((entry, i) => {
+        const y = tableStartY + i * lineHeight;
+        const rankData = getRankById(entry.rank);
+
+        const posColor = (pageIndex === 0 && i === 0) ? '#ffd700' : (pageIndex === 0 && i === 1) ? '#c0c0c0' : (pageIndex === 0 && i === 2) ? '#cd7f32' : '#888888';
+        const posText = this.add.text(colPos, y, String(entry.position), { fontFamily: tableFont, fontSize: fs(12), color: posColor });
+        container.add(posText);
+        rowObjects.push(posText);
+
+        if (!isUnranked(entry.rank) && hasRankIcon(entry.rank)) {
+          const spriteKey = rankData.sprite;
+          if (this.textures.exists(spriteKey)) {
+            const icon = this.add.image(colIcon, y + 10, spriteKey);
+            icon.setDisplaySize(24, 24);
+            container.add(icon);
+            rowObjects.push(icon);
+          }
+        }
+
+        const nameText = entry.name.slice(0, 14);
+        const nm = this.add.text(colName, y, nameText, { fontFamily: tableFont, fontSize: fs(12), color: '#ffffff' });
+        container.add(nm);
+        rowObjects.push(nm);
+
+        const shortWallet = entry.wallet ? stellarWallet.shortWalletForLeaderboard(entry.wallet) : '';
+        const wl = this.add.text(colWallet, y, shortWallet, { fontFamily: tableFont, fontSize: fs(11), color: '#aaaaaa' });
+        container.add(wl);
+        rowObjects.push(wl);
+
+        const rankName = isUnranked(entry.rank) ? t('ranks.unranked') : rankData.name;
+        const rankColor = isUnranked(entry.rank) ? '#888888' : getRankColorCSS(entry.rank);
+        const rk = this.add.text(colRankName, y, rankName, { fontFamily: tableFont, fontSize: fs(11), color: rankColor });
+        rk.setOrigin(1, 0);
+        container.add(rk);
+        rowObjects.push(rk);
+      });
+    };
 
     if (top.length === 0) {
       const centerX = overlayLeft + overlayW / 2;
@@ -2339,57 +2438,29 @@ export default class TitleScene extends Phaser.Scene {
         }).setOrigin(0.5));
       }
     } else {
-      const toShow = top.slice(0, maxRows);
-      toShow.forEach((entry, i) => {
-        const y = tableStartY + i * lineHeight;
-        const rankData = getRankById(entry.rank);
-
-        // Position number
-        const posColor = i === 0 ? '#ffd700' : i === 1 ? '#c0c0c0' : i === 2 ? '#cd7f32' : '#888888';
-        container.add(this.add.text(colPos, y, `#${entry.position}`, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: posColor }));
-
-        // Rank icon (if not unranked)
-        if (!isUnranked(entry.rank) && hasRankIcon(entry.rank)) {
-          const spriteKey = rankData.sprite;
-          if (this.textures.exists(spriteKey)) {
-            const icon = this.add.image(colRankIcon, y + 8, spriteKey);
-            icon.setDisplaySize(24, 24);
-            container.add(icon);
-          }
-        }
-
-        // Player name
-        const nameText = entry.name.slice(0, 14);
-        container.add(this.add.text(colName, y, nameText, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(12), color: '#ffffff' }));
-
-        // Short wallet
-        const shortWallet = entry.wallet ? stellarWallet.shortWalletForLeaderboard(entry.wallet) : '';
-        container.add(this.add.text(colWallet, y, shortWallet, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(11), color: '#aaaaaa' }));
-
-        // Rank name - aligned to right
-        const rankName = isUnranked(entry.rank) ? t('ranks.unranked') : rankData.name;
-        const rankColor = isUnranked(entry.rank) ? '#888888' : getRankColorCSS(entry.rank);
-        const rankText = this.add.text(colRankName, y, rankName, { fontFamily: '"Segoe UI", system-ui, sans-serif', fontSize: fs(11), color: rankColor });
-        rankText.setOrigin(1, 0);  // Right align
-        container.add(rankText);
-      });
+      drawRows(0);
     }
 
     // Footer - separate into two zones
     const footerY = overlayTop + overlayH - 40;
     
-    // Left zone: View Ranks button (green)
-    const viewRanksText = this.add.text(overlayLeft + 40, footerY, `[ ${t('leaderboard.view_ranks')} ]`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: fs(12),
-      color: '#00ff88'  // Green color
-    }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true });
-    container.add(viewRanksText);
+    const canViewAll = top.length >= 10;
 
-    viewRanksText.on('pointerdown', () => {
-      container.destroy();
-      this.showRankSystem();
-    });
+    const leftFooterText = canViewAll
+      ? this.add.text(overlayLeft + 40, footerY, `[ ${showAll ? 'VIEW TOP 10' : 'VIEW ALL'} ]`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: fs(12),
+        color: '#00ff88'
+      }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true })
+      : null;
+
+    if (leftFooterText) {
+      container.add(leftFooterText);
+      leftFooterText.on('pointerdown', () => {
+        container.destroy();
+        this.showLeaderboard({ showAll: !showAll });
+      });
+    }
 
     // Right zone: Press Any Key to Close (cyan/neutral)
     const closeText = this.add.text(overlayLeft + overlayW - 40, footerY, t('leaderboard.back'), {
@@ -2397,7 +2468,36 @@ export default class TitleScene extends Phaser.Scene {
       fontSize: fs(12),
       color: '#00ffff'  // Cyan color
     }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
+    closeText.setWordWrapWidth(Math.max(120, overlayW * 0.55));
     container.add(closeText);
+
+    let pageIndex = 0;
+    const totalPages = top.length > 0 ? Math.ceil(top.length / maxRows) : 1;
+    if (showAll && top.length > 0 && totalPages > 1) {
+      const pager = this.add.text(overlayLeft + overlayW / 2, footerY, `PAGE ${pageIndex + 1}/${totalPages}`, {
+        fontFamily: 'monospace',
+        fontSize: fs(11),
+        color: '#666666'
+      }).setOrigin(0.5, 0.5);
+      container.add(pager);
+
+      const onPageKey = (ev) => {
+        const k = ev.key?.toLowerCase?.() || ev.key;
+        if (k === 'arrowleft' || k === 'left' || k === 'a') {
+          pageIndex = (pageIndex - 1 + totalPages) % totalPages;
+          drawRows(pageIndex);
+          pager.setText(`PAGE ${pageIndex + 1}/${totalPages}`);
+        } else if (k === 'arrowright' || k === 'right' || k === 'd') {
+          pageIndex = (pageIndex + 1) % totalPages;
+          drawRows(pageIndex);
+          pager.setText(`PAGE ${pageIndex + 1}/${totalPages}`);
+        }
+      };
+      this.input.keyboard.on('keydown', onPageKey);
+      container.once(Phaser.Scenes.Events.DESTROY, () => {
+        this.input.keyboard.off('keydown', onPageKey);
+      });
+    }
 
     const close = () => {
       container.destroy();
@@ -2428,8 +2528,8 @@ export default class TitleScene extends Phaser.Scene {
     backdrop.setInteractive({ useHandCursor: true });
     container.add(backdrop);
 
-    const overlayW = Math.min(560, w - 40);
-    const overlayH = Math.min(480, h - 40);
+    const overlayW = Math.min(660, w - 40);
+    const overlayH = Math.min(560, h - 40);
     const overlayLeft = cx - overlayW / 2;
     const overlayTop = cy - overlayH / 2;
 
@@ -2513,7 +2613,7 @@ export default class TitleScene extends Phaser.Scene {
    * Displays ZK Proof info, mode, rank, and controls
    */
   async showZKStartPopup() {
-    const uiScale = getUIScale(this);
+    const baseUiScale = getUIScale(this);
     const w = this.scale.width || 800;
     const h = this.scale.height || 600;
     const cx = w / 2;
@@ -2530,11 +2630,16 @@ export default class TitleScene extends Phaser.Scene {
     backdrop.setInteractive({ useHandCursor: false });
     container.add(backdrop);
 
-    // Book-style panel dimensions (pixel art aesthetic) - Auto-height based on content
-    const panelW = Math.min(640, w - 40);
-    const panelH = Math.min(560, h - 40);
+    // Book-style panel dimensions (pixel art aesthetic)
+    const panelW = Math.min(760, w - 24);
+    const panelH = Math.min(720, h - 24);
     const panelLeft = cx - panelW / 2;
     const panelTop = cy - panelH / 2;
+
+    // Popup scale: keep readable on large canvases even if global uiScale is < 1
+    const uiScale = Math.min(1.25, Math.max(baseUiScale, panelW / 640));
+
+    const textScale = uiScale * 1.5;
 
     // Main panel background (cream/beige book page color)
     const panel = this.add.rectangle(cx, cy, panelW, panelH, 0xf5e6c8);
@@ -2548,8 +2653,8 @@ export default class TitleScene extends Phaser.Scene {
     container.add(innerPanel);
 
     // RIGID GRID SYSTEM: Equivalent to CSS Grid with consistent spacing
-    const padding = 32; // Fixed internal padding
-    const gap = 24; // Consistent gap between sections
+    const padding = 30; // Fixed internal padding
+    const gap = 22; // Consistent gap between sections
     const gridPaddingLeft = panelLeft + padding;
     const gridPaddingRight = panelLeft + panelW - padding;
     const col1Left = gridPaddingLeft; // Left column
@@ -2559,20 +2664,23 @@ export default class TitleScene extends Phaser.Scene {
     const infoColWidth = (panelW - padding * 2) / 2;
     
     // Column positions for info section - left and right columns within the content area
-    const col1Left = gridPaddingLeft;                    // Left column starts at left padding
+    const col1LeftInfo = gridPaddingLeft;                // Left column starts at left padding
     const col2Left = gridPaddingLeft + infoColWidth;     // Right column starts in the middle
     
     // Fixed square size for close button
     const closeBtnSize = 24 * uiScale;
+    const closeBtnMargin = 10;
+    const closeBtnX = panelLeft + panelW - closeBtnMargin - closeBtnSize / 2;
+    const closeBtnY = panelTop + closeBtnMargin + closeBtnSize / 2;
     
-    // Close button (X) in top-right corner - integrated into header area
-    const closeBtn = this.add.rectangle(gridPaddingRight - 16, panelTop + 24, closeBtnSize, closeBtnSize, 0xff0000);
+    // Close button (X) in top-right corner - flush to the panel corner
+    const closeBtn = this.add.rectangle(closeBtnX, closeBtnY, closeBtnSize, closeBtnSize, 0xff0000);
     closeBtn.setStrokeStyle(2, 0x990000);
     closeBtn.setInteractive({ useHandCursor: true });
     container.add(closeBtn);
     
     // X symbol inside close button - vertically aligned with title
-    const closeSymbol = this.add.text(gridPaddingRight - 16, panelTop + 24, '✕', {
+    const closeSymbol = this.add.text(closeBtnX, closeBtnY, '✕', {
       fontFamily: 'monospace',
       fontSize: `${Math.round(16 * uiScale)}px`,
       color: '#ffffff',
@@ -2580,7 +2688,7 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5);
     container.add(closeSymbol);
 
-    const fs = (n) => `${Math.round(n * uiScale)}px`;
+    const fs = (n) => `${Math.round(n * textScale)}px`;
 
     // === GRID AREAS EQUIVALENT SYSTEM ===
     // grid-template-areas:
@@ -2610,16 +2718,27 @@ export default class TitleScene extends Phaser.Scene {
 
     // Get wallet and rank info
     const walletConnected = stellarWallet.isConnected();
-    const isZkMode = walletConnected && gameClient.isContractConfigured() && gameClient.isZkProverConfigured();
+    const contractConfigured = gameClient.isContractConfigured();
+    const proverConfigured = gameClient.isZkProverConfigured();
+    const isZkMode = walletConnected && contractConfigured && proverConfigured;
     
     let playerRank = 0;
+    let playerGamesPlayed = 0;
+    let proverHealthy = false;
     if (walletConnected) {
       try {
         const stats = await weaponClient.getPlayerStats(await stellarWallet.getAddress());
         playerRank = stats.rank !== undefined ? stats.rank : stats.tier;
+        playerGamesPlayed = stats.gamesPlayed || 0;
       } catch (e) {
         console.warn('[ZKPopup] Failed to get player rank:', e);
       }
+    }
+    if (proverConfigured) {
+      try {
+        const health = await gameClient.checkZkProverHealth();
+        proverHealthy = !!health?.ok;
+      } catch (_) { /* ignore */ }
     }
 
     // === INFO-LEFT AREA ===
@@ -2628,7 +2747,7 @@ export default class TitleScene extends Phaser.Scene {
     // Left column: Mode info
     const modeText = isZkMode ? t('zk_popup.mode_ranked') : t('zk_popup.mode_casual');
     const modeColor = isZkMode ? '#228b22' : '#8b4513'; // Green for ranked, brown for casual
-    const modeDisplay = this.add.text(col1Left, infoSectionTop, modeText, {
+    const modeDisplay = this.add.text(col1LeftInfo, infoSectionTop, modeText, {
       fontFamily: 'monospace',
       fontSize: fs(16),
       color: modeColor,
@@ -2638,7 +2757,7 @@ export default class TitleScene extends Phaser.Scene {
 
     const zkStatusText = isZkMode ? t('zk_popup.zk_enabled') : t('zk_popup.zk_disabled');
     const zkStatusColor = isZkMode ? '#228b22' : '#8b0000'; // Green or dark red
-    const zkStatus = this.add.text(col1Left, infoSectionTop + 28, zkStatusText, {
+    const zkStatus = this.add.text(col1LeftInfo, infoSectionTop + 28, zkStatusText, {
       fontFamily: 'monospace',
       fontSize: fs(14),
       color: zkStatusColor,
@@ -2670,10 +2789,13 @@ export default class TitleScene extends Phaser.Scene {
       }).setOrigin(0, 0);
       container.add(rankNameText);
       
-      // Rank icon positioned to the right of the text with proper separation - no overlap
+      // Rank icon positioned to the far right of the column for clarity
       if (this.textures.exists(rankData.sprite)) {
-        const rankIcon = this.add.image(col2Left + 100, rankNameY + 5, rankData.sprite);
-        rankIcon.setDisplaySize(32, 32);
+        const iconSize = 46;
+        const maxIconX = col2Right - iconSize / 2;
+        const rankIconX = maxIconX;
+        const rankIcon = this.add.image(rankIconX, rankNameY + iconSize / 2 - 2, rankData.sprite);
+        rankIcon.setDisplaySize(iconSize, iconSize);
         container.add(rankIcon);
       }
     } else {
@@ -2688,97 +2810,97 @@ export default class TitleScene extends Phaser.Scene {
     }
 
     // === DESCRIPTION AREA ===
-    const descTop = infoSectionTop + 100;
+    const descTop = infoSectionTop + 92;
     const descMaxWidth = panelW - padding * 2;
     
-    // Description text - Left aligned for perfect consistency, using full width
-    const descLines = t('zk_popup.description').split('\n');
-    descLines.forEach((line, i) => {
-      const descText = this.add.text(gridPaddingLeft, descTop + i * 24, line, {
-        fontFamily: 'monospace',
-        fontSize: fs(11),
-        color: '#4a4a4a',
-        wordWrap: { width: descMaxWidth }
-      }).setOrigin(0, 0);
-      container.add(descText);
-    });
-
-    // === CONTROLS AREA ===
-    const controlsTop = descTop + 40 + (descLines.length * 24);
-    
-    // Controls title
-    const controlsTitle = this.add.text(gridPaddingLeft, controlsTop, t('zk_popup.controls_title'), {
+    // Description text - single block
+    let descCursorY = descTop;
+    const descFullText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.description').replace(/\n/g, ' '), {
       fontFamily: 'monospace',
-      fontSize: fs(14),
-      color: '#4a2c2a',
-      fontStyle: 'bold'
+      fontSize: fs(12),
+      color: '#4a4a4a',
+      wordWrap: { width: descMaxWidth }
     }).setOrigin(0, 0);
-    container.add(controlsTitle);
+    container.add(descFullText);
+    descCursorY += descFullText.height + 10;
 
-    // Controls grid (table-like layout with perfect alignment)
-    const controlsStartY = controlsTop + 24;
-    const col1X = gridPaddingLeft;
-    const col2X = gridPaddingLeft + 140; // Precise distance for perfect alignment
-    
-    // Controls lines with table-like alignment
-    const controlsLines = [
-      t('zk_popup.controls_move'),
-      t('zk_popup.controls_menu'),
-      t('zk_popup.controls_menu_note')
-    ];
-    
-    // Parse and display controls with precise alignment
-    controlsLines.forEach((line, i) => {
-      // For each line, split on the dash to separate controls from description
-      if (i < 2) {
-        const parts = line.split('-');
-        if (parts.length >= 2) {
-          const controlKeys = parts[0].trim();
-          const controlDesc = parts[1].trim();
-          
-          const controlKeysText = this.add.text(col1X, controlsStartY + i * 24, controlKeys, {
-            fontFamily: 'monospace',
-            fontSize: fs(11),
-            color: '#5a4a3a',
-            fontStyle: 'bold'
-          }).setOrigin(0, 0);
-          container.add(controlKeysText);
-          
-          const controlDescText = this.add.text(col2X, controlsStartY + i * 24, controlDesc, {
-            fontFamily: 'monospace',
-            fontSize: fs(11),
-            color: '#5a4a3a'
-          }).setOrigin(0, 0);
-          container.add(controlDescText);
-        }
-      } else {
-        // Handle (Game Continues) - aligned with col1X
-        const controlNoteText = this.add.text(col1X, controlsStartY + i * 24, line, {
-          fontFamily: 'monospace',
-          fontSize: fs(10),
-          color: '#6a5a4a'
-        }).setOrigin(0, 0);
-        container.add(controlNoteText);
-      }
-    });
-
-    // Auto-Shoot info - Separate block below controls
-    const autoShootText = this.add.text(gridPaddingLeft, controlsStartY + controlsLines.length * 24 + 16, t('zk_popup.controls_auto_shoot'), {
+    // === ZK WEAPON HINT ===
+    const weaponHintText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.zk_weapon_hint'), {
       fontFamily: 'monospace',
-      fontSize: fs(10),
+      fontSize: fs(11),
+      color: '#00aaaa',
+      fontStyle: 'bold',
+      wordWrap: { width: descMaxWidth }
+    }).setOrigin(0, 0);
+    container.add(weaponHintText);
+    descCursorY += weaponHintText.height + 10;
+
+    // === STATUS CHECKS (horizontal) ===
+    const statusItems = [
+      { label: contractConfigured ? 'CONTRACT ✓' : 'CONTRACT ✗', ok: contractConfigured },
+      { label: proverHealthy ? 'ZK PROVER ✓' : 'ZK PROVER ✗', ok: proverHealthy },
+      { label: walletConnected ? 'SEP-10 ✓' : 'SEP-10 ✗', ok: walletConnected }
+    ];
+    let statusX = gridPaddingLeft;
+    statusItems.forEach((item) => {
+      const color = item.ok ? '#228b22' : '#8b0000';
+      const statusLine = this.add.text(statusX, descCursorY, item.label, {
+        fontFamily: 'monospace',
+        fontSize: fs(9),
+        color: color,
+        fontStyle: 'bold'
+      }).setOrigin(0, 0);
+      container.add(statusLine);
+      statusX += statusLine.width + 18;
+    });
+    descCursorY += 20;
+
+    // === DIVIDER ===
+    descCursorY += 4;
+    const divider2 = this.add.rectangle(cx, descCursorY, panelW - padding * 2, 1, 0x8b7355, 0.5);
+    container.add(divider2);
+    descCursorY += 10;
+
+    // === CONTROLS AREA (compact 2-column) ===
+    const col1X = gridPaddingLeft;
+    const col2X = gridPaddingLeft + 130;
+    const controlsData = [
+      { key: 'W A S D', val: t('zk_popup.controls_move').split('-').pop().trim() },
+      { key: 'ESC', val: t('zk_popup.controls_menu').split('-').pop().trim() }
+    ];
+    controlsData.forEach((c, i) => {
+      const keyText = this.add.text(col1X, descCursorY + i * 20, c.key, {
+        fontFamily: 'monospace',
+        fontSize: fs(12),
+        color: '#5a4a3a',
+        fontStyle: 'bold'
+      }).setOrigin(0, 0);
+      container.add(keyText);
+      const valText = this.add.text(col2X, descCursorY + i * 20, c.val, {
+        fontFamily: 'monospace',
+        fontSize: fs(12),
+        color: '#5a4a3a'
+      }).setOrigin(0, 0);
+      container.add(valText);
+    });
+    descCursorY += controlsData.length * 20 + 8;
+
+    // Auto-Shoot note (inline)
+    const autoShootText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.controls_auto_shoot'), {
+      fontFamily: 'monospace',
+      fontSize: fs(11),
       color: '#6a5a4a'
     }).setOrigin(0, 0);
     container.add(autoShootText);
 
     // === BUTTONS AREA ===
-    // Calculate bottom position to anchor buttons to the bottom of the panel
-    const buttonsBottomPadding = 40;
+    const buttonsBottomPadding = 36;
     const buttonsTop = panelTop + panelH - buttonsBottomPadding;
     
     // Play button (Ranked or Casual) - Primary CTA with consistent pixel art style
     const playButtonText = isZkMode ? t('zk_popup.play_ranked') : t('zk_popup.play_casual');
     const playButtonColor = isZkMode ? '#228b22' : '#8b4513';
-    const playButton = this.add.text(cx - 80, buttonsTop, playButtonText, {
+    const playButton = this.add.text(cx, buttonsTop, playButtonText, {
       fontFamily: 'monospace',
       fontSize: fs(14),
       color: playButtonColor,
@@ -2793,27 +2915,9 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5).setInteractive({ useHandCursor: true });
     container.add(playButton);
 
-    // Close button - Secondary with identical pixel art style
-    const closeButton = this.add.text(cx + 80, buttonsTop, t('zk_popup.close'), {
-      fontFamily: 'monospace',
-      fontSize: fs(14),
-      color: '#8b0000',
-      fontStyle: 'bold',
-      backgroundColor: '#f0f0f0',
-      padding: {
-        left: 24,
-        right: 24,
-        top: 12,
-        bottom: 12
-      }
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    container.add(closeButton);
-
     // Button hover effects (simple color change, no animations)
     playButton.on('pointerover', () => playButton.setColor('#2e8b57'));
     playButton.on('pointerout', () => playButton.setColor(playButtonColor));
-    closeButton.on('pointerover', () => closeButton.setColor('#ff0000'));
-    closeButton.on('pointerout', () => closeButton.setColor('#8b0000'));
 
     // Close function - Only closes this modal, doesn't use ESC
     const closePopup = () => {
@@ -2833,22 +2937,17 @@ export default class TitleScene extends Phaser.Scene {
         closePopup();
         this.startCasualGame();
       } else {
-        // Wallet required for ranked, show message
-        const warningText = this.add.text(cx, buttonsTop - 30, t('zk_popup.wallet_required'), {
-          fontFamily: 'monospace',
-          fontSize: fs(11),
-          color: '#ff0000'
-        }).setOrigin(0.5);
-        container.add(warningText);
-        
-        // Remove warning after 2 seconds
-        this.time.delayedCall(2000, () => warningText.destroy());
+        // No wallet — start casual game anyway
+        closePopup();
+        this.startCasualGame();
       }
     };
 
     playButton.on('pointerdown', startGame);
-    closeButton.on('pointerdown', closePopup);
     backdrop.on('pointerdown', closePopup);
+    closeBtn.on('pointerdown', closePopup);
+    closeSymbol.setInteractive({ useHandCursor: true });
+    closeSymbol.on('pointerdown', closePopup);
 
     // Keyboard handler - ESC no longer closes the popup, only Enter starts game
     const handleKeydown = (event) => {
@@ -4383,13 +4482,15 @@ export default class TitleScene extends Phaser.Scene {
       
       // Define two-column grid layout
       const gridPadding = 32;
+      const loreBoxW = Math.min(860, w - 40);
+      const loreBoxH = Math.min(620, h - 40);
       const characterWidth = loreBoxW * 0.35; // 35% para el personaje
       const textWidth = loreBoxW * 0.55;      // 55% para el texto
       const horizontalGap = 32;               // Separación entre columnas
       
       // Position character in left column
       const characterX = (cx - loreBoxW/2) + characterWidth/2 + gridPadding;
-      const characterY = cy - loreBoxH/2 + gridPadding + 40; // Align with top of text block
+      const characterY = cy - loreBoxH/2 + gridPadding + 104; // Align with top of text block (lowered)
       
       // Animate the character sprite to its designated position in left column
       this.tweens.add({
@@ -4410,12 +4511,11 @@ export default class TitleScene extends Phaser.Scene {
       // Crear un overlay para mostrar la información del personaje
       const loreBackdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.95);
       loreBackdrop.setDepth(1005).setInteractive({ useHandCursor: true });
-      
-      const loreBoxW = Math.min(700, w - 60);
-      const loreBoxH = Math.min(520, h - 60);
+
       const loreBox = this.add.rectangle(cx, cy, loreBoxW, loreBoxH, 0x0a0a14, 1);
       loreBox.setStrokeStyle(2, 0x00ffff);
       loreBox.setDepth(1006);
+      const loreBoxTop = cy - loreBoxH / 2;
       
       // Título del personaje en el idioma apropiado - columna derecha
       const lang = window.VIBE_SETTINGS?.language || 'en';
@@ -4429,56 +4529,78 @@ export default class TitleScene extends Phaser.Scene {
       }).setOrigin(0, 0).setDepth(1007);
       
       // Origin (localized) - columna derecha
-      const originLabel = this.add.text(textStartX, cy - loreBoxH/2 + 90, t('character.origin') || 'Origin:', {
+      let cursorY = cy - loreBoxH/2 + 90;
+      const sectionGap = 18;
+      const bodyGap = 8;
+
+      const originLabel = this.add.text(textStartX, cursorY, t('character.origin') || 'Origin:', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${16 * uiScale}px`,
         color: '#ffffff',
         fontStyle: 'bold'
       }).setOrigin(0, 0).setDepth(1007);
+      cursorY += originLabel.height + bodyGap;
       
       // Get localized character info based on current language (lang already declared above)
-      const originText = this.add.text(textStartX, cy - loreBoxH/2 + 120, 
+      const originText = this.add.text(textStartX, cursorY, 
         lang === 'es' ? (char.origin || '') : (char.origin_en || char.origin || ''), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${14 * uiScale}px`,
         color: '#cccccc',
         wordWrap: { width: (loreBoxW * 0.55) - 32 } // Width for right column
       }).setOrigin(0, 0).setDepth(1007);
+      cursorY += originText.height + sectionGap;
       
       // History (localized) - columna derecha
-      const historyLabel = this.add.text(textStartX, cy - loreBoxH/2 + 180, t('character.history') || 'History:', {
+      const historyLabel = this.add.text(textStartX, cursorY, t('character.history') || 'History:', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${16 * uiScale}px`,
         color: '#ffffff',
         fontStyle: 'bold'
       }).setOrigin(0, 0).setDepth(1007);
+      cursorY += historyLabel.height + bodyGap;
       
-      const historyText = this.add.text(textStartX, cy - loreBoxH/2 + 210, 
+      const historyText = this.add.text(textStartX, cursorY, 
         lang === 'es' ? (char.history || '') : (char.history_en || char.history || ''), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${14 * uiScale}px`,
         color: '#cccccc',
         wordWrap: { width: (loreBoxW * 0.55) - 32 } // Width for right column
       }).setOrigin(0, 0).setDepth(1007);
+      cursorY += historyText.height + sectionGap;
       
       // Mission (localized) - columna derecha
-      const missionLabel = this.add.text(textStartX, cy - loreBoxH/2 + 320, t('character.mission') || 'Mission:', {
+      const missionLabel = this.add.text(textStartX, cursorY, t('character.mission') || 'Mission:', {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${16 * uiScale}px`,
         color: '#ffffff',
         fontStyle: 'bold'
       }).setOrigin(0, 0).setDepth(1007);
+      cursorY += missionLabel.height + bodyGap;
       
-      const missionText = this.add.text(textStartX, cy - loreBoxH/2 + 350, 
+      const missionText = this.add.text(textStartX, cursorY, 
         lang === 'es' ? (char.mission || '') : (char.mission_en || char.mission || ''), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${14 * uiScale}px`,
         color: '#cccccc',
         wordWrap: { width: (loreBoxW * 0.55) - 32 }
       }).setOrigin(0, 0).setDepth(1007);
+
+      // Ajustar altura del recuadro para reducir espacio vacío (anclado arriba)
+      const contentBottom = Math.max(
+        missionText.y + missionText.height,
+        characterY + (animatedSprite.displayHeight ? animatedSprite.displayHeight / 2 : 0)
+      );
+      const closeBtnHeight = 48 * uiScale;
+      const desiredH = (contentBottom - loreBoxTop) + closeBtnHeight + 12;
+      const minH = 320 * uiScale;
+      const effectiveLoreBoxH = Math.max(minH, Math.min(loreBoxH, desiredH));
+      loreBox.setSize(loreBoxW, effectiveLoreBoxH);
+      loreBox.setDisplaySize(loreBoxW, effectiveLoreBoxH);
+      loreBox.y = loreBoxTop + effectiveLoreBoxH / 2;
       
       // Botón de cerrar (localized)
-      const closeButton = this.add.text(cx, cy + loreBoxH/2 - 30, t('prompt.esc_close').replace('[', '').replace(']', '').trim() || (lang === 'es' ? 'Cerrar' : 'Close'), {
+      const closeButton = this.add.text(cx, loreBoxTop + effectiveLoreBoxH - 22, t('prompt.esc_close').replace('[', '').replace(']', '').trim() || (lang === 'es' ? 'Cerrar' : 'Close'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${18 * uiScale}px`,
         color: '#00ffff',

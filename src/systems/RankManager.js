@@ -151,7 +151,7 @@ export function getAllRanks() {
  * @param {Phaser.Scene} scene - Phaser scene
  */
 export function loadRankSprites(scene) {
-  const basePath = 'assets/UI/Ranks/';
+  const basePath = '/assets/UI/Ranks/';
   
   Object.values(RANKS).forEach(rank => {
     if (rank.sprite) {

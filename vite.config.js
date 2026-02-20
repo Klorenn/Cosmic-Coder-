@@ -11,7 +11,7 @@ const baseForPages = repoName ? `/${repoName}/` : './';
 export default defineConfig({
   base: isCI ? baseForPages : './',
   server: {
-    port: 3000,
+    port: 3001,
     open: true,
     fs: {
       allow: [

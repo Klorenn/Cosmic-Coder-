@@ -78,7 +78,7 @@ export default class LeaderboardManager {
    * @param {number} score
    * @returns {Promise<{ success: boolean, entries?: Array }>}
    */
-  static async submitOnChain(address, wave, score) {
+  static async submitOnChain(address, wave, score, name = '') {
     if (!address) return { success: false };
     try {
       const res = await fetch(`${LEADERBOARD_API}/leaderboard`, {
@@ -86,11 +86,15 @@ export default class LeaderboardManager {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           address: String(address),
+          name: (name != null ? String(name) : '').trim().slice(0, 20),
           wave: Math.max(0, Math.floor(wave)),
           score: Math.max(0, Math.floor(score))
         })
       });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        console.warn('[Leaderboard] submit failed:', res.status, data);
+      }
       return res.ok ? { success: true, entries: data.entries } : { success: false };
     } catch (e) {
       console.warn('Leaderboard submitOnChain failed:', e);
@@ -109,12 +113,13 @@ export default class LeaderboardManager {
       const entries = Array.isArray(data.entries) ? data.entries : [];
       return entries.map((e, i) => ({
         rank: i + 1,
-        name: e.address ? shortAddress(e.address) : '???',
+        address: e.address ? String(e.address) : '',
+        name: (e.name ? String(e.name) : (e.address ? shortAddress(e.address) : '???')).slice(0, 20),
         wave: e.wave ?? 0,
         score: e.score ?? 0
       }));
     } catch (e) {
-      console.warn('Leaderboard fetchOnChain failed:', e);
+      console.warn('[Leaderboard] fetch failed:', e);
       return [];
     }
   }
