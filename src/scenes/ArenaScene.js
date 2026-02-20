@@ -4645,7 +4645,7 @@ export default class ArenaScene extends Phaser.Scene {
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
           } catch (_) {}
           clear();
-          resolve(null);
+          resolve({ status: 'zk_failed', error: e?.message || 'Unknown error' });
         }
       }).catch(() => { clear(); resolve(null); });
     }).then((status) => {
@@ -4660,9 +4660,9 @@ export default class ArenaScene extends Phaser.Scene {
       this.input.keyboard.on('keydown', handleKeydown);
       blackBg.on('pointerdown', goToMenu);
 
-      // Show ZK Proof Success UI if transaction was successful
-      if (status && status.status === 'zk' && status.txHash) {
-        this.showZkProofSuccessUI(status.txHash, cx, cy, gameOverContainer);
+      // Show ZK Proof UI based on submission result
+      if (status && (status.status === 'zk' || status.status === 'zk_failed')) {
+        this.showZkProofResultUI(status, cx, cy, gameOverContainer);
       }
 
       if (status && status.status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
@@ -4672,65 +4672,108 @@ export default class ArenaScene extends Phaser.Scene {
     });
   }
 
-  showZkProofSuccessUI(txHash, cx, cy, gameOverContainer) {
+  showZkProofResultUI(result, cx, cy, gameOverContainer) {
     const uiScale = this.uiScale || 1;
     const buttonY = cy + 280; // Position below other UI elements
     
-    // Create the ZK Proof Success button
-    const zkProofBtn = this.add.text(cx, buttonY, '🔍 View ZK Proof on Stellar Expert', {
-      fontFamily: 'monospace',
-      fontSize: `${Math.round(14 * uiScale)}px`,
-      color: '#00ffff',
-      fontStyle: 'bold',
-      backgroundColor: '#0a0a14',
-      padding: { x: 12, y: 8 }
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
-    
-    // Add background panel for the button
-    const btnBg = this.add.rectangle(cx, buttonY, 380, 50, 0x0a0a14, 0.9);
-    btnBg.setStrokeStyle(2, 0x00ffff, 0.8);
-    btnBg.setOrigin(0.5).setAlpha(0);
-    
-    // Add label above the button
-    const zkLabel = this.add.text(cx, buttonY - 35, '✅ ZK Proof of Survival Verified On-Chain', {
-      fontFamily: 'monospace',
-      fontSize: `${Math.round(12 * uiScale)}px`,
-      color: '#00ff88',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setAlpha(0);
-    
-    gameOverContainer.add([btnBg, zkLabel, zkProofBtn]);
-    
-    // Fade in animation
-    this.tweens.add({ targets: [btnBg, zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
-    
-    // Button interactions
-    zkProofBtn.on('pointerover', () => {
-      zkProofBtn.setColor('#ffffff');
-      btnBg.setStrokeStyle(2, 0xffffff, 1);
-    });
-    
-    zkProofBtn.on('pointerout', () => {
-      zkProofBtn.setColor('#00ffff');
+    if (result.status === 'zk' && result.txHash) {
+      // SUCCESS: Show the Stellar Expert link
+      const zkProofBtn = this.add.text(cx, buttonY, '🔍 View ZK Proof on Stellar Expert', {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(14 * uiScale)}px`,
+        color: '#00ffff',
+        fontStyle: 'bold',
+        backgroundColor: '#0a0a14',
+        padding: { x: 12, y: 8 }
+      }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
+      
+      const btnBg = this.add.rectangle(cx, buttonY, 380, 50, 0x0a0a14, 0.9);
       btnBg.setStrokeStyle(2, 0x00ffff, 0.8);
-    });
-    
-    zkProofBtn.on('pointerdown', () => {
-      // Open Stellar Expert in a new tab
-      const network = 'testnet'; // We're using testnet
-      const url = `https://stellar.expert/explorer/${network}/tx/${txHash}`;
-      window.open(url, '_blank');
-    });
-    
-    // Add subtle glow effect
-    this.createTrackedTween({
-      targets: btnBg,
-      alpha: { from: 0.9, to: 1 },
-      duration: 2000,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut'
-    });
+      btnBg.setOrigin(0.5).setAlpha(0);
+      
+      const zkLabel = this.add.text(cx, buttonY - 35, '✅ ZK Proof of Survival Verified On-Chain', {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(12 * uiScale)}px`,
+        color: '#00ff88',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setAlpha(0);
+      
+      gameOverContainer.add([btnBg, zkLabel, zkProofBtn]);
+      
+      this.tweens.add({ targets: [btnBg, zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
+      
+      zkProofBtn.on('pointerover', () => {
+        zkProofBtn.setColor('#ffffff');
+        btnBg.setStrokeStyle(2, 0xffffff, 1);
+      });
+      
+      zkProofBtn.on('pointerout', () => {
+        zkProofBtn.setColor('#00ffff');
+        btnBg.setStrokeStyle(2, 0x00ffff, 0.8);
+      });
+      
+      zkProofBtn.on('pointerdown', () => {
+        const network = 'testnet';
+        const url = `https://stellar.expert/explorer/${network}/tx/${result.txHash}`;
+        window.open(url, '_blank');
+      });
+      
+      this.createTrackedTween({
+        targets: btnBg,
+        alpha: { from: 0.9, to: 1 },
+        duration: 2000,
+        yoyo: true,
+        repeat: -1,
+        ease: 'Sine.easeInOut'
+      });
+      
+    } else if (result.status === 'zk_failed') {
+      // FAILURE: Show error info and retry option
+      const errorBtn = this.add.text(cx, buttonY, '⚠️ ZK Proof Failed - Click to Retry', {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(12 * uiScale)}px`,
+        color: '#ff6600',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
+      
+      const errorBg = this.add.rectangle(cx, buttonY, 400, 50, 0x1a0a0a, 0.9);
+      errorBg.setStrokeStyle(2, 0xff6600, 0.8);
+      errorBg.setOrigin(0.5).setAlpha(0);
+      
+      const errorLabel = this.add.text(cx, buttonY - 35, '❌ ZK Proof Submission Failed', {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(12 * uiScale)}px`,
+        color: '#ff4444',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setAlpha(0);
+      
+      const errorMsg = this.add.text(cx, buttonY + 35, result.error || 'Unknown error', {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(10 * uiScale)}px`,
+        color: '#aa4444',
+        align: 'center',
+        wordWrap: { width: 360 }
+      }).setOrigin(0.5).setAlpha(0);
+      
+      gameOverContainer.add([errorBg, errorLabel, errorMsg, errorBtn]);
+      
+      this.tweens.add({ targets: [errorBg, errorLabel, errorMsg, errorBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
+      
+      errorBtn.on('pointerover', () => {
+        errorBtn.setColor('#ffaa00');
+        errorBg.setStrokeStyle(2, 0xffaa00, 1);
+      });
+      
+      errorBtn.on('pointerout', () => {
+        errorBtn.setColor('#ff6600');
+        errorBg.setStrokeStyle(2, 0xff6600, 0.8);
+      });
+      
+      errorBtn.on('pointerdown', () => {
+        // Reload the page to retry ZK submission
+        window.location.reload();
+      });
+    }
   }
 
   showGameOverControls() {
