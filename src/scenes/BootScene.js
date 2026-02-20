@@ -237,9 +237,11 @@ export default class BootScene extends Phaser.Scene {
   
     // VibeCoder death animation (for game over screen)
     if (this.textures.exists('robot-death')) {
+      const frameTotal = this.textures.get('robot-death')?.frameTotal || 1;
+      const end = Math.max(0, frameTotal - 1);
       this.anims.create({
         key: 'robot-death',
-        frames: this.anims.generateFrameNumbers('robot-death', { start: 0, end: 4 }),
+        frames: this.anims.generateFrameNumbers('robot-death', { start: 0, end }),
         frameRate: 8,
         repeat: 0
       });
@@ -410,36 +412,56 @@ export default class BootScene extends Phaser.Scene {
     }
 
     const prefix = textureKey === 'player' ? 'player' : textureKey;
-    this.anims.create({
-      key: prefix + '-idle',
-      frames: this.anims.generateFrameNumbers(textureKey, { start: 0, end: 5 }),
-      frameRate: 8,
-      repeat: -1
-    });
-    this.anims.create({
-      key: prefix + '-walk-down',
-      frames: this.anims.generateFrameNumbers(textureKey, { start: 6, end: 11 }),
-      frameRate: 10,
-      repeat: -1
-    });
-    this.anims.create({
-      key: prefix + '-walk-up',
-      frames: this.anims.generateFrameNumbers(textureKey, { start: 6, end: 11 }),
-      frameRate: 10,
-      repeat: -1
-    });
-    this.anims.create({
-      key: prefix + '-walk-side',
-      frames: this.anims.generateFrameNumbers(textureKey, { start: 6, end: 11 }),
-      frameRate: 10,
-      repeat: -1
-    });
-    this.anims.create({
-      key: prefix + '-hurt',
-      frames: this.anims.generateFrameNumbers(hurtKey, { start: 0, end: 3 }),
-      frameRate: 12,
-      repeat: 0
-    });
+    
+    // Get frame counts dynamically
+    const textureFrames = this.textures.get(textureKey)?.frameTotal || 1;
+    const hurtFrames = this.textures.get(hurtKey)?.frameTotal || 1;
+    
+    // Calculate safe frame ranges
+    const idleEnd = Math.min(5, textureFrames - 1);
+    const walkStart = Math.min(6, textureFrames - 1);
+    const walkEnd = Math.min(11, textureFrames - 1);
+    const hurtEnd = Math.min(3, hurtFrames - 1);
+    
+    // Only create animations if we have enough frames
+    if (idleEnd >= 0) {
+      this.anims.create({
+        key: prefix + '-idle',
+        frames: this.anims.generateFrameNumbers(textureKey, { start: 0, end: idleEnd }),
+        frameRate: 8,
+        repeat: -1
+      });
+    }
+    
+    if (walkEnd >= walkStart && walkStart < textureFrames) {
+      this.anims.create({
+        key: prefix + '-walk-down',
+        frames: this.anims.generateFrameNumbers(textureKey, { start: walkStart, end: walkEnd }),
+        frameRate: 10,
+        repeat: -1
+      });
+      this.anims.create({
+        key: prefix + '-walk-up',
+        frames: this.anims.generateFrameNumbers(textureKey, { start: walkStart, end: walkEnd }),
+        frameRate: 10,
+        repeat: -1
+      });
+      this.anims.create({
+        key: prefix + '-walk-side',
+        frames: this.anims.generateFrameNumbers(textureKey, { start: walkStart, end: walkEnd }),
+        frameRate: 10,
+        repeat: -1
+      });
+    }
+    
+    if (hurtEnd >= 0) {
+      this.anims.create({
+        key: prefix + '-hurt',
+        frames: this.anims.generateFrameNumbers(hurtKey, { start: 0, end: hurtEnd }),
+        frameRate: 12,
+        repeat: 0
+      });
+    }
   }
 
   /**

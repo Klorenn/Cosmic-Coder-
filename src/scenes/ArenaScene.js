@@ -4625,8 +4625,11 @@ export default class ArenaScene extends Phaser.Scene {
             };
             // TODO: load vk_hash from environment or contract storage; for now use placeholder
             const vkHash = '0000000000000000000000000000000000000000000000000000000000000000';
+            console.log('[ZK Submit V2] Starting ZK submission...');
+            console.log('[ZK Submit V2] Payload:', JSON.stringify(payload, null, 2));
             const txResult = await gameClient.submitZkFromProverV2(addr, sign, undefined, payload, vkHash);
-            console.log('[ZK Submit V2] submitZkFromProverV2 success');
+            console.log('[ZK Submit V2] submitZkFromProverV2 success:', txResult);
+            console.log('[ZK Submit V2] Transaction hash:', txResult?.hash);
             try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
             clear();
             resolve({ status: 'zk', txHash: txResult.hash });
@@ -4639,6 +4642,8 @@ export default class ArenaScene extends Phaser.Scene {
           }
         } catch (e) {
           console.error('ZK ERROR DETAILS:', e);
+          console.error('ZK ERROR STACK:', e?.stack);
+          console.error('ZK ERROR MESSAGE:', e?.message);
           console.warn('[Cosmic Coder] Submit failed:', e?.message || e);
           try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
           try {
