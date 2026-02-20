@@ -18,7 +18,9 @@
     "zk:build": "bash scripts/zk/build_circuit.sh",
     "zk:proof": "node scripts/zk/generate_proof.js",
     "zk:args": "node scripts/zk/contract_args_from_proof.js circuits/build",
-    "zk:e2e": "bash scripts/e2e_zk.sh"
+    "zk:e2e": "bash scripts/e2e_zk.sh",
+    "zk:noir:compile": "cd circuits/noir && nargo compile",
+    "zk:noir:vk": "cd circuits/noir && bb write_vk -b target/gamerun_noir.json -o target --scheme ultra_honk --oracle_hash keccak --output_format bytes_and_fields"
   },
   "keywords": [
     "game",
@@ -29,10 +31,14 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@aztec/bb.js": "^0.87.0",
+    "@noble/hashes": "^1.8.0",
+    "@noir-lang/noir_js": "1.0.0-beta.9",
     "@stellar/freighter-api": "^5.0.0",
     "@stellar/stellar-base": "^14.0.0",
     "@stellar/stellar-sdk": "^14.5.0",
     "@supabase/supabase-js": "^2.97.0",
+    "buffer": "^6.0.3",
     "cors": "^2.8.6",
     "electron-store": "^10.0.0",
     "express": "^5.2.1",

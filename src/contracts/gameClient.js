@@ -6,6 +6,7 @@
  */
 
 import { StrKey } from '@stellar/stellar-sdk';
+import { NoirService } from '../services/NoirService.js';
 
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
@@ -54,6 +55,36 @@ async function getServer() {
   return new rpc.Server(TESTNET_RPC);
 }
 
+function safeJson(value) {
+  try {
+    return JSON.stringify(
+      value,
+      (_, v) => (typeof v === 'bigint' ? v.toString() : v),
+      2
+    );
+  } catch (_) {
+    return String(value);
+  }
+}
+
+async function waitForTx(server, hash, tries = 12, delayMs = 1000) {
+  let lastSeen = null;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const tx = await server.getTransaction(hash);
+      const status = String(tx?.status || '').toUpperCase();
+      if (status) {
+        lastSeen = tx;
+        if (status === 'SUCCESS' || status === 'FAILED') return tx;
+      }
+    } catch (_) {
+      // keep polling
+    }
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return lastSeen;
+}
+
 /**
  * Build, prepare, sign and send a contract invocation.
  */
@@ -79,12 +110,65 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
     .addOperation(op)
     .setTimeout(30)
     .build();
+
+  // Surface detailed host/contract errors early (before signing/sending).
+  const sim = await server.simulateTransaction(built);
+  if (sim?.error) {
+    throw new Error(
+      `[simulate:${method}] ${sim.error}\n` +
+      `result=${safeJson(sim.result)}\n` +
+      `events=${safeJson(sim.events)}`
+    );
+  }
+
   const prepared = await server.prepareTransaction(built);
   const signedXdr = await signTransaction(prepared.toXDR());
   const tx = TransactionBuilder.fromXDR(signedXdr, TESTNET_PASSPHRASE);
   const result = await server.sendTransaction(tx);
+  if (result.status === 'PENDING' && result.hash) {
+    const txInfo = await waitForTx(server, result.hash, 20, 1000);
+    const finalStatus = String(txInfo?.status || '').toUpperCase();
+    if (finalStatus === 'SUCCESS') {
+      return txInfo;
+    }
+    throw new Error(
+      `[send:${method}] status=PENDING->${finalStatus || 'UNKNOWN'} hash=${result.hash}\n` +
+      `rpc_result=${safeJson(result)}\n` +
+      `tx_info=${safeJson(txInfo)}`
+    );
+  }
   if (result.status === 'ERROR') {
-    throw new Error(result.errorResultXdr || result.status);
+    // Some RPC responses return hash but omit errorResultXdr.
+    // Query tx status by hash to recover the concrete failure reason.
+    if (result.hash) {
+      const txInfo = await waitForTx(server, result.hash, 20, 1000);
+      if (txInfo) {
+        throw new Error(
+          `[send:${method}] status=ERROR hash=${result.hash}\n` +
+          `rpc_result=${safeJson(result)}\n` +
+          `tx_status=${txInfo.status || 'unknown'}\n` +
+          `tx_result=${txInfo.resultXdr || 'n/a'}\n` +
+          `tx_result_meta=${txInfo.resultMetaXdr || 'n/a'}\n` +
+          `tx_envelope=${txInfo.envelopeXdr || 'n/a'}`
+        );
+      }
+    }
+    let decoded = '';
+    if (result.errorResultXdr) {
+      try {
+        const tr = xdr.TransactionResult.fromXDR(result.errorResultXdr, 'base64');
+        decoded = ` txResult=${tr.result().switch().name}`;
+      } catch (_) {
+        decoded = '';
+      }
+    }
+    throw new Error(
+      `[send:${method}] status=ERROR` +
+      `${decoded}` +
+      ` hash=${result.hash || 'n/a'}` +
+      ` errorResultXdr=${result.errorResultXdr || 'n/a'}\n` +
+      `rpc_result=${safeJson(result)}`
+    );
   }
   return result;
 }
@@ -154,21 +238,37 @@ export async function requestZkProofV2(baseUrl, payload) {
   return res.json();
 }
 
-/** Normalize any bytes-like value to Uint8Array (hex string, array of numbers, or object with numeric keys from JSON). */
-function ensureBytes(val) {
-  if (val instanceof Uint8Array) return val;
-  if (Array.isArray(val)) return new Uint8Array(val);
-  if (typeof val === 'object' && val !== null && !(val instanceof Uint8Array)) {
+/**
+ * Normalize any bytes-like value to Uint8Array.
+ * If `expectedLen` is provided, throws if the decoded length doesn't match.
+ */
+function ensureBytes(val, expectedLen) {
+  let out;
+  if (val instanceof Uint8Array) {
+    out = val;
+  } else if (Array.isArray(val)) {
+    out = new Uint8Array(val);
+  } else if (typeof val === 'object' && val !== null && !(val instanceof Uint8Array)) {
     const arr = Object.keys(val)
       .filter((k) => /^\d+$/.test(k))
       .sort((a, b) => Number(a) - Number(b))
       .map((k) => val[k] & 0xff);
-    return new Uint8Array(arr);
+    out = new Uint8Array(arr);
+  } else {
+    let h = String(val).trim().replace(/^0x/i, '');
+    // Treat as hex if it contains only hex chars. This includes "all-digit hex" like "000...01".
+    if (!/^[0-9a-fA-F]+$/.test(h)) {
+      throw new Error(`Expected hex string for bytes, got "${h}"`);
+    }
+    if (h.length % 2 === 1) h = '0' + h;
+    out = new Uint8Array(h.length / 2);
+    for (let i = 0; i < h.length; i += 2) out[i / 2] = parseInt(h.slice(i, i + 2), 16);
   }
-  const h = String(val).replace(/^0x/, '').slice(0, 128);
-  const arr = new Uint8Array(h.length / 2);
-  for (let i = 0; i < h.length; i += 2) arr[i / 2] = parseInt(h.slice(i, i + 2), 16);
-  return arr;
+
+  if (expectedLen != null && out.length !== expectedLen) {
+    throw new Error(`Invalid bytes length: expected ${expectedLen}, got ${out.length}`);
+  }
+  return out;
 }
 
 /**
@@ -216,18 +316,18 @@ function contractProofToZk(payload) {
   
   return {
     proof: {
-      a: ensureBytes(pi_a),
-      b: ensureBytes(pi_b),
-      c: ensureBytes(pi_c)
+      a: ensureBytes(pi_a, 64),
+      b: ensureBytes(pi_b, 128),
+      c: ensureBytes(pi_c, 64)
     },
     vk: {
-      alpha: ensureBytes(payload.vk.alpha),
-      beta: ensureBytes(payload.vk.beta),
-      gamma: ensureBytes(payload.vk.gamma),
-      delta: ensureBytes(payload.vk.delta),
-      ic: payload.vk.ic.map(ensureBytes)
+      alpha: ensureBytes(payload.vk.alpha, 64),
+      beta: ensureBytes(payload.vk.beta, 128),
+      gamma: ensureBytes(payload.vk.gamma, 128),
+      delta: ensureBytes(payload.vk.delta, 128),
+      ic: payload.vk.ic.map((x) => ensureBytes(x, 64))
     },
-    pubSignals: payload.pub_signals.map(ensureBytes)
+    pubSignals: payload.pub_signals.map((x) => ensureBytes(x, 32))
   };
 }
 
@@ -237,9 +337,9 @@ function contractProofToZk(payload) {
 function proofToScVal(proof, xdr) {
   return sortedScMap(
     [
-      { key: 'a', val: xdr.ScVal.scvBytes(ensureBytes(proof.a)) },
-      { key: 'b', val: xdr.ScVal.scvBytes(ensureBytes(proof.b)) },
-      { key: 'c', val: xdr.ScVal.scvBytes(ensureBytes(proof.c)) }
+      { key: 'a', val: xdr.ScVal.scvBytes(ensureBytes(proof.a, 64)) },
+      { key: 'b', val: xdr.ScVal.scvBytes(ensureBytes(proof.b, 128)) },
+      { key: 'c', val: xdr.ScVal.scvBytes(ensureBytes(proof.c, 64)) }
     ],
     xdr
   );
@@ -249,13 +349,13 @@ function proofToScVal(proof, xdr) {
  * Build xdr.ScVal for verification key (map: alpha, beta, delta, gamma, ic). Keys sorted for Soroban. ic is vec of bytes.
  */
 function vkToScVal(vk, xdr) {
-  const icVec = xdr.ScVal.scvVec(vk.ic.map((b) => xdr.ScVal.scvBytes(ensureBytes(b))));
+  const icVec = xdr.ScVal.scvVec(vk.ic.map((b) => xdr.ScVal.scvBytes(ensureBytes(b, 64))));
   return sortedScMap(
     [
-      { key: 'alpha', val: xdr.ScVal.scvBytes(ensureBytes(vk.alpha)) },
-      { key: 'beta', val: xdr.ScVal.scvBytes(ensureBytes(vk.beta)) },
-      { key: 'delta', val: xdr.ScVal.scvBytes(ensureBytes(vk.delta)) },
-      { key: 'gamma', val: xdr.ScVal.scvBytes(ensureBytes(vk.gamma)) },
+      { key: 'alpha', val: xdr.ScVal.scvBytes(ensureBytes(vk.alpha, 64)) },
+      { key: 'beta', val: xdr.ScVal.scvBytes(ensureBytes(vk.beta, 128)) },
+      { key: 'delta', val: xdr.ScVal.scvBytes(ensureBytes(vk.delta, 128)) },
+      { key: 'gamma', val: xdr.ScVal.scvBytes(ensureBytes(vk.gamma, 128)) },
       { key: 'ic', val: icVec }
     ],
     xdr
@@ -278,7 +378,104 @@ function sortedScMap(entries, xdr) {
 
 /** Build xdr.ScVal for public signals (vec of bytes). */
 function pubSignalsToScVal(pubSignals, xdr) {
-  return xdr.ScVal.scvVec(pubSignals.map((b) => xdr.ScVal.scvBytes(ensureBytes(b))));
+  return xdr.ScVal.scvVec(
+    pubSignals.map((signal) => {
+      // Ensure 32-byte padding. If it's a decimal-string signal, convert via BigInt -> hex.
+      if (typeof signal === 'string' && /^\d+$/.test(signal.trim())) {
+        const hex = BigInt(signal.trim()).toString(16).padStart(64, '0');
+        // Buffer isn't guaranteed in the browser; use Uint8Array path.
+        const bytes = ensureBytes(hex, 32);
+        return xdr.ScVal.scvBytes(bytes);
+      }
+      return xdr.ScVal.scvBytes(ensureBytes(signal, 32));
+    })
+  );
+}
+
+function hexToFieldDecimal(hexLike) {
+  const h = String(hexLike || '').replace(/^0x/i, '') || '0';
+  return BigInt('0x' + h).toString(10);
+}
+
+function normalizeRunHashParts(payload) {
+  const hiRaw = String(payload?.run_hash_hi || '').replace(/^0x/i, '').toLowerCase();
+  const loRaw = String(payload?.run_hash_lo || '').replace(/^0x/i, '').toLowerCase();
+
+  let hash64;
+  if (hiRaw.length === 64 && loRaw.length === 0) {
+    // Common case from frontend: full 32-byte hash provided in run_hash_hi only.
+    hash64 = hiRaw;
+  } else if (hiRaw.length === 32 && loRaw.length === 32) {
+    hash64 = hiRaw + loRaw;
+  } else {
+    const merged = (hiRaw + loRaw).replace(/[^0-9a-f]/g, '');
+    hash64 = merged.padStart(64, '0').slice(-64);
+  }
+
+  return {
+    fullHex64: hash64,
+    hiHex32: hash64.slice(0, 32),
+    loHex32: hash64.slice(32, 64)
+  };
+}
+
+function computeSafeNoirHashInputs(payload) {
+  const { fullHex64, hiHex32, loHex32 } = normalizeRunHashParts(payload);
+  const maxU128 = (1n << 128n) - 1n;
+
+  const rawHi = BigInt('0x' + hiHex32);
+  const rawLo = BigInt('0x' + loHex32);
+
+  const nonce = BigInt(payload?.nonce || 0);
+  const score = BigInt(payload?.score || 0);
+  const wave = BigInt(payload?.wave || 0);
+  const season = BigInt(payload?.season_id != null ? payload.season_id : 1);
+  const weapon = BigInt(payload?.used_zk_weapon || 0);
+  const reserve = nonce + score + wave + season + weapon;
+  const safeLimit = maxU128 > reserve ? maxU128 - reserve : 0n;
+
+  if (rawHi + rawLo <= safeLimit) {
+    return {
+      runHashHiDec: rawHi.toString(10),
+      runHashLoDec: rawLo.toString(10)
+    };
+  }
+
+  // Circuit uses u128 additions; fold into a guaranteed-safe representation.
+  const folded = BigInt('0x' + fullHex64) % (safeLimit + 1n);
+  console.warn(
+    '[Noir] Folding run_hash to avoid u128 overflow in circuit',
+    { safeLimit: safeLimit.toString(10) }
+  );
+  return {
+    runHashHiDec: folded.toString(10),
+    runHashLoDec: '0'
+  };
+}
+
+function validateNoirSubmitPayload(payload) {
+  const score = Number(payload?.score || 0);
+  const wave = Number(payload?.wave || 0);
+  if (!Number.isFinite(score) || !Number.isFinite(wave) || score <= 0 || wave <= 0) {
+    throw new Error(`[submit_zk_noir] invalid payload: score=${payload?.score} wave=${payload?.wave}`);
+  }
+  const minScore = wave * 10;
+  if (score < minScore) {
+    throw new Error(`[submit_zk_noir] invalid score: score=${score} wave=${wave} requires score>=${minScore}`);
+  }
+}
+
+function noirInputsFromPayload(payload) {
+  const { runHashHiDec, runHashLoDec } = computeSafeNoirHashInputs(payload);
+  return {
+    run_hash_hi: runHashHiDec,
+    run_hash_lo: runHashLoDec,
+    score: BigInt(payload.score || 0).toString(10),
+    wave: BigInt(payload.wave || 0).toString(10),
+    nonce: BigInt(payload.nonce || 0).toString(10),
+    season_id: BigInt(payload.season_id != null ? payload.season_id : 1).toString(10),
+    used_zk_weapon: BigInt(payload.used_zk_weapon || 0).toString(10)
+  };
 }
 
 /** Build a u64 ScVal from number|string|bigint (prefers exact string/bigint). */
@@ -461,49 +658,31 @@ export async function generateLocalProof(payload) {
  * @param {{ run_hash_hi: string, run_hash_lo: string, score: number, wave: number, nonce: number, season_id?: number, used_zk_weapon?: number }} payload
  */
 export async function submitZkTrustless(signerPublicKey, signTransaction, payload) {
-  console.log('[Trustless] Generating local proof...');
-  const raw = await generateLocalProof(payload);
-  const zk = contractProofToZk(raw);
-  
-  // Submit to contract
+  validateNoirSubmitPayload(payload);
+  console.log('[Trustless] Generating Noir + UltraHonk proof in browser...');
+  const noir = new NoirService();
+  const { vkJson, proofBlob } = await noir.generateProof('GameRun', noirInputsFromPayload(payload));
+  const { fullHex64 } = normalizeRunHashParts(payload);
+
+  // Submit to contract (Noir / UltraHonk path)
   const contractId = getContractId();
   if (!contractId) throw new Error('Contract ID not configured');
   
   const { xdr, Address } = await import('@stellar/stellar-sdk');
-  
-  // Build proof ScVal
-  const proofMap = [
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('a'), val: xdr.ScVal.scvBytes(zk.proof.a) }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('b'), val: xdr.ScVal.scvBytes(zk.proof.b) }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('c'), val: xdr.ScVal.scvBytes(zk.proof.c) })
-  ];
-  
-  // Build VK ScVal
-  const vkMap = [
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('alpha'), val: xdr.ScVal.scvBytes(zk.vk.alpha) }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('beta'), val: xdr.ScVal.scvBytes(zk.vk.beta) }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('gamma'), val: xdr.ScVal.scvBytes(zk.vk.gamma) }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('delta'), val: xdr.ScVal.scvBytes(zk.vk.delta) }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('ic'), val: xdr.ScVal.scvVec(zk.vk.ic.map(b => xdr.ScVal.scvBytes(b))) })
-  ];
-  
-  // Build pub_signals ScVal
-  const pubSignalsVec = zk.pubSignals.map(b => xdr.ScVal.scvBytes(b));
-  
+
   const args = [
     new Address(signerPublicKey).toScVal(),
-    xdr.ScVal.scvMap(proofMap),
-    xdr.ScVal.scvMap(vkMap),
-    xdr.ScVal.scvVec(pubSignalsVec),
+    xdr.ScVal.scvBytes(vkJson),
+    xdr.ScVal.scvBytes(proofBlob),
     u64ToScVal(xdr, payload.nonce),
-    xdr.ScVal.scvBytes(new Uint8Array(32)), // run_hash placeholder
+    xdr.ScVal.scvBytes(hexToBytes(fullHex64)),
     xdr.ScVal.scvU32(payload.season_id || 1),
     xdr.ScVal.scvU32(payload.score),
     xdr.ScVal.scvU32(payload.wave)
   ];
   
-  console.log('[Trustless] Submitting to contract...');
-  return invoke(contractId, 'submit_zk', args, signerPublicKey, signTransaction);
+  console.log('[Trustless] Submitting Noir proof to contract...');
+  return invoke(contractId, 'submit_zk_noir', args, signerPublicKey, signTransaction);
 }
 
 /**
@@ -515,24 +694,26 @@ export async function submitZkTrustless(signerPublicKey, signTransaction, payloa
  * @param {string} vkHash - verification key hash (stored in verifier contract)
  */
 export async function submitZkFromProverV2(signerPublicKey, signTransaction, proverUrl, payload, vkHash) {
-  const raw = await requestZkProofV2(proverUrl, payload);
-  const zk = contractProofToZk(raw);
+  validateNoirSubmitPayload(payload);
+  // Kept function name for compatibility; now STRICTLY Noir/UltraHonk (no Groth16 fallback).
+  const noir = new NoirService();
+  const { vkJson, proofBlob } = await noir.generateProof('GameRun', noirInputsFromPayload(payload));
+  const { fullHex64 } = normalizeRunHashParts(payload);
   const contractId = getContractId();
   if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
   const { xdr, Address } = await import('@stellar/stellar-sdk');
 
   const args = [
     new Address(signerPublicKey).toScVal(),
-    proofToScVal(zk.proof, xdr),
-    vkToScVal(zk.vk, xdr),
-    pubSignalsToScVal(zk.pubSignals, xdr),
+    xdr.ScVal.scvBytes(vkJson),
+    xdr.ScVal.scvBytes(proofBlob),
     u64ToScVal(xdr, payload.nonce),
-    xdr.ScVal.scvBytes(hexToBytes((payload.run_hash_hi || '').toString() + (payload.run_hash_lo || '').toString())),
+    xdr.ScVal.scvBytes(hexToBytes(fullHex64)),
     xdr.ScVal.scvU32(payload.season_id != null ? payload.season_id : 1),
     xdr.ScVal.scvU32(payload.score),
     xdr.ScVal.scvU32(payload.wave)
   ];
-  return invoke(contractId, 'submit_zk', args, signerPublicKey, signTransaction);
+  return invoke(contractId, 'submit_zk_noir', args, signerPublicKey, signTransaction);
 }
 
 /**

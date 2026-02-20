@@ -1,4 +1,5 @@
 import { defineConfig } from 'vite';
+import { fileURLToPath, URL } from 'node:url';
 
 // Derive base path automatically for GitHub Pages based on repo name.
 // Example: owner/repo ⇒ base "/repo/" when running in GitHub Actions / Pages.
@@ -10,6 +11,14 @@ const baseForPages = repoName ? `/${repoName}/` : './';
 
 export default defineConfig({
   base: isCI ? baseForPages : './',
+  resolve: {
+    alias: [
+      {
+        find: /^pino$/,
+        replacement: fileURLToPath(new URL('./src/shims/pino-browser-shim.js', import.meta.url))
+      }
+    ]
+  },
   server: {
     port: 3001,
     open: true,
@@ -29,6 +38,12 @@ export default defineConfig({
     copyPublicDir: true
   },
   optimizeDeps: {
-    include: ['@stellar/freighter-api']
+    include: ['@stellar/freighter-api'],
+    exclude: [
+      '@noir-lang/noir_js',
+      '@noir-lang/acvm_js',
+      '@noir-lang/noirc_abi',
+      '@aztec/bb.js'
+    ]
   }
 });

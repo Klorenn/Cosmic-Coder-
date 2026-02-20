@@ -1,0 +1,7 @@
+[package]
+name = "gamerun_noir"
+type = "bin"
+authors = ["Cosmic Coder"]
+compiler_version = ">=1.0.0"
+
+[dependencies]

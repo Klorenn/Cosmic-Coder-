@@ -11,6 +11,27 @@ use soroban_sdk::{
 };
 use zk_types::{Groth16Error, ZkProof, ZkVerificationKey};
 
+// BN254 scalar field modulus (Fr) in uncompressed big-endian bytes:
+// r = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+//   = 0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001
+const BN254_FR_MODULUS_BE: [u8; 32] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81,
+    0x58, 0x5d, 0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93,
+    0xf0, 0x00, 0x00, 0x01,
+];
+
+fn is_ge_be_32(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    for i in 0..32 {
+        if a[i] < b[i] {
+            return false;
+        }
+        if a[i] > b[i] {
+            return true;
+        }
+    }
+    true // equal
+}
+
 /// TTL for nonce anti-replay storage (approx 1 year in ledgers, ~5 sec per ledger)
 const NONCE_TTL_LEDGERS: u32 = 6_307_200;
 
@@ -27,6 +48,16 @@ pub enum CosmicCoderError {
     VerifierCrash = 100,
     GameHubCrash = 101,
     InvalidZkProof = 102,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum UltraHonkError {
+    VkParseError = 1,
+    ProofParseError = 2,
+    VerificationFailed = 3,
+    VkNotSet = 4,
 }
 
 #[contracttype]
@@ -191,8 +222,8 @@ impl CosmicCoder {
     /// pub_signals order (7 elements): [run_hash_hi, run_hash_lo, score, wave, nonce, season_id, used_zk_weapon]
     /// 
     /// Security features:
-    /// - Extracts nonce directly from verified pub_signals[4] (not user-provided parameter)
-    /// - Strict anti-replay: panics if nonce already used (no error return)
+    /// - Validates public signals are in BN254 Fr field (no host traps)
+    /// - Anti-replay: rejects reused (player, nonce, season_id)
     /// - TTL extension for nonce storage (~1 year)
     /// - Emits "zk_wpn" event when used_zk_weapon == 1 (ZK Plasma Rifle)
     /// - Calls end_game() on Game Hub after successful verification
@@ -210,19 +241,30 @@ impl CosmicCoder {
     ) -> Result<(), CosmicCoderError> {
         player.require_auth();
 
+        // Diagnostic breadcrumb: submit_zk entered
+        env.events()
+            .publish((symbol_short!("debug"),), symbol_short!("zk_start"));
+
         // === 1. Get verifier contract (explicit crash reason if missing) ===
-        let verifier_addr: Address = env
+        let verifier_addr: Address = match env
             .storage()
             .persistent()
             .get::<DataKey, Address>(&DataKey::ZkVerifier)
-            .unwrap_or_else(|| panic!("CRASH: Verifier address missing"));
+        {
+            Some(a) => a,
+            None => return Err(CosmicCoderError::VerifierNotSet),
+        };
 
         // === 2. Validate pub_signals structure (expect 7 elements for new circuit) ===
-        // Support both old (6) and new (7) format for backwards compatibility
-        let has_weapon_flag = pub_signals.len() == 7;
-        if pub_signals.len() < 6 {
+        // Strict: circuit expects exactly 7 public signals.
+        if pub_signals.len() != 7 {
+            env.events().publish(
+                (Symbol::new(&env, "debug"), Symbol::new(&env, "submit_zk")),
+                Symbol::new(&env, "bad_pub_signals_len"),
+            );
             return Err(CosmicCoderError::InvalidInput);
         }
+        let has_weapon_flag = true;
         if vk.ic.len() != pub_signals.len() + 1 {
             return Err(CosmicCoderError::MalformedVk);
         }
@@ -235,11 +277,22 @@ impl CosmicCoder {
         for i in 0..n {
             let b = pub_signals.get(i).unwrap();
             if b.len() != 32 {
+                env.events()
+                    .publish((symbol_short!("debug"),), symbol_short!("sig_len"));
                 return Err(CosmicCoderError::InvalidInput);
             }
             let mut arr = [0u8; 32];
             for j in 0..32u32 {
                 arr[j as usize] = b.get(j).unwrap();
+            }
+            // Prevent BN254 host traps: reject scalars outside Fr (>= modulus).
+            // Public inputs are interpreted as big-endian field elements.
+            if is_ge_be_32(&arr, &BN254_FR_MODULUS_BE) {
+                env.events().publish(
+                    (Symbol::new(&env, "debug"), Symbol::new(&env, "submit_zk")),
+                    Symbol::new(&env, "bad_pub_signal_out_of_field"),
+                );
+                return Err(CosmicCoderError::InvalidZkProof);
             }
             pub_signals_n.push_back(soroban_sdk::BytesN::from_array(&env, &arr));
         }
@@ -271,7 +324,7 @@ impl CosmicCoder {
         }
 
         // === 5. Call Groth16 verifier ===
-        let verifier_result = env.try_invoke_contract::<bool, CosmicCoderError>(
+        let verifier_result = env.try_invoke_contract::<bool, Groth16Error>(
             &verifier_addr,
             &Symbol::new(&env, "verify_proof"),
             soroban_sdk::vec![
@@ -283,10 +336,25 @@ impl CosmicCoder {
         );
         let is_valid = match verifier_result {
             Ok(Ok(val)) => val,
-            _ => panic!("CRASH: Verifier cross-contract call trapped or returned error"),
+            Ok(Err(_e)) => {
+                env.events().publish(
+                    (Symbol::new(&env, "debug"), Symbol::new(&env, "host_call")),
+                    Symbol::new(&env, "verifier_returned_err"),
+                );
+                return Err(CosmicCoderError::VerifierError);
+            }
+            Err(_host) => {
+                env.events().publish(
+                    (Symbol::new(&env, "debug"), Symbol::new(&env, "host_call")),
+                    Symbol::new(&env, "verifier_host_call_failed"),
+                );
+                return Err(CosmicCoderError::VerifierCrash);
+            }
         };
         if !is_valid {
-            panic!("CRASH: ZK Proof is mathematically invalid");
+            env.events()
+                .publish((symbol_short!("debug"),), symbol_short!("err_math"));
+            return Err(CosmicCoderError::InvalidProof);
         }
 
         // === 6. Mark nonce as used with TTL extension ===
@@ -298,23 +366,15 @@ impl CosmicCoder {
 
         // === 7. Extract used_zk_weapon from pub_signals[6] and emit event ===
         if has_weapon_flag {
-            if pub_signals.len() <= 6 {
-                panic!(
-                    "CRASH: pub_signals array too short, length: {}",
-                    pub_signals.len()
-                );
-            }
-            let weapon_bytes = pub_signals
-                .get(6)
-                .unwrap_or_else(|| panic!("CRASH: Cannot read weapon flag"));
+            let weapon_bytes = match pub_signals.get(6) {
+                Some(b) => b,
+                None => return Err(CosmicCoderError::InvalidInput),
+            };
             // Check if last byte is 1 (used_zk_weapon = true).
             // Frontend sends each pub_signal as 32-byte ScVal::Bytes (not BytesN),
             // so we validate length and read the last byte.
             if weapon_bytes.len() != 32 {
-                panic!(
-                    "CRASH: weapon flag pub_signal must be 32 bytes, got {}",
-                    weapon_bytes.len()
-                );
+                return Err(CosmicCoderError::InvalidInput);
             }
             let used_weapon = weapon_bytes.get(31) == Some(1);
             
@@ -325,25 +385,30 @@ impl CosmicCoder {
         }
 
         // === 8. Call end_game() on Game Hub ===
-        let session: u32 = env
-            .storage()
-            .persistent()
-            .get::<DataKey, u32>(&DataKey::Session)
-            .unwrap_or_else(|| panic!("CRASH: Session not initialized"));
-        let hub_addr: Address = env
+        let session: u32 = match env.storage().persistent().get::<DataKey, u32>(&DataKey::Session) {
+            Some(s) => s,
+            None => return Err(CosmicCoderError::GameHubCrash),
+        };
+        let hub_addr: Address = match env
             .storage()
             .persistent()
             .get::<DataKey, Address>(&DataKey::GameHub)
-            .unwrap_or_else(|| panic!("CRASH: GameHub address missing"));
-        let hub_result = env.try_invoke_contract::<(), CosmicCoderError>(
+        {
+            Some(a) => a,
+            None => return Err(CosmicCoderError::GameHubCrash),
+        };
+
+        // end_game() on the hub returns () (not Result), so we must use invoke_contract
+        // (try_invoke_contract expects the callee to return Result<_, E> and can trap on decode).
+        // Breadcrumb before hub call: if a trap happens inside the hub, you'll still see this.
+        env.events()
+            .publish((symbol_short!("debug"),), symbol_short!("hub_call"));
+        env.invoke_contract::<()>(
             &hub_addr,
             &Symbol::new(&env, "end_game"),
             // Must match mock hub signature exactly: (env, session_id_u32, true)
             soroban_sdk::vec![&env, session.into_val(&env), true.into_val(&env)],
         );
-        if hub_result.is_err() {
-            panic!("CRASH: Game Hub end_game call trapped");
-        }
 
         // === 9. Update leaderboard ===
         let lb_key = LeaderboardKey { season_id };
@@ -368,6 +433,119 @@ impl CosmicCoder {
         env.storage().persistent().set(&lb_key, &entries);
 
         // === 10. Emit main ZK run event ===
+        env.events().publish(
+            (Symbol::new(&env, "zk_run_submitted"), player.clone(), season_id, score, wave, run_hash),
+            (),
+        );
+
+        Ok(())
+    }
+
+    /// Ranked submit (Noir + UltraHonk): verifier takes vk_json + proof_blob.
+    pub fn submit_zk_noir(
+        env: Env,
+        player: Address,
+        vk_json: Bytes,
+        proof_blob: Bytes,
+        nonce: u64,
+        run_hash: Bytes,
+        season_id: u32,
+        score: u32,
+        wave: u32,
+    ) -> Result<(), CosmicCoderError> {
+        player.require_auth();
+
+        let verifier_addr: Address = match env
+            .storage()
+            .persistent()
+            .get::<DataKey, Address>(&DataKey::ZkVerifier)
+        {
+            Some(a) => a,
+            None => return Err(CosmicCoderError::VerifierNotSet),
+        };
+
+        if score == 0 || wave == 0 {
+            return Err(CosmicCoderError::InvalidInput);
+        }
+        let min_score = wave.saturating_mul(MIN_SCORE_PER_WAVE);
+        if score < min_score {
+            return Err(CosmicCoderError::InvalidInput);
+        }
+        if run_hash.len() != 32 || vk_json.len() == 0 || proof_blob.len() == 0 {
+            return Err(CosmicCoderError::InvalidInput);
+        }
+
+        let nonce_key = NonceKey { nonce };
+        if env.storage().persistent().has(&nonce_key) {
+            return Err(CosmicCoderError::Replay);
+        }
+        let replay_key = ReplayKey {
+            player: player.clone(),
+            nonce,
+            season_id,
+        };
+        if env.storage().persistent().has(&replay_key) {
+            return Err(CosmicCoderError::Replay);
+        }
+
+        let verifier_result = env.try_invoke_contract::<soroban_sdk::BytesN<32>, UltraHonkError>(
+            &verifier_addr,
+            &Symbol::new(&env, "verify_proof"),
+            soroban_sdk::vec![&env, vk_json.into_val(&env), proof_blob.into_val(&env)],
+        );
+        let _proof_id = match verifier_result {
+            Ok(Ok(pid)) => pid,
+            Ok(Err(_)) => return Err(CosmicCoderError::VerifierError),
+            Err(_) => return Err(CosmicCoderError::VerifierCrash),
+        };
+
+        env.storage().persistent().set(&nonce_key, &true);
+        env.storage().persistent().extend_ttl(&nonce_key, NONCE_TTL_LEDGERS, NONCE_TTL_LEDGERS);
+        env.storage().persistent().set(&replay_key, &true);
+        env.storage().persistent().extend_ttl(&replay_key, NONCE_TTL_LEDGERS, NONCE_TTL_LEDGERS);
+
+        let session: u32 = match env.storage().persistent().get::<DataKey, u32>(&DataKey::Session) {
+            Some(s) => s,
+            None => return Err(CosmicCoderError::GameHubCrash),
+        };
+        let hub_addr: Address = match env
+            .storage()
+            .persistent()
+            .get::<DataKey, Address>(&DataKey::GameHub)
+        {
+            Some(a) => a,
+            None => return Err(CosmicCoderError::GameHubCrash),
+        };
+        env.invoke_contract::<()>(
+            &hub_addr,
+            &Symbol::new(&env, "end_game"),
+            soroban_sdk::vec![&env, session.into_val(&env), true.into_val(&env)],
+        );
+
+        let lb_key = LeaderboardKey { season_id };
+        let mut entries: Vec<ScoreEntry> = env
+            .storage()
+            .persistent()
+            .get::<LeaderboardKey, Vec<ScoreEntry>>(&lb_key)
+            .unwrap_or(Vec::new(&env));
+        let mut found = false;
+        let n = entries.len();
+        for i in 0..n {
+            let e = entries.get(i).unwrap();
+            if e.player == player {
+                found = true;
+                if score > e.score {
+                    entries.set(i as u32, ScoreEntry { player: player.clone(), score });
+                }
+                break;
+            }
+        }
+        if !found {
+            entries.push_back(ScoreEntry { player: player.clone(), score });
+        }
+        sort_leaderboard_desc(&env, &mut entries);
+        env.storage().persistent().set(&lb_key, &entries);
+
         env.events().publish(
             (Symbol::new(&env, "zk_run_submitted"), player.clone(), season_id, score, wave, run_hash),
             (),

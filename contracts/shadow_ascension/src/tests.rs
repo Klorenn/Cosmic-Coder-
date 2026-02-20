@@ -41,7 +41,7 @@ fn g2(env: &Env) -> soroban_sdk::BytesN<128> {
     soroban_sdk::BytesN::from_array(env, &[0u8; G2_SIZE])
 }
 
-/// Default VK with 7 ic elements (for 6 pub_signals)
+/// Default VK with ic.len() = pub_signals.len() + 1 = 8 (for 7 pub_signals)
 fn default_vk(env: &Env) -> ZkVerificationKey {
     let g1 = g1(env);
     ZkVerificationKey {
@@ -49,8 +49,18 @@ fn default_vk(env: &Env) -> ZkVerificationKey {
         beta: g2(env),
         gamma: g2(env),
         delta: g2(env),
-        // ic.len() = pub_signals.len() + 1 = 7
-        ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1],
+        // ic.len() = pub_signals.len() + 1 = 8
+        ic: vec![
+            env,
+            g1.clone(),
+            g1.clone(),
+            g1.clone(),
+            g1.clone(),
+            g1.clone(),
+            g1.clone(),
+            g1.clone(),
+            g1,
+        ],
     }
 }
 
@@ -62,11 +72,20 @@ fn default_proof(env: &Env) -> ZkProof {
     }
 }
 
-/// Default pub_signals with 6 elements matching circuit outputs:
-/// [run_hash_hi, run_hash_lo, score, wave, nonce, season_id]
+/// Default pub_signals with 7 elements matching circuit outputs:
+/// [run_hash_hi, run_hash_lo, score, wave, nonce, season_id, used_zk_weapon]
 fn default_pub_signals(env: &Env) -> SorobanVec<Bytes> {
     let zero = Bytes::from_slice(env, &[0u8; FR_SIZE]);
-    vec![env, zero.clone(), zero.clone(), zero.clone(), zero.clone(), zero.clone(), zero]
+    vec![
+        env,
+        zero.clone(),
+        zero.clone(),
+        zero.clone(),
+        zero.clone(),
+        zero.clone(),
+        zero.clone(),
+        zero,
+    ]
 }
 
 fn run_hash_32(env: &Env) -> Bytes {

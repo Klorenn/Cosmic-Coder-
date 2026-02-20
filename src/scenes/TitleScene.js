@@ -37,6 +37,8 @@ export default class TitleScene extends Phaser.Scene {
     this.menuStartY = 0;
     this.menuSpacing = 0;
     this.gitQuoteTimer = null;
+    this.startupLoadingOverlay = null;
+    this.startupLoadingText = null;
   }
 
   create(data) {
@@ -868,6 +870,57 @@ export default class TitleScene extends Phaser.Scene {
     }
   }
 
+  showStartupLoadingOverlay(text) {
+    this.hideStartupLoadingOverlay();
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
+    const uiScale = getUIScale(this);
+    const boxW = Math.min(520, w - 60);
+    const boxH = 140;
+
+    const overlay = this.add.container(0, 0);
+    overlay.setDepth(6000);
+
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 0.65);
+    const panel = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
+    panel.setStrokeStyle(2, 0x00ffff);
+
+    const label = this.add.text(cx, cy - 18, 'ZK', {
+      fontFamily: 'monospace',
+      fontSize: `${Math.round(20 * uiScale)}px`,
+      color: '#00ffff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5);
+
+    const msg = this.add.text(cx, cy + 18, String(text || 'Loading...'), {
+      fontFamily: 'monospace',
+      fontSize: `${Math.round(12 * uiScale)}px`,
+      color: '#ffffff',
+      align: 'center',
+      wordWrap: { width: boxW - 40 }
+    }).setOrigin(0.5);
+
+    overlay.add([backdrop, panel, label, msg]);
+    this.startupLoadingOverlay = overlay;
+    this.startupLoadingText = msg;
+  }
+
+  setStartupLoadingText(text) {
+    if (this.startupLoadingText && this.startupLoadingText.scene) {
+      this.startupLoadingText.setText(String(text || 'Loading...'));
+    }
+  }
+
+  hideStartupLoadingOverlay() {
+    if (this.startupLoadingOverlay) {
+      this.startupLoadingOverlay.destroy();
+      this.startupLoadingOverlay = null;
+      this.startupLoadingText = null;
+    }
+  }
+
   shutdown() {
     // Mantener por compatibilidad; será llamado desde handleShutdown()
     document.removeEventListener('fullscreenchange', this.onFullscreenChange);
@@ -882,6 +935,7 @@ export default class TitleScene extends Phaser.Scene {
    * Se engancha al evento Phaser `shutdown` en create().
    */
   handleShutdown() {
+    this.hideStartupLoadingOverlay();
     // Teclado principal del menú
     if (this.onKeyDownHandler) {
       this.input.keyboard.off('keydown', this.onKeyDownHandler);
@@ -2967,14 +3021,19 @@ export default class TitleScene extends Phaser.Scene {
     Audio.playLevelUp();
     window.VIBE_CODER.reset();
     SaveManager.clearSave();
+    this.menuBlocked = true;
+    this.showStartupLoadingOverlay('Preparing ranked match...');
     
     (async () => {
       try {
         const hasToken = typeof authApi.getStoredToken === 'function' && !!authApi.getStoredToken();
         if (!hasToken) {
+          this.setStartupLoadingText('Requesting wallet signature...');
           const addrForAuth = await stellarWallet.getAddress();
           if (!addrForAuth) {
             this.sayQuote(t('prompt.link_wallet'));
+            this.hideStartupLoadingOverlay();
+            this.menuBlocked = false;
             return;
           }
           if (this.walletBtn && this.walletBtn.setText) {
@@ -2988,6 +3047,8 @@ export default class TitleScene extends Phaser.Scene {
         if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
         if (this.updateWalletButton) this.updateWalletButton();
         if (this.updateConnectionBadge) this.updateConnectionBadge();
+        this.hideStartupLoadingOverlay();
+        this.menuBlocked = false;
         return;
       }
       
@@ -2996,6 +3057,7 @@ export default class TitleScene extends Phaser.Scene {
 
       if (gameClient.isContractConfigured()) {
         try {
+          this.setStartupLoadingText('Signing ranked session...');
           const addr = await stellarWallet.getAddress();
           await gameClient.startMatch(addr, (xdr) => stellarWallet.signTransaction(xdr));
         } catch (e) {
@@ -3004,6 +3066,7 @@ export default class TitleScene extends Phaser.Scene {
         }
       }
       
+      this.setStartupLoadingText('Loading arena...');
       this.cameras.main.fade(500, 0, 0, 0);
       this.time.delayedCall(500, () => {
         this.scene.start('ArenaScene', { continueGame: false, gameMode });
@@ -3020,6 +3083,8 @@ export default class TitleScene extends Phaser.Scene {
     Audio.playLevelUp();
     window.VIBE_CODER.reset();
     SaveManager.clearSave();
+    this.menuBlocked = true;
+    this.showStartupLoadingOverlay('Loading arena...');
     
     this.cameras.main.fade(500, 0, 0, 0);
     this.time.delayedCall(500, () => {

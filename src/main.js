@@ -1,10 +1,16 @@
 import Phaser from 'phaser';
+import { Buffer } from 'buffer';
 import BootScene from './scenes/BootScene.js';
 import TitleScene from './scenes/TitleScene.js';
 import ArenaScene from './scenes/ArenaScene.js';
 import { connectToXPServer, isConnected } from './utils/socket.js';
 import RebirthManager from './systems/RebirthManager.js';
 import { persistIfWalletConnected, progressStore } from './utils/walletProgressService.js';
+
+// bb.js expects Node-style Buffer in browser context.
+if (typeof globalThis !== 'undefined' && !globalThis.Buffer) {
+  globalThis.Buffer = Buffer;
+}
 
 // Sync selected character from progressStore on startup
 window.VIBE_SELECTED_CHARACTER = progressStore.selectedCharacter || 'vibecoder';

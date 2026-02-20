@@ -497,7 +497,7 @@ export default class ArenaScene extends Phaser.Scene {
       console.log('[ZK Config] Checking configuration...');
       const contractId = gameClient.getContractId();
       console.log('[ZK Config] Contract ID from gameClient:', contractId);
-      console.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID);
+      console.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_SHADOW_ASCENSION_CONTRACT_ID);
       console.log('[ZK Config] Contract ID length:', contractId?.length);
       console.log('[ZK Config] Contract ID starts with C:', contractId?.startsWith('C'));
       console.log('[ZK Config] Prover URL:', gameClient.getZkProverUrl());
@@ -4585,19 +4585,16 @@ export default class ArenaScene extends Phaser.Scene {
     gameOverContainer.add(returnMenuBtn);
     // Do NOT fade in yet; will be shown after ZK submission
 
-    returnMenuBtn.on('pointerover', () => returnMenuBtn.setColor('#ffffff'));
-    returnMenuBtn.on('pointerout', () => returnMenuBtn.setColor('#00ffff'));
+    let handleKeydown = null;
 
     // goToMenu — reliable scene transition
     let returned = false;
     const goToMenu = () => {
       if (returned) return;
+      if (this._openingZkLinkUntil && Date.now() < this._openingZkLinkUntil) return;
+      if (this._ignoreGameOverInputUntil && Date.now() < this._ignoreGameOverInputUntil) return;
       returned = true;
-      try {
-        this.input.keyboard.off('keydown', handleKeydown);
-      } catch (_) {
-        // handleKeydown may not be defined in this scope; ignore
-      }
+      if (handleKeydown) this.input.keyboard.off('keydown', handleKeydown);
       gameOverContainer.destroy();
       SaveManager.clearSave();
       this.cameras.main.fade(400, 0, 0, 0);
@@ -4606,7 +4603,10 @@ export default class ArenaScene extends Phaser.Scene {
       });
     };
 
-    returnMenuBtn.on('pointerdown', goToMenu);
+    returnMenuBtn.on('pointerdown', (_pointer, _lx, _ly, event) => {
+      try { event?.stopPropagation?.(); } catch (_) {}
+      goToMenu();
+    });
 
     // Only allow click-anywhere-to-exit and keyboard after ZK submission completes
     // We'll enable these in the ZK promise resolution/failure
@@ -4659,7 +4659,9 @@ export default class ArenaScene extends Phaser.Scene {
             try {
               await gameClient.startMatch(addr, sign);
             } catch (e) {
-              console.warn('[ZK Submit] start_match failed, continuing anyway:', e?.message || e);
+              const em = e?.message || e;
+              console.error('[ZK Submit] start_match failed; aborting zk submit:', em);
+              throw new Error(`[ZK Submit] start_match failed: ${em}`);
             }
             // Derive run_hash_hi/lo from computeGameHash
             const runHashHex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
@@ -4724,10 +4726,14 @@ export default class ArenaScene extends Phaser.Scene {
                 throw firstErr;
               }
             }
-            console.log('[ZK Submit V2] Transaction hash:', txResult?.hash);
+            const finalTxHash = txResult?.txHash || txResult?.hash;
+            console.log('[ZK Submit V2] Transaction hash:', finalTxHash);
+            if (finalTxHash) {
+              console.log('[ZK Submit V2] Stellar Expert:', `https://stellar.expert/explorer/testnet/tx/${finalTxHash}`);
+            }
             try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
             clear();
-            resolve({ status: 'zk', txHash: txResult.hash });
+            resolve({ status: 'zk', txHash: finalTxHash });
           } else {
             console.log('[Score Submit] submitResult starting');
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
@@ -4760,19 +4766,93 @@ export default class ArenaScene extends Phaser.Scene {
     }).then((status) => {
       // Show BACK TO MENU button and enable exit after ZK submission completes or fails
       this.tweens.add({ targets: returnMenuBtn, alpha: 1, duration: 600, ease: 'Power2' });
-      const handleKeydown = (event) => {
-        const code = event?.code;
-        if (code === 'Enter' || code === 'Escape' || code === 'Space') {
+      // Show ZK Proof UI based on submission result
+      let zkUi = null;
+      if (status && (status.status === 'zk' || status.status === 'zk_failed')) {
+        zkUi = this.showZkProofResultUI(status, cx, cy, gameOverContainer);
+        if (zkUi?.buttonY) {
+          const menuY = Math.min(this.scale.height - 24, zkUi.buttonY + Math.round(74 * (this.uiScale || 1)));
+          returnMenuBtn.setY(menuY);
+        }
+      }
+
+      // Game-over selector (same UX style as title menu).
+      const options = [];
+      if (zkUi?.zkProofBtn && zkUi?.openExplorer) {
+        options.push({ target: zkUi.zkProofBtn, action: zkUi.openExplorer });
+      }
+      options.push({ target: returnMenuBtn, action: goToMenu });
+
+      let selectedIndex = 0;
+      const selector = this.add.text(0, 0, '▶', {
+        fontFamily: 'monospace',
+        fontSize: '20px',
+        color: '#00ffff',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setAlpha(0);
+      gameOverContainer.add(selector);
+      this.tweens.add({ targets: selector, alpha: 1, duration: 600, ease: 'Power2' });
+
+      const updateSelectionVisuals = () => {
+        options.forEach((opt, i) => {
+          if (!opt?.target) return;
+          const selected = i === selectedIndex;
+          opt.target.setColor('#00ffff');
+          opt.target.setAlpha(selected ? 1 : 0.75);
+          opt.target.setScale(selected ? 1.05 : 1);
+        });
+        const target = options[selectedIndex]?.target;
+        if (target && selector) {
+          selector.setY(target.y);
+          selector.setX(target.x - target.width / 2 - 22);
+        }
+      };
+      updateSelectionVisuals();
+
+      const moveSelection = (delta) => {
+        const len = options.length;
+        selectedIndex = (selectedIndex + delta + len) % len;
+        updateSelectionVisuals();
+      };
+
+      options.forEach((opt, index) => {
+        opt.target.setInteractive({ useHandCursor: true });
+        opt.target.on('pointerover', () => {
+          selectedIndex = index;
+          updateSelectionVisuals();
+        });
+        opt.target.on('pointerdown', (_pointer, _lx, _ly, event) => {
+          try { event?.stopPropagation?.(); } catch (_) {}
+          selectedIndex = index;
+          updateSelectionVisuals();
+          opt.action();
+        });
+      });
+
+      handleKeydown = (event) => {
+        const k = event?.key?.toLowerCase?.() || event?.code;
+        if (k === 'arrowup' || k === 'up' || k === 'w' || k === 'a' || k === 'arrowleft') {
+          moveSelection(-1);
+          return;
+        }
+        if (k === 'arrowdown' || k === 'down' || k === 's' || k === 'd' || k === 'arrowright') {
+          moveSelection(1);
+          return;
+        }
+        if (k === 'enter' || k === ' ' || k === 'space') {
+          event?.preventDefault?.();
+          options[selectedIndex]?.action?.();
+          return;
+        }
+        if (k === 'e' && zkUi?.openExplorer) {
+          zkUi.openExplorer();
+          return;
+        }
+        if (k === 'escape' || k === 'esc') {
           goToMenu();
         }
       };
       this.input.keyboard.on('keydown', handleKeydown);
-      blackBg.on('pointerdown', goToMenu);
-
-      // Show ZK Proof UI based on submission result
-      if (status && (status.status === 'zk' || status.status === 'zk_failed')) {
-        this.showZkProofResultUI(status, cx, cy, gameOverContainer);
-      }
 
       if (status && status.status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
         const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));
@@ -4783,58 +4863,59 @@ export default class ArenaScene extends Phaser.Scene {
 
   showZkProofResultUI(result, cx, cy, gameOverContainer) {
     const uiScale = this.uiScale || 1;
-    const buttonY = cy + 280; // Position below other UI elements
+    const buttonY = Math.min(cy + 360, this.scale.height - 70); // Push lower while staying on-screen
     
     if (result.status === 'zk' && result.txHash) {
       // SUCCESS: Show the Stellar Expert link
-      const zkProofBtn = this.add.text(cx, buttonY, '🔍 View ZK Proof on Stellar Expert', {
-        fontFamily: 'monospace',
+      const zkProofBtn = this.add.text(cx, buttonY, '[ VIEW ZK PROOF // STELLAR EXPERT ]', {
+        fontFamily: '"Press Start 2P", monospace',
         fontSize: `${Math.round(14 * uiScale)}px`,
         color: '#00ffff',
         fontStyle: 'bold',
-        backgroundColor: '#0a0a14',
-        padding: { x: 12, y: 8 }
-      }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
-      
-      const btnBg = this.add.rectangle(cx, buttonY, 380, 50, 0x0a0a14, 0.9);
-      btnBg.setStrokeStyle(2, 0x00ffff, 0.8);
-      btnBg.setOrigin(0.5).setAlpha(0);
+        stroke: '#001a1a',
+        strokeThickness: 5,
+        shadow: {
+          offsetX: 0,
+          offsetY: 0,
+          color: '#00ffff',
+          blur: 8,
+          fill: true
+        },
+        padding: { x: 8, y: 4 }
+      }).setOrigin(0.5).setAlpha(0);
+      zkProofBtn.setResolution(2);
       
       const zkLabel = this.add.text(cx, buttonY - 35, '✅ ZK Proof of Survival Verified On-Chain', {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(12 * uiScale)}px`,
+        fontFamily: '"Press Start 2P", monospace',
+        fontSize: `${Math.round(10 * uiScale)}px`,
         color: '#00ff88',
-        fontStyle: 'bold'
+        fontStyle: 'bold',
+        stroke: '#001100',
+        strokeThickness: 4
       }).setOrigin(0.5).setAlpha(0);
+      zkLabel.setResolution(2);
       
-      gameOverContainer.add([btnBg, zkLabel, zkProofBtn]);
+      gameOverContainer.add(zkLabel);
+      gameOverContainer.add(zkProofBtn);
       
-      this.tweens.add({ targets: [btnBg, zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
+      this.tweens.add({ targets: [zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
       
-      zkProofBtn.on('pointerover', () => {
-        zkProofBtn.setColor('#ffffff');
-        btnBg.setStrokeStyle(2, 0xffffff, 1);
-      });
-      
-      zkProofBtn.on('pointerout', () => {
-        zkProofBtn.setColor('#00ffff');
-        btnBg.setStrokeStyle(2, 0x00ffff, 0.8);
-      });
-      
-      zkProofBtn.on('pointerdown', () => {
+      const openExplorer = () => {
+        this._openingZkLinkUntil = Date.now() + 4000;
+        this._ignoreGameOverInputUntil = Date.now() + 4000;
         const network = 'testnet';
         const url = `https://stellar.expert/explorer/${network}/tx/${result.txHash}`;
-        window.open(url, '_blank');
-      });
+        console.log('[GameOver] Opening Stellar Expert:', url);
+        const opened = window.open(url, '_blank', 'noopener,noreferrer');
+        // Fallback for popup blockers/webviews: redirect current tab.
+        if (!opened) {
+          window.location.assign(url);
+        }
+      };
+
+      zkProofBtn.setInteractive({ useHandCursor: true });
       
-      this.createTrackedTween({
-        targets: btnBg,
-        alpha: { from: 0.9, to: 1 },
-        duration: 2000,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
+      return { zkProofBtn, openExplorer, buttonY };
       
     } else if (result.status === 'zk_failed') {
       // FAILURE: Show error info and retry option
@@ -4897,7 +4978,9 @@ export default class ArenaScene extends Phaser.Scene {
         // Reload the page to retry ZK submission
         window.location.reload();
       });
+      return null;
     }
+    return null;
   }
 
   async checkContractExists() {
