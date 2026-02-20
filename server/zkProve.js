@@ -105,16 +105,26 @@ function buildInputV2(body) {
   const season_id = String(Math.max(0, Math.floor(Number(body.season_id) || 1)));
   const challenge_id = String(Math.max(0, Math.floor(Number(body.challenge_id) || 1)));
   
-  // Handle Stellar addresses - convert to hex for circuit
-  const stellarAddressToHex = (address) => {
-    if (!address || typeof address !== 'string') return '0';
+  // Handle Stellar addresses - split into 128-bit parts for Circom
+  const stellarAddressTo128BitParts = (address) => {
+    if (!address || typeof address !== 'string') return { hi: '0', lo: '0' };
+    
+    // Convert address to hex hash first
     const hash = crypto.createHash('sha256').update(address).digest('hex');
-    // Take first 64 chars (32 bytes) as field element
-    return '0x' + hash.slice(0, 64);
+    const hexValue = '0x' + hash.slice(0, 64); // Take first 32 bytes (64 hex chars)
+    
+    // Convert to BigInt and split into 128-bit parts
+    const val = BigInt(hexValue);
+    const hi = (val >> 128n).toString();
+    const lo = (val & ((1n << 128n) - 1n)).toString();
+    
+    return { hi, lo };
   };
   
-  const player_address = stellarAddressToHex(body.player_address);
-  const contract_id = stellarAddressToHex(body.contract_id);
+  const player_address_hi = stellarAddressTo128BitParts(body.player_address).hi;
+  const player_address_lo = stellarAddressTo128BitParts(body.player_address).lo;
+  const contract_id_hi = stellarAddressTo128BitParts(body.contract_id).hi;
+  const contract_id_lo = stellarAddressTo128BitParts(body.contract_id).lo;
   const domain_separator = String(body.domain_separator || '0');
   
   return {
@@ -125,8 +135,10 @@ function buildInputV2(body) {
     nonce,
     season_id,
     challenge_id,
-    player_address,
-    contract_id,
+    player_address_hi,
+    player_address_lo,
+    contract_id_hi,
+    contract_id_lo,
     domain_separator
   };
 }

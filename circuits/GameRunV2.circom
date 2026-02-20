@@ -14,8 +14,10 @@ template GameRunV2() {
     signal input nonce;              // u64
     signal input season_id;          // u32
     signal input challenge_id;      // u32
-    signal input player_address;    // 32 bytes (field element, e.g., keccak256(address) or raw bytes)
-    signal input contract_id;        // 32 bytes (field element, contract address)
+    signal input player_address_hi;  // high 128 bits of player address (field)
+    signal input player_address_lo;  // low 128 bits of player address (field)
+    signal input contract_id_hi;     // high 128 bits of contract address (field)
+    signal input contract_id_lo;     // low 128 bits of contract address (field)
     signal input domain_separator;   // 32 bytes (field element, derived from domain binding)
 
     // Enforce game rule: score >= wave * 10 (MIN_SCORE_PER_WAVE)
@@ -34,8 +36,10 @@ template GameRunV2() {
     signal output nonce_out <== nonce;
     signal output season_id_out <== season_id;
     signal output challenge_id_out <== challenge_id;
-    signal output player_address_out <== player_address;
-    signal output contract_id_out <== contract_id;
+    signal output player_address_hi_out <== player_address_hi;
+    signal output player_address_lo_out <== player_address_lo;
+    signal output contract_id_hi_out <== contract_id_hi;
+    signal output contract_id_lo_out <== contract_id_lo;
     signal output domain_separator_out <== domain_separator;
 }
 

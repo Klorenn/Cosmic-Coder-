@@ -270,13 +270,20 @@ app.post('/zk/prove_v2', async (req, res) => {
     return BigInt(str).toString(10); // Forces it into a pure decimal number string
   };
 
-  // Special handler for Stellar addresses - convert to hex bytes for circuit
-  const stellarAddressToHex = (address) => {
-    if (!address || typeof address !== 'string') return '0';
-    // For now, we'll use a simple hash of the address for the circuit
-    // In a real implementation, this should be the decoded address bytes
+  // Special handler for Stellar addresses - split into 128-bit parts for Circom
+  const stellarAddressTo128BitParts = (address) => {
+    if (!address || typeof address !== 'string') return { hi: '0', lo: '0' };
+    
+    // Convert address to hex hash first
     const hash = crypto.createHash('sha256').update(address).digest('hex');
-    return '0x' + hash;
+    const hexValue = '0x' + hash.slice(0, 64); // Take first 32 bytes (64 hex chars)
+    
+    // Convert to BigInt and split into 128-bit parts
+    const val = BigInt(hexValue);
+    const hi = (val >> 128n).toString();
+    const lo = (val & ((1n << 128n) - 1n)).toString();
+    
+    return { hi, lo };
   };
 
   // Build input object for GameRunV2 circuit (order must match circuit inputs) with per-field error logging
@@ -290,8 +297,10 @@ app.post('/zk/prove_v2', async (req, res) => {
       nonce: toDecimalString(nonce),
       season_id: toDecimalString(season_id),
       challenge_id: toDecimalString(challenge_id),
-      player_address: stellarAddressToHex(player_address),
-      contract_id: stellarAddressToHex(contract_id),
+      player_address_hi: stellarAddressTo128BitParts(player_address).hi,
+      player_address_lo: stellarAddressTo128BitParts(player_address).lo,
+      contract_id_hi: stellarAddressTo128BitParts(contract_id).hi,
+      contract_id_lo: stellarAddressTo128BitParts(contract_id).lo,
       domain_separator: toDecimalString(domain_separator)
     };
   } catch (fieldErr) {
@@ -322,8 +331,10 @@ app.post('/zk/prove_v2', async (req, res) => {
       nonce,
       season_id,
       challenge_id,
-      player_address,
-      contract_id,
+      player_address_hi: stellarAddressTo128BitParts(player_address).hi,
+      player_address_lo: stellarAddressTo128BitParts(player_address).lo,
+      contract_id_hi: stellarAddressTo128BitParts(contract_id).hi,
+      contract_id_lo: stellarAddressTo128BitParts(contract_id).lo,
       domain_separator
     });
     console.log('[ZK V2] Proof generated successfully');
