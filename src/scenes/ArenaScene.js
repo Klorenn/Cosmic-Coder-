@@ -4875,11 +4875,15 @@ export default class ArenaScene extends Phaser.Scene {
       
       console.log('[ZK Config] Checking contract:', contractId);
       
-      // Use Soroban RPC directly (no CORS issues)
-      const { rpc } = await import('@stellar/stellar-sdk');
-      const server = new rpc.Server('https://soroban-testnet.stellar.org');
-      
+      // Try a simpler approach - just check if we can make any RPC call
       try {
+        const { rpc } = require('@stellar/stellar-sdk');
+        const server = new rpc.Server('https://soroban-testnet.stellar.org');
+        
+        // First, try to get the latest ledger to ensure RPC works
+        const latestLedger = await server.getLatestLedger();
+        console.log('[ZK Config] RPC connection successful, latest ledger:', latestLedger.sequence);
+        
         // Try to get contract data using the correct method for contracts
         const ledgerData = await server.getLedgerEntries({
           contract: contractId
@@ -4888,13 +4892,15 @@ export default class ArenaScene extends Phaser.Scene {
         if (ledgerData.entries && ledgerData.entries.length > 0) {
           console.log('[ZK Config] ✅ Contract found via ledger entries:', contractId);
           console.log('[ZK Config] Contract entries:', ledgerData.entries.length);
+          console.log('[ZK Config] First entry key:', ledgerData.entries[0].key);
           return true;
         } else {
           console.log('[ZK Config] ❌ No ledger entries found for contract');
           return false;
         }
       } catch (rpcError) {
-        console.log('[ZK Config] ❌ Contract not found via ledger entries:', rpcError?.message || rpcError);
+        console.log('[ZK Config] ❌ RPC Error:', rpcError?.message || rpcError);
+        console.log('[ZK Config] RPC Error details:', rpcError);
         
         // Try alternative: check if it's a regular account (for debugging)
         try {
@@ -4909,6 +4915,7 @@ export default class ArenaScene extends Phaser.Scene {
       }
     } catch (e) {
       console.log('[ZK Config] Contract check failed:', e?.message || e);
+      console.log('[ZK Config] Full error:', e);
       return false;
     }
   }
