@@ -73,16 +73,16 @@ async function playerScVal(signerPublicKey) {
 }
 
 /**
- * Start a match (calls start_match(player)). Requires wallet sign.
+ * Start a match (calls start_game(player)). Requires wallet sign.
  */
 export async function startMatch(signerPublicKey, signTransaction) {
   const contractId = getContractId();
   if (!contractId) throw new Error('VITE_COSMIC_CODER_CONTRACT_ID not set');
-  return invoke(contractId, 'start_match', [await playerScVal(signerPublicKey)], signerPublicKey, signTransaction);
+  return invoke(contractId, 'start_game', [await playerScVal(signerPublicKey)], signerPublicKey, signTransaction);
 }
 
 /**
- * Submit result (submit_result(player, wave, score)). Requires wallet sign.
+ * Submit result (end_game(player, wave, score)). Requires wallet sign.
  */
 export async function submitResult(signerPublicKey, signTransaction, wave, score) {
   const contractId = getContractId();
@@ -93,7 +93,7 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
     xdr.ScVal.scvU32(wave),
     new ScInt(BigInt(Math.floor(score)), { type: 'i128' }).toI128(),
   ];
-  return invoke(contractId, 'submit_result', args, signerPublicKey, signTransaction);
+  return invoke(contractId, 'end_game', args, signerPublicKey, signTransaction);
 }
 
 /**
