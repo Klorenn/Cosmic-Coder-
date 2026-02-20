@@ -4702,9 +4702,11 @@ export default class ArenaScene extends Phaser.Scene {
           console.error('ZK ERROR MESSAGE:', e?.message);
           console.warn('[Cosmic Coder] Submit failed:', e?.message || e);
           
-          // Check if contract is missing
+          // Check if contract is missing or ZK backend has issues
           if (this.zkContractMissing || e?.message?.includes('not found') || e?.message?.includes('404')) {
             try { zkStatusText.setText('ZK Contract not deployed. Using local leaderboard.').setAlpha(1); } catch (_) {}
+          } else if (e?.message?.includes('BigInt') || e?.message?.includes('verification key')) {
+            try { zkStatusText.setText('ZK Backend Issue. Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else {
             try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
           }
@@ -4806,6 +4808,10 @@ export default class ArenaScene extends Phaser.Scene {
         errorTitle = '⚠️ ZK Contract Not Deployed';
         buttonText = '🔄 Retry When Contract is Deployed';
         errorMessage = 'The ZK smart contract is not currently deployed on testnet. Your score was saved locally.';
+      } else if (errorMessage.includes('BigInt') || errorMessage.includes('verification key')) {
+        errorTitle = '⚠️ ZK Backend Issue';
+        buttonText = '🔄 Retry When Backend is Fixed';
+        errorMessage = 'The ZK backend has a technical issue with Stellar addresses. Your score was saved locally.';
       }
       
       const errorBtn = this.add.text(cx, buttonY, buttonText, {

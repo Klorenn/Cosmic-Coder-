@@ -174,10 +174,11 @@ function contractProofToZk(payload) {
     throw new Error('Invalid proof format received from prover: missing pi_a/pi_b/pi_c or alpha/beta/gamma');
   }
   
-  // Validate verification key exists
+  // Handle missing vk - backend might not include it
   if (!payload.vk) {
-    console.error('[contractProofToZk] payload.vk is undefined');
-    throw new Error('Invalid verification key format received from prover: payload.vk is undefined');
+    console.warn('[contractProofToZk] ⚠️ payload.vk is undefined - backend might not include vk');
+    // For now, we'll have to skip ZK submission if vk is missing
+    throw new Error('Verification key (vk) not included in prover response. Backend needs to include vk in the response.');
   }
   
   // Validate verification key fields
