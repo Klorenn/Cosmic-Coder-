@@ -105,16 +105,15 @@ function buildInputV2(body) {
   const season_id = String(Math.max(0, Math.floor(Number(body.season_id) || 1)));
   const challenge_id = String(Math.max(0, Math.floor(Number(body.challenge_id) || 1)));
   
-  // Handle Stellar addresses - split into 128-bit parts for Circom
-  const stellarAddressTo128BitParts = (address) => {
-    if (!address || typeof address !== 'string') return { hi: '0', lo: '0' };
+  // Handle Stellar addresses - split hex into 128-bit parts for Circom
+  const stellarAddressTo128BitParts = (hexAddress) => {
+    if (!hexAddress || typeof hexAddress !== 'string') return { hi: '0', lo: '0' };
     
-    // Convert address to hex hash first
-    const hash = crypto.createHash('sha256').update(address).digest('hex');
-    const hexValue = '0x' + hash.slice(0, 64); // Take first 32 bytes (64 hex chars)
+    // Remove 0x prefix if present
+    const cleanHex = hexAddress.replace(/^0x/, '');
     
     // Convert to BigInt and split into 128-bit parts
-    const val = BigInt(hexValue);
+    const val = BigInt('0x' + cleanHex);
     const hi = (val >> 128n).toString();
     const lo = (val & ((1n << 128n) - 1n)).toString();
     

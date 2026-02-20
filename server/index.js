@@ -270,21 +270,29 @@ app.post('/zk/prove_v2', async (req, res) => {
     return BigInt(str).toString(10); // Forces it into a pure decimal number string
   };
 
-  // Special handler for Stellar addresses - split into 128-bit parts for Circom
-  const stellarAddressTo128BitParts = (address) => {
-    if (!address || typeof address !== 'string') return { hi: '0', lo: '0' };
+  // Special handler for Stellar addresses - split hex into 128-bit parts for Circom
+  const stellarAddressTo128BitParts = (hexAddress) => {
+    if (!hexAddress || typeof hexAddress !== 'string') return { hi: '0', lo: '0' };
     
-    // Convert address to hex hash first
-    const hash = crypto.createHash('sha256').update(address).digest('hex');
-    const hexValue = '0x' + hash.slice(0, 64); // Take first 32 bytes (64 hex chars)
+    // Remove 0x prefix if present
+    const cleanHex = hexAddress.replace(/^0x/, '');
     
     // Convert to BigInt and split into 128-bit parts
-    const val = BigInt(hexValue);
+    const val = BigInt('0x' + cleanHex);
     const hi = (val >> 128n).toString();
     const lo = (val & ((1n << 128n) - 1n)).toString();
     
     return { hi, lo };
   };
+
+  // Convert hex addresses to BigInt and split into 128-bit parts
+  const playerBN = BigInt(player_address.replace(/^0x/, ''));
+  const player_hi = playerBN >> 128n;
+  const player_lo = playerBN & ((1n << 128n) - 1n);
+  
+  const contractBN = BigInt(contract_id.replace(/^0x/, ''));
+  const contract_hi = contractBN >> 128n;
+  const contract_lo = contractBN & ((1n << 128n) - 1n);
 
   // Build input object for GameRunV2 circuit (order must match circuit inputs) with per-field error logging
   let circuitInput;
@@ -297,10 +305,10 @@ app.post('/zk/prove_v2', async (req, res) => {
       nonce: toDecimalString(nonce),
       season_id: toDecimalString(season_id),
       challenge_id: toDecimalString(challenge_id),
-      player_address_hi: stellarAddressTo128BitParts(player_address).hi,
-      player_address_lo: stellarAddressTo128BitParts(player_address).lo,
-      contract_id_hi: stellarAddressTo128BitParts(contract_id).hi,
-      contract_id_lo: stellarAddressTo128BitParts(contract_id).lo,
+      player_address_hi: player_hi.toString(),
+      player_address_lo: player_lo.toString(),
+      contract_id_hi: contract_hi.toString(),
+      contract_id_lo: contract_lo.toString(),
       domain_separator: toDecimalString(domain_separator)
     };
   } catch (fieldErr) {
@@ -331,10 +339,10 @@ app.post('/zk/prove_v2', async (req, res) => {
       nonce,
       season_id,
       challenge_id,
-      player_address_hi: stellarAddressTo128BitParts(player_address).hi,
-      player_address_lo: stellarAddressTo128BitParts(player_address).lo,
-      contract_id_hi: stellarAddressTo128BitParts(contract_id).hi,
-      contract_id_lo: stellarAddressTo128BitParts(contract_id).lo,
+      player_address_hi: player_hi.toString(),
+      player_address_lo: player_lo.toString(),
+      contract_id_hi: contract_hi.toString(),
+      contract_id_lo: contract_lo.toString(),
       domain_separator
     });
     console.log('[ZK V2] Proof generated successfully');
