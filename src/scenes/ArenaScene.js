@@ -4395,8 +4395,11 @@ export default class ArenaScene extends Phaser.Scene {
       const total = this.textures.get(deathSpriteKey)?.frameTotal;
       if (typeof total === 'number' && total > 0) {
         lastDeathFrame = Math.max(0, total - 1);
+        console.log(`[Death Animation] ${deathSpriteKey} has ${total} frames, using last frame: ${lastDeathFrame}`);
       }
-    } catch (_) {}
+    } catch (e) {
+      console.warn(`[Death Animation] Error getting frame count for ${deathSpriteKey}:`, e);
+    }
 
     // Duration of the death anim before showing GAME OVER UI (ms)
     let animDurationMs = 1200;
@@ -4422,8 +4425,17 @@ export default class ArenaScene extends Phaser.Scene {
       deathSprite.once(`animationcomplete-${deathAnimKey}`, () => {
         try {
           if (deathSprite.anims) deathSprite.anims.stop();
-          deathSprite.setFrame(lastDeathFrame);
-        } catch (_) {}
+          // Validate frame exists before setting it
+          const texture = this.textures.get(deathSpriteKey);
+          if (texture && lastDeathFrame < texture.frameTotal) {
+            deathSprite.setFrame(lastDeathFrame);
+          } else {
+            console.warn(`[Death Animation] Frame ${lastDeathFrame} not found in ${deathSpriteKey} (total: ${texture?.frameTotal}), using frame 0`);
+            deathSprite.setFrame(0);
+          }
+        } catch (e) {
+          console.error('[Death Animation] Error setting final frame:', e);
+        }
         // Keep sprite positioned safely below the title
         this.tweens.add({
           targets: deathSprite,

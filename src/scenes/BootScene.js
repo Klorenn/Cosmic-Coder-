@@ -239,6 +239,7 @@ export default class BootScene extends Phaser.Scene {
     if (this.textures.exists('robot-death')) {
       const frameTotal = this.textures.get('robot-death')?.frameTotal || 1;
       const end = Math.max(0, frameTotal - 1);
+      console.log(`[BootScene] robot-death texture has ${frameTotal} frames, creating animation from 0 to ${end}`);
       this.anims.create({
         key: 'robot-death',
         frames: this.anims.generateFrameNumbers('robot-death', { start: 0, end }),
