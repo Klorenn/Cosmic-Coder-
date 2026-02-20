@@ -509,16 +509,9 @@ export default class ArenaScene extends Phaser.Scene {
         console.error('[ZK Config] ❌ Invalid contract ID format. Expected 56 chars starting with C');
       }
       
-      // Check if contract actually exists on network
-      this.checkContractExists().then(exists => {
-        if (!exists) {
-          console.warn('[ZK Config] ⚠️ Contract not found on network. ZK will use fallback mode.');
-          this.zkContractMissing = true;
-        } else {
-          console.log('[ZK Config] ✅ Contract found on network!');
-          this.zkContractMissing = false;
-        }
-      });
+      // Skip contract existence check for now - try ZK directly
+      console.log('[ZK Config] 🚀 Skipping contract check - will try ZK submission directly');
+      this.zkContractMissing = false; // Assume it exists and try
       
       if (!gameClient.isContractConfigured()) {
         console.error('[ZK Config] ❌ Contract NOT configured!');
