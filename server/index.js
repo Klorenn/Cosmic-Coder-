@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { Keypair } from '@stellar/stellar-base';
@@ -9,6 +10,9 @@ import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_
 import * as snarkjs from 'snarkjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import fs from 'fs';
+import crypto from 'crypto';
+import { rpc } from '@stellar/stellar-sdk';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -271,7 +275,7 @@ app.post('/zk/prove_v2', async (req, res) => {
     if (!address || typeof address !== 'string') return '0';
     // For now, we'll use a simple hash of the address for the circuit
     // In a real implementation, this should be the decoded address bytes
-    const hash = require('crypto').createHash('sha256').update(address).digest('hex');
+    const hash = crypto.createHash('sha256').update(address).digest('hex');
     return '0x' + hash;
   };
 
@@ -314,8 +318,6 @@ app.post('/zk/prove_v2', async (req, res) => {
     console.log('[ZK V2] Proof generated, publicSignals length:', publicSignals.length);
     
     // Load the verification key and include it in the response
-    const fs = require('fs');
-    const path = require('path');
     const vkPath = path.join(__dirname, '../circuits/build/GameRunV2.zkey');
     const vkData = JSON.parse(fs.readFileSync(vkPath, 'utf8'));
     
