@@ -3,7 +3,7 @@ import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { Keypair } from '@stellar/stellar-base';
-import { generateProof } from './zkProve.js';
+import { generateProof, generateProofV2 } from './zkProve.js';
 import { generateSkillProof } from './skillProof.js';
 import authRoutes from './routes/auth.js';
 import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_WEB_AUTH_DOMAIN } from './config/sep10.js';
@@ -314,51 +314,21 @@ app.post('/zk/prove_v2', async (req, res) => {
 
   try {
     console.log('[ZK V2] Generating proof for:', { score: circuitInput.score, wave: circuitInput.wave, nonce: circuitInput.nonce });
-    const { proof, publicSignals } = await snarkjs.groth16.fullProve(circuitInput, wasmPath, zkeyPath);
-    console.log('[ZK V2] Proof generated, publicSignals length:', publicSignals.length);
-    
-    // Load the verification key and include it in the response
-    const vkPath = path.join(__dirname, '../circuits/build/GameRunV2.zkey');
-    const vkData = JSON.parse(fs.readFileSync(vkPath, 'utf8'));
-    
-    // Convert VK to the expected format (similar to export_for_contract.js)
-    const toHex = (n) => {
-      if (typeof n === 'string') n = BigInt(n);
-      let h = n.toString(16);
-      if (h.length % 2) h = '0' + h;
-      if (h.length > 64) h = h.slice(-64);
-      return h.padStart(64, '0');
-    };
-    
-    const toBytes32BE = (n) => {
-      const h = toHex(n);
-      return Buffer.from(h, 'hex');
-    };
-    
-    const g1ToBytes = (pt) => {
-      const x = toBytes32BE(pt[0]);
-      const y = toBytes32BE(pt[1]);
-      return Buffer.concat([x, y]);
-    };
-    
-    const g2ToBytes = (pt) => {
-      const x1 = toBytes32BE(pt[0][0]);
-      const x0 = toBytes32BE(pt[0][1]);
-      const y1 = toBytes32BE(pt[1][0]);
-      const y0 = toBytes32BE(pt[1][1]);
-      return Buffer.concat([x0, x1, y0, y1]);
-    };
-    
-    const alpha = g1ToBytes(vkData.vk_alpha_1 ?? vkData.alpha_1).toString('hex');
-    const beta = g2ToBytes(vkData.vk_beta_2 ?? vkData.beta_2).toString('hex');
-    const gamma = g2ToBytes(vkData.vk_gamma_2 ?? vkData.gamma_2).toString('hex');
-    const delta = g2ToBytes(vkData.vk_delta_2 ?? vkData.delta_2).toString('hex');
-    const ic = (vkData.IC ?? vkData.ic).map((p) => g1ToBytes(p).toString('hex'));
-    
-    const vk = { alpha, beta, gamma, delta, ic };
-    const pub_signals = publicSignals.map((s) => toHex(s));
-    
-    res.status(200).json({ proof, vk, pub_signals });
+    const result = generateProofV2({
+      run_hash_hi,
+      run_hash_lo,
+      score,
+      wave,
+      nonce,
+      season_id,
+      challenge_id,
+      player_address,
+      contract_id,
+      domain_separator
+    });
+    console.log('[ZK V2] Proof generated successfully');
+    console.log('[ZK V2] Proof keys:', Object.keys(result));
+    res.status(200).json(result);
   } catch (err) {
     console.error('[ZK V2] Proof generation failed:', err);
     res.status(500).json({ error: err.message || 'ZK V2 proof generation failed' });
