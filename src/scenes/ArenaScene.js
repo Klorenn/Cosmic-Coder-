@@ -498,9 +498,16 @@ export default class ArenaScene extends Phaser.Scene {
       const contractId = gameClient.getContractId();
       console.log('[ZK Config] Contract ID from gameClient:', contractId);
       console.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID);
+      console.log('[ZK Config] Contract ID length:', contractId?.length);
+      console.log('[ZK Config] Contract ID starts with C:', contractId?.startsWith('C'));
       console.log('[ZK Config] Prover URL:', gameClient.getZkProverUrl());
       console.log('[ZK Config] Is contract configured:', gameClient.isContractConfigured());
       console.log('[ZK Config] Is prover configured:', gameClient.isZkProverConfigured());
+      
+      // Validate contract ID format (should start with 'C' and be 56 chars)
+      if (contractId && (contractId.length !== 56 || !contractId.startsWith('C'))) {
+        console.error('[ZK Config] ❌ Invalid contract ID format. Expected 56 chars starting with C');
+      }
       
       // Check if contract actually exists on network
       this.checkContractExists().then(exists => {
@@ -4873,27 +4880,32 @@ export default class ArenaScene extends Phaser.Scene {
       const server = new rpc.Server('https://soroban-testnet.stellar.org');
       
       try {
-        // Try to get the account - if it exists, it's a contract
-        const account = await server.getAccount(contractId);
-        console.log('[ZK Config] ✅ Contract found on Soroban RPC:', account.accountId());
-        console.log('[ZK Config] Contract sequence:', account.sequence);
-        return true;
-      } catch (rpcError) {
-        // Try alternative method - get ledger data
-        try {
-          const ledger = await server.getLedgerEntries({
-            contract: contractId
-          });
-          if (ledger.entries && ledger.entries.length > 0) {
-            console.log('[ZK Config] ✅ Contract found via ledger entries:', contractId);
-            return true;
-          }
-        } catch (ledgerError) {
-          console.log('[ZK Config] ❌ Contract not found via ledger entries either');
-        }
+        // Try to get contract data using the correct method for contracts
+        const ledgerData = await server.getLedgerEntries({
+          contract: contractId
+        });
         
-        console.log('[ZK Config] ❌ Contract not found on Soroban RPC:', rpcError?.message || rpcError);
-        return false;
+        if (ledgerData.entries && ledgerData.entries.length > 0) {
+          console.log('[ZK Config] ✅ Contract found via ledger entries:', contractId);
+          console.log('[ZK Config] Contract entries:', ledgerData.entries.length);
+          return true;
+        } else {
+          console.log('[ZK Config] ❌ No ledger entries found for contract');
+          return false;
+        }
+      } catch (rpcError) {
+        console.log('[ZK Config] ❌ Contract not found via ledger entries:', rpcError?.message || rpcError);
+        
+        // Try alternative: check if it's a regular account (for debugging)
+        try {
+          const account = await server.getAccount(contractId);
+          console.log('[ZK Config] ⚠️ Found regular account instead of contract:', account.accountId());
+          console.log('[ZK Config] This suggests the contract ID might be wrong or not deployed as contract');
+          return false;
+        } catch (accountError) {
+          console.log('[ZK Config] ❌ Not found as account either:', accountError?.message || accountError);
+          return false;
+        }
       }
     } catch (e) {
       console.log('[ZK Config] Contract check failed:', e?.message || e);
