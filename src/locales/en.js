@@ -76,12 +76,12 @@ export default {
     back: '[ CLICK OR ESC TO CLOSE ]'
   },
   zk_popup: {
-    title: 'ZK PROOF TERMINAL',
+    title: 'ZK TERMINAL',
     mode_ranked: 'MODE: RANKED',
     mode_casual: 'MODE: CASUAL',
     zk_enabled: 'ZK PROOF: ENABLED',
     zk_disabled: 'ZK PROOF: DISABLED',
-    description: 'Your performance will be validated using Zero-Knowledge Proofs.\nNo score details are revealed.\nOnly eligibility is confirmed.',
+    description: 'Cosmic Coder validates your run with Zero-Knowledge Proofs.\nNo score details are revealed on-chain—only eligibility is confirmed.',
     zk_weapon_hint: 'ZK WEAPON: In Ranked (ZK) runs, returning players get a guaranteed early Plasma Rifle drop. First-time players won\'t get it. It\'s a small head-start, not a score boost.',
     sep10_ok: 'SEP-10: OK',
     sep10_fail: 'SEP-10: NOT CONFIGURED',
@@ -283,7 +283,7 @@ export default {
     submit_error_contract: 'Contract error — verifier may not be set',
     submit_error_network: 'Network error — prover may be sleeping, try again',
     submit_error_prover_sleeping: 'ZK prover waking up — try again in 30s',
-    leaderboard_hint: 'To appear on chain leaderboard: connect wallet and set VITE_SHADOW_ASCENSION_CONTRACT_ID in .env',
+    leaderboard_hint: 'To appear on chain leaderboard: connect wallet and configure the Cosmic Coder contract (config.json or .env).',
     start_match_failed: 'Could not start on-chain match. You can still play; sign in Freighter when starting to submit scores.',
     xp_lost: 'XP LOST',
     immortal_respawn: '♾️ IMMORTAL RESPAWN',

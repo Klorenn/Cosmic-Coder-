@@ -4,7 +4,7 @@ Layout:
 
 - **zk_types** — Shared ZK types only (`Groth16Error`, `ZkProof`, `ZkVerificationKey`). No duplicated definitions; used by verifier and policy.
 - **groth16_verifier** — BN254 Groth16 verification only. No game logic, no leaderboard, no replay.
-- **shadow_ascension** — Game policy: verifier address, anti-replay (player + nonce + season_id), calls verifier, leaderboard, events. Legacy `submit_result` for casual mode.
+- **cosmic_coder** — Game policy (Cosmic Coder): verifier address, anti-replay (player + nonce + season_id), calls verifier, leaderboard, events. Legacy `submit_result` for casual mode.
 
 ## Build (WASM)
 
@@ -15,10 +15,10 @@ rustup target add wasm32v1-none
 cd contracts
 cargo build -p zk_types
 cargo build -p groth16_verifier --target wasm32v1-none --release
-cargo build -p shadow_ascension --target wasm32v1-none --release
+cargo build -p cosmic_coder --target wasm32v1-none --release
 ```
 
-Artifacts: `target/wasm32v1-none/release/groth16_verifier.wasm`, `target/wasm32v1-none/release/shadow_ascension.wasm`.
+Artifacts: `target/wasm32v1-none/release/groth16_verifier.wasm`, `target/wasm32v1-none/release/cosmic_coder.wasm`.
 
 ## Deploy & simulate (demo script)
 
@@ -35,7 +35,7 @@ Save the returned contract ID as `VERIFIER_ID`.
 ### Deploy policy
 
 ```bash
-stellar contract deploy --source-account <SOURCE> --wasm target/wasm32v1-none/release/shadow_ascension.wasm --network testnet
+stellar contract deploy --source-account <SOURCE> --wasm target/wasm32v1-none/release/cosmic_coder.wasm --network testnet
 ```
 
 Save as `POLICY_ID`. Then init with Game Hub and call `set_verifier(VERIFIER_ID)`.
@@ -67,7 +67,7 @@ Output shows **resource usage**, **events** (e.g. `zk_run_submitted`), and **suc
 ```bash
 cd contracts
 cargo test -p groth16_verifier
-cargo test -p shadow_ascension
+cargo test -p cosmic_coder
 ```
 
 ## ZK full stack (circuit + prover + contract)
@@ -80,7 +80,7 @@ From repo root:
    `npm run zk:e2e`
 3. **Prover server** (for ranked submit):  
    `npm run server` → `POST http://localhost:3333/zk/prove` with `run_hash_hex`, `score`, `wave`, `nonce`, `season_id`.
-4. **Frontend**: set `VITE_SHADOW_ASCENSION_CONTRACT_ID` and `VITE_ZK_PROVER_URL` (e.g. `http://localhost:3333`) so ranked mode and submit ZK work.
+4. **Frontend**: set `VITE_COSMIC_CODER_CONTRACT_ID` and `VITE_ZK_PROVER_URL` (e.g. `http://localhost:3333`) so ranked mode and submit ZK work.
 
 ## CAP / protocol
 

@@ -11,14 +11,15 @@ import { NoirService } from '../services/NoirService.js';
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 
+/** Transaction validity window (seconds). 30s was causing txTooLate when user signs slowly or RPC is slow. */
+const TX_VALIDITY_SECONDS = 300;
+
 export function getContractId() {
   return (
-    // Prefer Shadow Ascension policy contract for ZK flow.
-    (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
-    // Legacy fallback.
     (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_COSMIC_CODER_CONTRACT_ID) ||
+    (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
     ''
   );
 }
@@ -108,7 +109,7 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
     networkPassphrase: TESTNET_PASSPHRASE,
   })
     .addOperation(op)
-    .setTimeout(30)
+    .setTimeout(TX_VALIDITY_SECONDS)
     .build();
 
   // Surface detailed host/contract errors early (before signing/sending).
@@ -213,7 +214,7 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
  * @returns {Promise<{ proof: { a, b, c }, vk: object, pub_signals: string[] }>} hex strings
  */
 export async function requestZkProofV2(baseUrl, payload) {
-  // For submit_zk on shadow_ascension we must use GameRun (7 pub signals), not GameRunV2.
+  // For submit_zk on Cosmic Coder contract we must use GameRun (7 pub signals), not GameRunV2.
   // Keep function name for compatibility with existing callers.
   const proverBase = baseUrl || getZkProverUrl();
   const url = String(proverBase).replace(/\/$/, '') + '/zk/prove';
@@ -661,10 +662,10 @@ export async function submitZkTrustless(signerPublicKey, signTransaction, payloa
   validateNoirSubmitPayload(payload);
   console.log('[Trustless] Generating Noir + UltraHonk proof in browser...');
   const noir = new NoirService();
-  const { vkJson, proofBlob } = await noir.generateProof('GameRun', noirInputsFromPayload(payload));
+  const { proofBlob } = await noir.generateProof('GameRun', noirInputsFromPayload(payload));
   const { fullHex64 } = normalizeRunHashParts(payload);
 
-  // Submit to contract (Noir / UltraHonk path)
+  // Submit to contract: verifier uses stored VK (no vk_json in tx to avoid size limit)
   const contractId = getContractId();
   if (!contractId) throw new Error('Contract ID not configured');
   
@@ -672,7 +673,6 @@ export async function submitZkTrustless(signerPublicKey, signTransaction, payloa
 
   const args = [
     new Address(signerPublicKey).toScVal(),
-    xdr.ScVal.scvBytes(vkJson),
     xdr.ScVal.scvBytes(proofBlob),
     u64ToScVal(xdr, payload.nonce),
     xdr.ScVal.scvBytes(hexToBytes(fullHex64)),
@@ -695,17 +695,15 @@ export async function submitZkTrustless(signerPublicKey, signTransaction, payloa
  */
 export async function submitZkFromProverV2(signerPublicKey, signTransaction, proverUrl, payload, vkHash) {
   validateNoirSubmitPayload(payload);
-  // Kept function name for compatibility; now STRICTLY Noir/UltraHonk (no Groth16 fallback).
   const noir = new NoirService();
-  const { vkJson, proofBlob } = await noir.generateProof('GameRun', noirInputsFromPayload(payload));
+  const { proofBlob } = await noir.generateProof('GameRun', noirInputsFromPayload(payload));
   const { fullHex64 } = normalizeRunHashParts(payload);
   const contractId = getContractId();
-  if (!contractId) throw new Error('VITE_SHADOW_ASCENSION_CONTRACT_ID not set');
+  if (!contractId) throw new Error('Cosmic Coder contract not configured');
   const { xdr, Address } = await import('@stellar/stellar-sdk');
 
   const args = [
     new Address(signerPublicKey).toScVal(),
-    xdr.ScVal.scvBytes(vkJson),
     xdr.ScVal.scvBytes(proofBlob),
     u64ToScVal(xdr, payload.nonce),
     xdr.ScVal.scvBytes(hexToBytes(fullHex64)),
@@ -740,7 +738,7 @@ export async function getLeaderboard(limit = 10) {
       networkPassphrase: TESTNET_PASSPHRASE,
     })
       .addOperation(contract.call('get_leaderboard', xdr.ScVal.scvU32(limit)))
-      .setTimeout(30)
+      .setTimeout(TX_VALIDITY_SECONDS)
       .build();
     const sim = await server.simulateTransaction(built);
     if (sim.error) return [];
@@ -783,7 +781,9 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
       Account,
       BASE_FEE,
       xdr,
+      Address,
     } = await import('@stellar/stellar-sdk');
+    const { scValToNative } = await import('@stellar/stellar-base');
     const server = await getServer();
     const contract = new Contract(getContractId());
     const dummyAccount = new Account(
@@ -795,41 +795,122 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
       networkPassphrase: TESTNET_PASSPHRASE,
     })
       .addOperation(contract.call('get_leaderboard_by_season', xdr.ScVal.scvU32(seasonId), xdr.ScVal.scvU32(limit)))
-      .setTimeout(30)
+      .setTimeout(TX_VALIDITY_SECONDS)
       .build();
     const sim = await server.simulateTransaction(built);
-    if (sim.error) return [];
-    const vec = sim.result?.retval;
-    if (!vec || vec.switch().name !== 'vec') return [];
-    const arr = vec.vec();
+    if (sim.error) {
+      console.warn('[Cosmic Coder] get_leaderboard_by_season simulate error:', sim.error);
+      return [];
+    }
+    const retval = sim.result?.retval;
+    if (!retval) return [];
+
+    // Prefer native decoding (handles Vec<Map> and Address/u32 correctly)
+    try {
+      const native = scValToNative(retval);
+      if (Array.isArray(native) && native.length > 0) {
+        return native.map((entry) => {
+          const o = entry && typeof entry === 'object' ? entry : {};
+          const player = typeof o.player === 'string' ? o.player : '';
+          const score = Number(o.score) || 0;
+          return { player, wave: 0, score };
+        });
+      }
+      if (Array.isArray(native)) return [];
+    } catch (nativeErr) {
+      console.warn('[Cosmic Coder] getLeaderboardBySeason scValToNative:', nativeErr?.message || nativeErr);
+    }
+
+    // Fallback: manual XDR parsing (ScVal vec -> map entries)
+    if (retval.switch().name !== 'vec') return [];
+    const vecOpt = retval.vec();
+    const arr = vecOpt && (typeof vecOpt.length === 'number' ? vecOpt : Array.from(vecOpt || []));
+    if (!arr || !arr.length) return [];
     const out = [];
     for (let i = 0; i < arr.length; i++) {
       const entry = arr[i];
-      if (entry.obj().switch().name !== 'map') continue;
-      const m = entry.obj().map();
+      if (!entry || entry.switch?.()?.name !== 'map') continue;
+      const m = entry.map?.() ?? [];
+      if (!m.length) continue;
       let player = '';
       let score = 0;
       for (let j = 0; j < m.length; j++) {
-        const k = m[j].key().sym().toString();
-        const v = m[j].val();
-        if (k === 'player') player = v.address().toScAddress().accountId().ed25519().toString();
+        const pair = m[j];
+        const key = pair.key?.() ?? pair.key;
+        const val = pair.val?.() ?? pair.val;
+        const k = (key?.sym?.() ?? key)?.toString?.() ?? '';
+        if (k === 'player') {
+          try {
+            if (val && Address && typeof Address.fromScVal === 'function') {
+              player = Address.fromScVal(val).toString();
+            }
+          } catch (_) {}
+        }
         if (k === 'score') {
           try {
-            score = typeof v.i128 === 'function' ? Number(v.i128().toString()) : v.u32();
-          } catch (_) {
-            try {
-              score = v.u32();
-            } catch (__) {
-              score = 0;
-            }
-          }
+            score = typeof val?.u32 === 'function' ? val.u32() : Number(val?.i128?.()?.toString?.() ?? val ?? 0);
+          } catch (_) {}
         }
       }
       out.push({ player, wave: 0, score });
     }
     return out;
-  } catch (_) {
+  } catch (e) {
+    console.warn('[Cosmic Coder] getLeaderboardBySeason failed:', e?.message || e);
     return [];
+  }
+}
+
+/**
+ * Get player's verified milestone tier for a season.
+ * Returns { tier, bestWave } with zeros if missing/unavailable.
+ */
+export async function getPlayerMilestone(playerAddress, seasonId = 1) {
+  if (!getContractId() || !playerAddress) return { tier: 0, bestWave: 0 };
+  try {
+    const {
+      Contract,
+      TransactionBuilder,
+      Account,
+      BASE_FEE,
+      xdr,
+      Address,
+    } = await import('@stellar/stellar-sdk');
+    const server = await getServer();
+    const contract = new Contract(getContractId());
+    const dummyAccount = new Account(
+      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      '0'
+    );
+    const built = new TransactionBuilder(dummyAccount, {
+      fee: BASE_FEE,
+      networkPassphrase: TESTNET_PASSPHRASE,
+    })
+      .addOperation(
+        contract.call(
+          'get_player_milestone',
+          new Address(playerAddress).toScVal(),
+          xdr.ScVal.scvU32(seasonId)
+        )
+      )
+      .setTimeout(TX_VALIDITY_SECONDS)
+      .build();
+    const sim = await server.simulateTransaction(built);
+    if (sim.error) return { tier: 0, bestWave: 0 };
+    const rv = sim.result?.retval;
+    if (!rv || rv.switch().name !== 'map') return { tier: 0, bestWave: 0 };
+    const m = rv.map();
+    let tier = 0;
+    let bestWave = 0;
+    for (let i = 0; i < m.length; i++) {
+      const k = m[i].key().sym().toString();
+      const v = m[i].val();
+      if (k === 'tier') tier = v.u32();
+      if (k === 'best_wave') bestWave = v.u32();
+    }
+    return { tier, bestWave };
+  } catch (_) {
+    return { tier: 0, bestWave: 0 };
   }
 }
 

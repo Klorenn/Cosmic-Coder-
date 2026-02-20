@@ -12,7 +12,7 @@ use soroban_sdk::{
 };
 use zk_types::{ZkProof, ZkVerificationKey, G1_SIZE, G2_SIZE, FR_SIZE};
 
-use crate::{CosmicCoder, CosmicCoderClient};
+use crate::{CosmicCoder, CosmicCoderClient, PlayerMilestone};
 use groth16_verifier::{Groth16Verifier, Groth16VerifierClient};
 
 #[contract]
@@ -411,4 +411,88 @@ fn test_real_proof_verifier_and_submit_zk() {
         &score,
         &wave,
     );
+}
+
+#[test]
+fn test_player_milestone_default_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let hub = env.register(MockHub, ());
+    let verifier = env.register(Groth16Verifier, ());
+    let policy = env.register(CosmicCoder, ());
+    let policy_client = CosmicCoderClient::new(&env, &policy);
+    policy_client.init(&hub, &verifier);
+
+    let player = Address::generate(&env);
+    let ms: PlayerMilestone = policy_client.get_player_milestone(&player, &1u32);
+    assert_eq!(ms.tier, 0);
+    assert_eq!(ms.best_wave, 0);
+}
+
+#[test]
+fn test_player_milestone_updates_from_verified_submits() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let hub = env.register(MockHub, ());
+    let verifier = env.register(Groth16Verifier, ());
+    let policy = env.register(CosmicCoder, ());
+    let policy_client = CosmicCoderClient::new(&env, &policy);
+    policy_client.init(&hub, &verifier);
+
+    let player = Address::generate(&env);
+    let run_hash = run_hash_32(&env);
+    let vk = default_vk(&env);
+    let proof = default_proof(&env);
+    let pub_signals = default_pub_signals(&env);
+    let season_id = 1u32;
+
+    // wave 5 => tier 1
+    policy_client.submit_zk(
+        &player,
+        &proof,
+        &vk,
+        &pub_signals,
+        &301u64,
+        &run_hash,
+        &season_id,
+        &120u32,
+        &5u32,
+    );
+    let ms1: PlayerMilestone = policy_client.get_player_milestone(&player, &season_id);
+    assert_eq!(ms1.tier, 1);
+    assert_eq!(ms1.best_wave, 5);
+
+    // wave 8 => tier 2
+    policy_client.submit_zk(
+        &player,
+        &proof,
+        &vk,
+        &pub_signals,
+        &302u64,
+        &run_hash,
+        &season_id,
+        &220u32,
+        &8u32,
+    );
+    let ms2: PlayerMilestone = policy_client.get_player_milestone(&player, &season_id);
+    assert_eq!(ms2.tier, 2);
+    assert_eq!(ms2.best_wave, 8);
+
+    // wave 10 => tier 3
+    policy_client.submit_zk(
+        &player,
+        &proof,
+        &vk,
+        &pub_signals,
+        &303u64,
+        &run_hash,
+        &season_id,
+        &320u32,
+        &10u32,
+    );
+    let ms3: PlayerMilestone = policy_client.get_player_milestone(&player, &season_id);
+    assert_eq!(ms3.tier, 3);
+    assert_eq!(ms3.best_wave, 10);
 }

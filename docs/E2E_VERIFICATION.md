@@ -30,7 +30,7 @@ Compila circuito, genera proof real (score=100, wave=5) y ejecuta los tests de v
 ```bash
 npm run zk:proof   # genera contract_proof.json
 cd contracts
-cargo test -p groth16_verifier -p shadow_ascension
+cargo test -p groth16_verifier -p cosmic_coder
 ```
 
 All tests should pass. These cover verifier behaviour, policy init, `submit_zk` (anti-replay, invalid proof, valid proof), and `submit_result`.
@@ -40,7 +40,7 @@ All tests should pass. These cover verifier behaviour, policy init, `submit_zk` 
 1. **Deploy and config**
    - [ ] Verifier and policy deployed on Stellar Testnet (see [DEPLOY_ZK_STEPS.md](DEPLOY_ZK_STEPS.md)). Current deployment: Policy `CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO`, Verifier `CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA`.
    - [ ] Policy initialized: `init(game_hub)`, `set_verifier(verifier_id)` (already done for the IDs above).
-   - [ ] Frontend: `.env` has `VITE_SHADOW_ASCENSION_CONTRACT_ID=CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO` (or your POLICY_ID) and `VITE_ZK_PROVER_URL` (local or production prover).
+   - [ ] Frontend: `.env` has `VITE_COSMIC_CODER_CONTRACT_ID=CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO` (or your POLICY_ID) and `VITE_ZK_PROVER_URL` (local or production prover).
 
 2. **Start game**
    - [ ] Connect wallet (Freighter) on title screen — **required to play**; the game requires a linked Freighter account.
@@ -62,6 +62,6 @@ All tests should pass. These cover verifier behaviour, policy init, `submit_zk` 
 
 ## Production (GitHub Pages)
 
-- [ ] Repo secrets set: `VITE_SHADOW_ASCENSION_CONTRACT_ID`, `VITE_ZK_PROVER_URL` (public prover URL).
+- [ ] Repo secrets set: `VITE_COSMIC_CODER_CONTRACT_ID`, `VITE_ZK_PROVER_URL` (public prover URL).
 - [ ] After push to `main`, the built game uses these and shows ZK Ranked when the prover is configured.
 - [ ] Judges can play at the deployed URL (they must connect Freighter to play), and see submissions on-chain.

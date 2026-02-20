@@ -3277,8 +3277,7 @@ export default class TitleScene extends Phaser.Scene {
             updateVisuals();
             Audio.playXPGain();
           } else if (s.type === 'input') {
-            close();
-            this.showNameInput(false, () => {});
+            this.showNameInput(false, () => { updateVisuals(); });
           } else if (s.type === 'action' && typeof s.action === 'function') {
             s.action();
             Audio.playHit();
@@ -3379,8 +3378,10 @@ export default class TitleScene extends Phaser.Scene {
         updateVisuals();
         Audio.playHit();
       } else if (s.type === 'input') {
-        close();
-        this.showNameInput(false, () => {});
+        // Don't close settings: open name modal on top, then refresh NAME row when confirmed
+        this.showNameInput(false, () => {
+          updateVisuals();
+        });
       }
     };
 

@@ -46,7 +46,7 @@ Cosmic Coder uses **Stellar Testnet** and **Soroban** smart contracts to run a p
 1. **Game Hub (Stellar Game Studio)**  
    Central contract that tracks game sessions: `start_game()` and `end_game()`. Our policy contract calls it when a player starts or finishes a run.
 
-2. **Policy contract (shadow_ascension)**  
+2. **Policy contract (cosmic_coder)**  
    Our game logic on-chain:
    - `start_match(player)` — Called when you press “Start Game”; it calls the Game Hub’s `start_game()`.
    - `submit_result(player, wave, score)` — Casual submission: checks `score >= wave * MIN_SCORE_PER_WAVE`, then calls `end_game()` and updates the leaderboard.
@@ -71,7 +71,7 @@ So: **Stellar** provides the chain and the Game Hub session lifecycle; **ZK** en
 | Contract | Role | Stellar Expert |
 |----------|------|----------------|
 | **Game Hub** | Session lifecycle: `start_game`, `end_game` | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG) |
-| **Policy (shadow_ascension)** | Our game: `start_match`, `submit_result`, `submit_zk`, leaderboard | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO) |
+| **Policy (Cosmic Coder)** | Our game: `start_match`, `submit_result`, `submit_zk`, leaderboard | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO) |
 | **Verifier (groth16_verifier)** | BN254 Groth16 proof verification | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA) |
 
 - **Play:** [Cosmic Coder](https://klorenn.github.io/Cosmic-Coder-/)
@@ -92,7 +92,7 @@ So: **Stellar** provides the chain and the Game Hub session lifecycle; **ZK** en
 3. Play until you die. On death, the game submits your run: **ZK Ranked** (if the prover is configured and the proof succeeds) or **Casual** (rules-only).
 4. **Verify:** On Stellar Expert, open the [Policy contract](https://stellar.expert/explorer/testnet/contract/CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO) and check recent invocations for `start_match`, `submit_zk`, or `submit_result` and the resulting `end_game` calls on the Game Hub.
 
-**Local setup for full ZK flow:** Set `VITE_SHADOW_ASCENSION_CONTRACT_ID` and `VITE_ZK_PROVER_URL` (e.g. to your prover backend), run the prover, then connect wallet and play. See [docs/DEPLOY_ZK_STEPS.md](docs/DEPLOY_ZK_STEPS.md) and [docs/HACKATHON_DO_THIS.md](docs/HACKATHON_DO_THIS.md).
+**Local setup for full ZK flow:** Set `VITE_COSMIC_CODER_CONTRACT_ID` and `VITE_ZK_PROVER_URL` (e.g. to your prover backend), run the prover, then connect wallet and play. See [docs/DEPLOY_ZK_STEPS.md](docs/DEPLOY_ZK_STEPS.md) and [docs/HACKATHON_DO_THIS.md](docs/HACKATHON_DO_THIS.md).
 
 ---
 
@@ -127,7 +127,7 @@ cosmic-coder/
 ├── contracts/
 │   ├── zk_types/            # Shared ZK types
 │   ├── groth16_verifier/    # BN254 Groth16 verifier (Soroban)
-│   └── shadow_ascension/    # Game policy contract (Game Hub + leaderboard)
+│   └── cosmic_coder/        # Game policy contract (Cosmic Coder, Game Hub + leaderboard)
 ├── circuits/                # Circom circuit (GameRun)
 ├── server/                  # XP server + ZK prover (/zk/prove)
 ├── hooks/                   # IDE/AI hooks for XP

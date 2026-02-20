@@ -83,6 +83,22 @@ pub struct LeaderboardKey {
     pub season_id: u32,
 }
 
+/// Per-player milestone progress for a season, derived from verified ranked submissions.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayerMilestoneKey {
+    pub player: Address,
+    pub season_id: u32,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PlayerMilestone {
+    /// 0=none, 1=wave>=5, 2=wave>=8, 3=wave>=10
+    pub tier: u32,
+    pub best_wave: u32,
+}
+
 /// Anti-replay: (player, nonce, season_id) must be unique.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -135,6 +151,46 @@ pub struct CosmicCoder;
 
 #[contractimpl]
 impl CosmicCoder {
+    fn milestone_tier_from_wave(wave: u32) -> u32 {
+        if wave >= 10 {
+            3
+        } else if wave >= 8 {
+            2
+        } else if wave >= 5 {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn update_player_milestone(env: &Env, player: &Address, season_id: u32, wave: u32) {
+        let new_tier = Self::milestone_tier_from_wave(wave);
+        if new_tier == 0 {
+            return;
+        }
+        let key = PlayerMilestoneKey {
+            player: player.clone(),
+            season_id,
+        };
+        let current = env
+            .storage()
+            .persistent()
+            .get::<PlayerMilestoneKey, PlayerMilestone>(&key);
+        let should_update = match current {
+            None => true,
+            Some(prev) => new_tier > prev.tier || wave > prev.best_wave,
+        };
+        if should_update {
+            env.storage().persistent().set(
+                &key,
+                &PlayerMilestone {
+                    tier: new_tier,
+                    best_wave: wave,
+                },
+            );
+        }
+    }
+
     /// Initialize: game hub and ZK verifier addresses.
     pub fn init(env: Env, game_hub: Address, zk_verifier: Address) {
         env.storage().persistent().set(&DataKey::GameHub, &game_hub);
@@ -431,6 +487,7 @@ impl CosmicCoder {
         }
         sort_leaderboard_desc(&env, &mut entries);
         env.storage().persistent().set(&lb_key, &entries);
+        Self::update_player_milestone(&env, &player, season_id, wave);
 
         // === 10. Emit main ZK run event ===
         env.events().publish(
@@ -441,11 +498,11 @@ impl CosmicCoder {
         Ok(())
     }
 
-    /// Ranked submit (Noir + UltraHonk): verifier takes vk_json + proof_blob.
+    /// Ranked submit (Noir + UltraHonk): verifier uses stored VK, only proof_blob is passed (avoids invocation size limit).
+    /// The UltraHonk verifier must have been initialized once with set_vk(vk_json) for the GameRun circuit.
     pub fn submit_zk_noir(
         env: Env,
         player: Address,
-        vk_json: Bytes,
         proof_blob: Bytes,
         nonce: u64,
         run_hash: Bytes,
@@ -471,7 +528,7 @@ impl CosmicCoder {
         if score < min_score {
             return Err(CosmicCoderError::InvalidInput);
         }
-        if run_hash.len() != 32 || vk_json.len() == 0 || proof_blob.len() == 0 {
+        if run_hash.len() != 32 || proof_blob.len() == 0 {
             return Err(CosmicCoderError::InvalidInput);
         }
 
@@ -490,8 +547,8 @@ impl CosmicCoder {
 
         let verifier_result = env.try_invoke_contract::<soroban_sdk::BytesN<32>, UltraHonkError>(
             &verifier_addr,
-            &Symbol::new(&env, "verify_proof"),
-            soroban_sdk::vec![&env, vk_json.into_val(&env), proof_blob.into_val(&env)],
+            &Symbol::new(&env, "verify_proof_with_stored_vk"),
+            soroban_sdk::vec![&env, proof_blob.into_val(&env)],
         );
         let _proof_id = match verifier_result {
             Ok(Ok(pid)) => pid,
@@ -545,6 +602,7 @@ impl CosmicCoder {
         }
         sort_leaderboard_desc(&env, &mut entries);
         env.storage().persistent().set(&lb_key, &entries);
+        Self::update_player_milestone(&env, &player, season_id, wave);
 
         env.events().publish(
             (Symbol::new(&env, "zk_run_submitted"), player.clone(), season_id, score, wave, run_hash),
@@ -567,6 +625,18 @@ impl CosmicCoder {
             out.push_back(entries.get(i).unwrap());
         }
         out
+    }
+
+    /// Get player's verified ranked milestone for a season.
+    pub fn get_player_milestone(env: Env, player: Address, season_id: u32) -> PlayerMilestone {
+        let key = PlayerMilestoneKey { player, season_id };
+        env.storage()
+            .persistent()
+            .get::<PlayerMilestoneKey, PlayerMilestone>(&key)
+            .unwrap_or(PlayerMilestone {
+                tier: 0,
+                best_wave: 0,
+            })
     }
 
     /// Get legacy leaderboard (casual mode, top by score).

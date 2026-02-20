@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Invoke submit_zk on the shadow_ascension contract with the generated proof.
+ * Invoke submit_zk on the Cosmic Coder contract with the generated proof.
  * Usage: node invoke_submit_zk.js [contract_proof.json] [policy_contract_id]
  */
 import fs from 'fs';
@@ -60,7 +60,7 @@ const seasonId = parseInt(pub_signals[5], 16); // 0x01 = 1
 // run_hash is the combination of hi and lo (use lo as the hash for simplicity)
 const runHash = runHashLo;
 
-console.log('=== Invoking submit_zk on shadow_ascension ===');
+console.log('=== Invoking submit_zk on Cosmic Coder ===');
 console.log(`Contract: ${contractId}`);
 console.log(`Network: ${network}`);
 console.log(`Source: ${source}`);

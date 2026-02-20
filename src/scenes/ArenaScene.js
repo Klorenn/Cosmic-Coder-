@@ -423,8 +423,16 @@ export default class ArenaScene extends Phaser.Scene {
           await new Promise((r) => setTimeout(r, 900));
         }
 
-        // Only grant ZK starter drop if the player has played at least once on-chain.
-        // Primary source: player stats. Fallback: presence in on-chain leaderboard.
+        // Use verified milestone as primary source for ZK starter weapon tier.
+        let milestone = { tier: 0, bestWave: 0 };
+        try {
+          milestone = await gameClient.getPlayerMilestone(addr, 1);
+          console.log('[ZK Startup] Player milestone:', JSON.stringify(milestone));
+        } catch (e) {
+          console.warn('[ZK Startup] getPlayerMilestone failed:', e?.message || e);
+        }
+
+        // Fallback path for legacy data when milestone is not present yet.
         let stats = { gamesPlayed: 0 };
         try {
           stats = await weaponClient.getPlayerStats(addr);
@@ -434,7 +442,7 @@ export default class ArenaScene extends Phaser.Scene {
           stats = { gamesPlayed: 0 };
         }
 
-        let hasPlayedBefore = localRankedHistory || (stats?.gamesPlayed || 0) >= 1;
+        let hasPlayedBefore = (milestone?.tier || 0) > 0 || localRankedHistory || (stats?.gamesPlayed || 0) >= 1;
 
         // Local-dev fallback: if the wallet appears in the backend leaderboard API, treat as returning.
         if (!hasPlayedBefore) {
@@ -458,8 +466,9 @@ export default class ArenaScene extends Phaser.Scene {
         }
 
         if (hasPlayedBefore) {
-          console.log('[ZK Startup] Dropping ZK Plasma Rifle');
-          this.spawnSpecificWeaponDropNearPlayer('rapid', 52, 0);
+          const starterWeapon = this.getZkStarterWeaponFromMilestone(milestone);
+          console.log('[ZK Startup] Dropping ZK starter weapon:', starterWeapon);
+          this.spawnSpecificWeaponDropNearPlayer(starterWeapon, 52, 0);
         } else {
           console.log('[ZK Startup] No weapon drop (no prior history detected)');
         }
@@ -473,6 +482,15 @@ export default class ArenaScene extends Phaser.Scene {
       this.zkStartupInProgress = false;
       this.startWave();
     }
+  }
+
+  getZkStarterWeaponFromMilestone(milestone) {
+    const tier = Number(milestone?.tier || 0);
+    // milestone tiers: 1=wave>=5, 2=wave>=8, 3=wave>=10
+    if (tier >= 3) return 'rapid';
+    if (tier >= 2) return 'pierce';
+    if (tier >= 1) return 'spread';
+    return 'basic';
   }
 
   /**
@@ -497,7 +515,7 @@ export default class ArenaScene extends Phaser.Scene {
       console.log('[ZK Config] Checking configuration...');
       const contractId = gameClient.getContractId();
       console.log('[ZK Config] Contract ID from gameClient:', contractId);
-      console.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_SHADOW_ASCENSION_CONTRACT_ID);
+      console.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID);
       console.log('[ZK Config] Contract ID length:', contractId?.length);
       console.log('[ZK Config] Contract ID starts with C:', contractId?.startsWith('C'));
       console.log('[ZK Config] Prover URL:', gameClient.getZkProverUrl());
@@ -964,8 +982,9 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   createPlayer() {
-    // Use selected character (VibeCoder, Destroyer, Swordsman)
+    // Use selected character (VibeCoder, Destroyer, Swordsman) — store for game over so death anim matches
     const charId = progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
+    this.playingCharacterId = charId;
     const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS.vibecoder;
     this.playerAnimPrefix = char.animPrefix;
 
@@ -4384,6 +4403,15 @@ export default class ArenaScene extends Phaser.Scene {
     ];
     const phrase = phrases[Math.floor(Math.random() * phrases.length)];
 
+    // Ensure player stays hidden so only the death sprite is visible
+    try {
+      if (this.player) {
+        this.player.setVisible(false);
+        this.player.setActive(false);
+        this.player.setAlpha(0);
+      }
+    } catch (_) {}
+
     // Create game over container - scroll-factor 0 so it stays on screen
     const gameOverContainer = this.add.container(0, 0);
     gameOverContainer.setDepth(2000).setScrollFactor(0);
@@ -4393,14 +4421,122 @@ export default class ArenaScene extends Phaser.Scene {
     blackBg.setInteractive({ useHandCursor: false });
     gameOverContainer.add(blackBg);
 
+    // Leaderboard panel: left side, almost at max left
+    const leaderboardLeftX = 28;
+    const leaderboardWidth = 220;
+    const leaderboardTopY = Math.max(80, Math.floor(h * 0.14));
+    const uiScale = getUIScale(this);
+    const lineHeight = Math.round(16 * uiScale);
+    const rankFontSize = `${Math.round(11 * uiScale)}px`;
+    const titleFontSize = `${Math.round(14 * uiScale)}px`;
+
+    const leaderboardPanelHeight = 12 + 24 + 15 * lineHeight + 16;
+    const leaderboardBg = this.add.rectangle(
+      leaderboardLeftX + leaderboardWidth / 2,
+      leaderboardTopY + leaderboardPanelHeight / 2,
+      leaderboardWidth + 16,
+      leaderboardPanelHeight,
+      0x0a0a12,
+      0.92
+    );
+    leaderboardBg.setStrokeStyle(1, 0x333355);
+    gameOverContainer.add(leaderboardBg);
+
+    const leaderboardTitle = this.add.text(leaderboardLeftX + leaderboardWidth / 2, leaderboardTopY + 10, 'RANKING', {
+      fontFamily: 'monospace',
+      fontSize: titleFontSize,
+      color: '#00aaff',
+      fontStyle: 'bold'
+    }).setOrigin(0.5, 0);
+    gameOverContainer.add(leaderboardTitle);
+
+    const leaderboardLoading = this.add.text(leaderboardLeftX + 8, leaderboardTopY + 36, 'Loading...', {
+      fontFamily: 'monospace',
+      fontSize: rankFontSize,
+      color: '#666666'
+    }).setOrigin(0, 0);
+    gameOverContainer.add(leaderboardLoading);
+
+    (async () => {
+      let addr = null;
+      try {
+        addr = await stellarWallet.getAddress();
+      } catch (_) {}
+      let entries = [];
+      let isCasualFallback = false;
+      if (gameClient.isContractConfigured()) {
+        try {
+          entries = await gameClient.getLeaderboardBySeason(1, 15);
+          if (entries.length === 0) {
+            const casual = await gameClient.getLeaderboard(15);
+            if (casual.length > 0) {
+              entries = casual.map((e) => ({ player: e.player, score: e.score ?? 0, wave: e.wave }));
+              isCasualFallback = true;
+            }
+          }
+        } catch (e) {
+          console.warn('[Cosmic Coder] Leaderboard fetch failed:', e?.message || e);
+        }
+      }
+      if (!gameOverContainer.scene || !leaderboardLoading.scene) return;
+      leaderboardLoading.destroy();
+      if (entries.length === 0) {
+        const msg = addr
+          ? 'No ZK ranked runs yet. Play Ranked and submit to appear.'
+          : 'Connect wallet for ranking';
+        const noRank = this.add.text(leaderboardLeftX + 8, leaderboardTopY + 36, msg, {
+          fontFamily: 'monospace',
+          fontSize: rankFontSize,
+          color: '#555555',
+          wordWrap: { width: leaderboardWidth - 16 }
+        }).setOrigin(0, 0);
+        gameOverContainer.add(noRank);
+        return;
+      }
+      const rankStartY = leaderboardTopY + 36;
+      if (isCasualFallback) {
+        const casualLabel = this.add.text(leaderboardLeftX + 8, rankStartY, '(casual)', {
+          fontFamily: 'monospace',
+          fontSize: rankFontSize - 1,
+          color: '#666666'
+        }).setOrigin(0, 0);
+        gameOverContainer.add(casualLabel);
+      }
+      const entryOffsetY = isCasualFallback ? 14 : 0;
+      const normalizeAddr = (a) => (a || '').toLowerCase().trim();
+      const currentAddr = normalizeAddr(addr || '');
+      for (let i = 0; i < entries.length; i++) {
+        const e = entries[i];
+        const isYou = currentAddr && normalizeAddr(e.player) === currentAddr;
+        const short = e.player ? stellarWallet.shortAddress(e.player, 5) : '???';
+        const line = `#${i + 1}  ${short}  ${e.score ?? 0}`;
+        const y = rankStartY + entryOffsetY + i * lineHeight;
+        const textObj = this.add.text(leaderboardLeftX + 8, y, line, {
+          fontFamily: 'monospace',
+          fontSize: rankFontSize,
+          color: isYou ? '#00ff88' : '#cccccc'
+        }).setOrigin(0, 0);
+        if (isYou) textObj.setStyle({ fontStyle: 'bold' });
+        gameOverContainer.add(textObj);
+      }
+      if (addr && !entries.some((e) => normalizeAddr(e.player) === currentAddr)) {
+        const notInTop = this.add.text(leaderboardLeftX + 8, rankStartY + entryOffsetY + entries.length * lineHeight, "You're not in top 15", {
+          fontFamily: 'monospace',
+          fontSize: rankFontSize,
+          color: '#888888'
+        }).setOrigin(0, 0);
+        gameOverContainer.add(notInTop);
+      }
+    })();
+
     const gameOverTopY = Math.max(86, Math.floor(h * 0.18));
     // Put the death animation clearly below the title
     const deathBaseY = Math.min(Math.floor(h * 0.52), gameOverTopY + 260);
     // Stats block always below the death sprite (avoid overlap)
     const statsStartY = Math.min(h - 210, deathBaseY + 200);
 
-    // --- Phase 1: Death sprite animation ---
-    const characterId = progressStore?.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
+    // --- Phase 1: Death sprite animation — always the character you were playing this run ---
+    const characterId = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
     let deathAnimKey = null;
     let deathSpriteKey = null;
     let lastDeathFrame = 4;
@@ -4408,6 +4544,14 @@ export default class ArenaScene extends Phaser.Scene {
       deathAnimKey = 'destroyer-death';
       deathSpriteKey = 'destroyer-death';
       lastDeathFrame = 5;
+    } else if (characterId === 'swordsman') {
+      deathAnimKey = 'swordsman-death';
+      deathSpriteKey = 'swordsman-death';
+      lastDeathFrame = 4;
+    } else if (characterId === 'vibecoder') {
+      deathAnimKey = 'vibecoder-death';
+      deathSpriteKey = 'vibecoder-death';
+      lastDeathFrame = 4; // last frame = lying on ground (5 frames: 0–4)
     } else if (characterId === 'sync') {
       deathAnimKey = 'sync-death';
       deathSpriteKey = 'sync-death';
@@ -4416,18 +4560,14 @@ export default class ArenaScene extends Phaser.Scene {
       deathAnimKey = 'voidnull-death';
       deathSpriteKey = 'voidnull-death';
       lastDeathFrame = 6;
-    } else if (characterId === 'swordsman') {
-      deathAnimKey = 'swordsman-death';
-      deathSpriteKey = 'swordsman-death';
-      lastDeathFrame = 4;
-    } else if (characterId === 'vibecoder' || characterId === 'robot') {
+    } else if (characterId === 'robot') {
       deathAnimKey = 'robot-death';
       deathSpriteKey = 'robot-death';
       lastDeathFrame = 4;
     } else {
-      // Fallback to robot assets
-      deathAnimKey = 'robot-death';
-      deathSpriteKey = 'robot-death';
+      // Unknown ID: use same character's death if we have it, else vibecoder
+      deathAnimKey = 'vibecoder-death';
+      deathSpriteKey = 'vibecoder-death';
       lastDeathFrame = 4;
     }
 
@@ -4445,12 +4585,31 @@ export default class ArenaScene extends Phaser.Scene {
     // Duration of the death anim before showing GAME OVER UI (ms)
     let animDurationMs = 1200;
 
-    if (deathSpriteKey && this.textures.exists(deathSpriteKey) && this.anims.exists(deathAnimKey)) {
+    const hasDeathAnim = deathSpriteKey && this.textures.exists(deathSpriteKey) && this.anims.exists(deathAnimKey);
+
+    if (hasDeathAnim) {
       const deathSprite = this.add.sprite(cx, deathBaseY, deathSpriteKey, 0);
-      deathSprite.setScale(2.5).setAlpha(0);
+      deathSprite.setScale(2.5).setAlpha(0).setDepth(2001);
       gameOverContainer.add(deathSprite);
 
-      // Fade sprite in then play animation
+      const texture = this.textures.get(deathSpriteKey);
+      const frameTotal = Math.max(1, texture?.frameTotal ?? 1);
+      const lastFrameIndex = Math.min(lastDeathFrame, frameTotal - 1);
+
+      let done = false;
+      const showLyingOnGround = () => {
+        if (done || !gameOverContainer.scene) return;
+        done = true;
+        try {
+          deathSprite.destroy();
+        } catch (_) {}
+        const groundSprite = this.add.sprite(cx, deathBaseY, deathSpriteKey, lastFrameIndex);
+        groundSprite.setScale(2).setDepth(2001).setAlpha(0);
+        gameOverContainer.add(groundSprite);
+        this.tweens.add({ targets: groundSprite, alpha: 1, duration: 250, ease: 'Power2' });
+      };
+
+      // 1) Fade in, then play death animation once
       this.tweens.add({
         targets: deathSprite,
         alpha: 1,
@@ -4462,35 +4621,34 @@ export default class ArenaScene extends Phaser.Scene {
         }
       });
 
-      // After animation ends, hold the last frame (never snap back to frame 0)
-      deathSprite.once(`animationcomplete-${deathAnimKey}`, () => {
-        try {
-          if (deathSprite.anims) deathSprite.anims.stop();
-          // Validate frame exists before setting it
-          const texture = this.textures.get(deathSpriteKey);
-          const frameToUse = Math.min(lastDeathFrame, (texture?.frameTotal || 1) - 1);
-          
-          if (texture && frameToUse >= 0 && frameToUse < texture.frameTotal) {
-            deathSprite.setFrame(frameToUse);
-            console.log(`[Death Animation] Setting frame ${frameToUse} for ${deathSpriteKey}`);
-          } else {
-            console.warn(`[Death Animation] Frame ${frameToUse} not found in ${deathSpriteKey} (total: ${texture?.frameTotal}), using frame 0`);
-            deathSprite.setFrame(0);
-          }
-        } catch (e) {
-          console.error('[Death Animation] Error setting final frame:', e);
-        }
-        // Keep sprite positioned safely below the title
-        this.tweens.add({
-          targets: deathSprite,
-          y: deathBaseY,
-          scale: 2,
-          duration: 500,
-          ease: 'Sine.easeInOut'
-        });
-      });
+      // 2) When animation finishes, replace with static sprite (last frame = on ground)
+      deathSprite.once(`animationcomplete-${deathAnimKey}`, showLyingOnGround);
+      deathSprite.once('animationcomplete', showLyingOnGround);
 
-      animDurationMs = 2000;
+      // 3) Backup: after 3.5s show last frame even if event didn't fire
+      this.time.delayedCall(3500, showLyingOnGround);
+
+      animDurationMs = 3200;
+    } else {
+      // Fallback: no death spritesheet — show same character "muerto en el suelo" with idle sprite rotated
+      const fallbackIdleKey =
+        characterId === 'destroyer' ? 'destroyer-idle'
+          : characterId === 'swordsman' ? 'swordsman-idle'
+          : 'robot-idle'; // vibecoder/robot/other use robot-idle
+      if (this.textures.exists(fallbackIdleKey)) {
+        const fallbackSprite = this.add.sprite(cx, deathBaseY, fallbackIdleKey, 0);
+        fallbackSprite.setAngle(-90);
+        fallbackSprite.setScale(2);
+        fallbackSprite.setAlpha(0);
+        gameOverContainer.add(fallbackSprite);
+        this.tweens.add({
+          targets: fallbackSprite,
+          alpha: 0.85,
+          duration: 500,
+          delay: 400,
+          ease: 'Power2'
+        });
+      }
     }
 
     // --- Phase 2: GAME OVER UI (appears after death animation) ---
@@ -4530,6 +4688,15 @@ export default class ArenaScene extends Phaser.Scene {
     }).setOrigin(0.5).setAlpha(0);
     gameOverContainer.add(phraseText);
     this.tweens.add({ targets: phraseText, alpha: 1, duration: 800, delay: uiDelay + 300, ease: 'Power2' });
+
+    // Game name branding
+    const gameBrandText = this.add.text(cx, h - 22, 'Cosmic Coder', {
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      color: '#444466'
+    }).setOrigin(0.5).setAlpha(0);
+    gameOverContainer.add(gameBrandText);
+    this.tweens.add({ targets: gameBrandText, alpha: 1, duration: 600, delay: uiDelay + 400, ease: 'Power2' });
 
     // Stats: SCORE and WAVE
     const scoreLabel = this.add.text(cx, statsStartY, `SCORE: ${score}   |   WAVE: ${wave}`, {
@@ -4866,7 +5033,7 @@ export default class ArenaScene extends Phaser.Scene {
     const buttonY = Math.min(cy + 360, this.scale.height - 70); // Push lower while staying on-screen
     
     if (result.status === 'zk' && result.txHash) {
-      // SUCCESS: Show the Stellar Expert link
+      // SUCCESS: Show verifier so reviewers can open and check the proof on-chain
       const zkProofBtn = this.add.text(cx, buttonY, '[ VIEW ZK PROOF // STELLAR EXPERT ]', {
         fontFamily: '"Press Start 2P", monospace',
         fontSize: `${Math.round(14 * uiScale)}px`,
@@ -4884,7 +5051,7 @@ export default class ArenaScene extends Phaser.Scene {
         padding: { x: 8, y: 4 }
       }).setOrigin(0.5).setAlpha(0);
       zkProofBtn.setResolution(2);
-      
+
       const zkLabel = this.add.text(cx, buttonY - 35, '✅ ZK Proof of Survival Verified On-Chain', {
         fontFamily: '"Press Start 2P", monospace',
         fontSize: `${Math.round(10 * uiScale)}px`,
@@ -4894,11 +5061,18 @@ export default class ArenaScene extends Phaser.Scene {
         strokeThickness: 4
       }).setOrigin(0.5).setAlpha(0);
       zkLabel.setResolution(2);
-      
+
+      const verifierHint = this.add.text(cx, buttonY - 58, '▶ Verifier: open link to review proof (Enter)', {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(10 * uiScale)}px`,
+        color: '#88aacc'
+      }).setOrigin(0.5).setAlpha(0);
+
+      gameOverContainer.add(verifierHint);
       gameOverContainer.add(zkLabel);
       gameOverContainer.add(zkProofBtn);
-      
-      this.tweens.add({ targets: [zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
+
+      this.tweens.add({ targets: [verifierHint, zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
       
       const openExplorer = () => {
         this._openingZkLinkUntil = Date.now() + 4000;

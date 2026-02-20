@@ -84,6 +84,7 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('robot-walk', '/assets/sprites/player/robot-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-hurt', '/assets/sprites/player/robot-hurt.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-death', '/assets/sprites/player/robot-death.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('vibecoder-death', '/assets/sprites/player/vibecoder-death.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-enabling', '/assets/sprites/player/robot-enabling.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-idle', '/assets/sprites/player/destroyer-idle.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-walk', '/assets/sprites/player/destroyer-walk.png', { frameWidth: 128, frameHeight: 128 });
@@ -235,7 +236,22 @@ export default class BootScene extends Phaser.Scene {
       console.warn('[BootScene] Skipping player animations — texture "player" or "robot-hurt" missing');
     }
   
-    // VibeCoder death animation (for game over screen)
+    // VibeCoder death animation (for game over screen) — standing → fall → lying on ground
+    if (this.textures.exists('vibecoder-death')) {
+      const frameTotal = this.textures.get('vibecoder-death')?.frameTotal || 1;
+      const end = Math.max(0, frameTotal - 1);
+      console.log(`[BootScene] vibecoder-death texture has ${frameTotal} frames, creating animation from 0 to ${end} (last = on ground)`);
+      this.anims.create({
+        key: 'vibecoder-death',
+        frames: this.anims.generateFrameNumbers('vibecoder-death', { start: 0, end }),
+        frameRate: 4,
+        repeat: 0
+      });
+    } else {
+      console.warn('[BootScene] Skipping vibecoder-death animation — texture missing');
+    }
+
+    // Robot (legacy/fallback) death animation (for game over screen)
     if (this.textures.exists('robot-death')) {
       const frameTotal = this.textures.get('robot-death')?.frameTotal || 1;
       const end = Math.max(0, frameTotal - 1);
@@ -243,7 +259,7 @@ export default class BootScene extends Phaser.Scene {
       this.anims.create({
         key: 'robot-death',
         frames: this.anims.generateFrameNumbers('robot-death', { start: 0, end }),
-        frameRate: 8,
+        frameRate: 4,
         repeat: 0
       });
     } else {
@@ -269,12 +285,14 @@ export default class BootScene extends Phaser.Scene {
       console.warn('[BootScene] Skipping player-destroyer animations — textures missing');
     }
 
-    // Destroyer death animation (for game over screen)
+    // Destroyer death animation (for game over screen) — dynamic frame count so last frame = on ground
     if (this.textures.exists('destroyer-death')) {
+      const frameTotal = this.textures.get('destroyer-death')?.frameTotal || 1;
+      const end = Math.max(0, frameTotal - 1);
       this.anims.create({
         key: 'destroyer-death',
-        frames: this.anims.generateFrameNumbers('destroyer-death', { start: 0, end: 5 }),
-        frameRate: 8,
+        frames: this.anims.generateFrameNumbers('destroyer-death', { start: 0, end }),
+        frameRate: 4,
         repeat: 0
       });
     } else {
@@ -293,12 +311,14 @@ export default class BootScene extends Phaser.Scene {
       console.warn('[BootScene] Skipping destroyer-enabling animation — texture missing');
     }
 
-    // StormMan death animation (for game over screen)
+    // StormMan death animation (for game over screen) — dynamic frame count so last frame = on ground
     if (this.textures.exists('swordsman-death')) {
+      const frameTotal = this.textures.get('swordsman-death')?.frameTotal || 1;
+      const end = Math.max(0, frameTotal - 1);
       this.anims.create({
         key: 'swordsman-death',
-        frames: this.anims.generateFrameNumbers('swordsman-death', { start: 0, end: 4 }),
-        frameRate: 8,
+        frames: this.anims.generateFrameNumbers('swordsman-death', { start: 0, end }),
+        frameRate: 4,
         repeat: 0
       });
     } else {
@@ -311,7 +331,7 @@ export default class BootScene extends Phaser.Scene {
       this.anims.create({
         key: 'sync-death',
         frames: this.anims.generateFrameNumbers('sync-death', { start: 0, end }),
-        frameRate: 8,
+        frameRate: 4,
         repeat: 0
       });
     } else {
@@ -324,7 +344,7 @@ export default class BootScene extends Phaser.Scene {
       this.anims.create({
         key: 'voidnull-death',
         frames: this.anims.generateFrameNumbers('voidnull-death', { start: 0, end }),
-        frameRate: 8,
+        frameRate: 4,
         repeat: 0
       });
     } else {

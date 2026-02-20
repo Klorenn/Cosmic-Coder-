@@ -1,5 +1,5 @@
 //! Shared ZK types for Groth16 BN254 verification.
-//! Used by groth16_verifier and shadow_ascension. No duplicated definitions.
+//! Used by groth16_verifier and cosmic_coder. No duplicated definitions.
 //! CAP-0074 (BN254); serialization: G1 = 64 bytes, G2 = 128 bytes, Fr = 32 bytes.
 
 #![no_std]

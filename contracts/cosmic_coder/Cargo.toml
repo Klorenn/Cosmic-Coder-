@@ -1,5 +1,5 @@
 [package]
-name = "shadow_ascension"
+name = "cosmic_coder"
 version = "0.1.0"
 description = "Provably Fair Survival - ZK wave/score proof + Game Hub integration"
 edition = "2021"
