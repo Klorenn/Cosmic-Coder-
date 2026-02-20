@@ -96,35 +96,37 @@ export function generateProofV2(body) {
 }
 
 function buildInputV2(body) {
-  const run_hash_hex = String(body.run_hash_hex || '').replace(/^0x/, '').padStart(64, '0').slice(0, 64);
-  if (run_hash_hex.length !== 64) {
-    throw new Error('run_hash_hex must be 64 hex chars (32 bytes)');
-  }
-  const run_hash_hi = BigInt('0x' + run_hash_hex.slice(0, 32)).toString();
-  const run_hash_lo = BigInt('0x' + run_hash_hex.slice(32, 64)).toString();
-  const score = Math.max(0, Math.floor(Number(body.score) || 0));
-  const wave = Math.max(0, Math.floor(Number(body.wave) || 0));
-  const nonce = BigInt(body.nonce != null ? body.nonce : 0).toString();
-  const season_id = Math.max(0, Math.floor(Number(body.season_id) || 1));
-  const challenge_id = Math.max(0, Math.floor(Number(body.challenge_id) || 1));
+  // Convert all inputs to strings for circom compatibility
+  const run_hash_hi = String(body.run_hash_hi || '0');
+  const run_hash_lo = String(body.run_hash_lo || '0');
+  const score = String(Math.max(0, Math.floor(Number(body.score) || 0)));
+  const wave = String(Math.max(0, Math.floor(Number(body.wave) || 0)));
+  const nonce = String(body.nonce != null ? body.nonce : '0');
+  const season_id = String(Math.max(0, Math.floor(Number(body.season_id) || 1)));
+  const challenge_id = String(Math.max(0, Math.floor(Number(body.challenge_id) || 1)));
   
   // Handle Stellar addresses - convert to hex for circuit
   const stellarAddressToHex = (address) => {
     if (!address || typeof address !== 'string') return '0';
     const hash = crypto.createHash('sha256').update(address).digest('hex');
-    return '0x' + hash;
+    // Take first 64 chars (32 bytes) as field element
+    return '0x' + hash.slice(0, 64);
   };
+  
+  const player_address = stellarAddressToHex(body.player_address);
+  const contract_id = stellarAddressToHex(body.contract_id);
+  const domain_separator = String(body.domain_separator || '0');
   
   return {
     run_hash_hi,
     run_hash_lo,
-    score: String(score),
-    wave: String(wave),
+    score,
+    wave,
     nonce,
-    season_id: String(season_id),
-    challenge_id: String(challenge_id),
-    player_address: stellarAddressToHex(body.player_address),
-    contract_id: stellarAddressToHex(body.contract_id),
-    domain_separator: body.domain_separator || '0'
+    season_id,
+    challenge_id,
+    player_address,
+    contract_id,
+    domain_separator
   };
 }
