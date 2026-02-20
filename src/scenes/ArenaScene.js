@@ -495,7 +495,9 @@ export default class ArenaScene extends Phaser.Scene {
     // ZK Configuration Check
     if (this.gameMode === 'zk_ranked') {
       console.log('[ZK Config] Checking configuration...');
-      console.log('[ZK Config] Contract ID:', gameClient.getContractId());
+      const contractId = gameClient.getContractId();
+      console.log('[ZK Config] Contract ID from gameClient:', contractId);
+      console.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID);
       console.log('[ZK Config] Prover URL:', gameClient.getZkProverUrl());
       console.log('[ZK Config] Is contract configured:', gameClient.isContractConfigured());
       console.log('[ZK Config] Is prover configured:', gameClient.isZkProverConfigured());
@@ -4855,13 +4857,21 @@ export default class ArenaScene extends Phaser.Scene {
       const contractId = gameClient.getContractId();
       if (!contractId) return false;
       
-      const { rpc } = await import('@stellar/stellar-sdk');
-      const server = new rpc.Server('https://soroban-testnet.stellar.org');
+      console.log('[ZK Config] Checking contract:', contractId);
       
-      // Try to get the account - if it exists, it's a contract
-      const account = await server.getAccount(contractId);
-      console.log('[ZK Config] Contract account found:', account.accountId());
-      return true;
+      // Use Stellar Expert API which works
+      const response = await fetch(`https://api.stellar.expert/explorer/testnet/contract/${contractId}`);
+      const data = await response.json();
+      
+      if (data.contract === contractId) {
+        console.log('[ZK Config] ✅ Contract found on Stellar Expert:', data.contract);
+        console.log('[ZK Config] Contract creator:', data.creator);
+        console.log('[ZK Config] Contract invocations:', data.subinvocation);
+        return true;
+      } else {
+        console.log('[ZK Config] ❌ Contract ID mismatch');
+        return false;
+      }
     } catch (e) {
       console.log('[ZK Config] Contract not found on network:', e?.message || e);
       return false;
