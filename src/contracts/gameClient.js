@@ -157,11 +157,26 @@ function ensureBytes(val) {
  * Works in browser (Uint8Array) and Node (Buffer). Tolerates API returning arrays/objects.
  */
 function contractProofToZk(payload) {
+  // Handle both proof formats: alpha/beta/gamma OR pi_a/pi_b/pi_c
+  const pi_a = payload.proof.pi_a || payload.proof.alpha;
+  const pi_b = payload.proof.pi_b || payload.proof.beta;
+  const pi_c = payload.proof.pi_c || payload.proof.gamma;
+  
+  // Validate required proof fields
+  if (!pi_a || !pi_b || !pi_c) {
+    throw new Error('Invalid proof format received from prover: missing pi_a/pi_b/pi_c or alpha/beta/gamma');
+  }
+  
+  // Validate verification key fields
+  if (!payload.vk.alpha || !payload.vk.beta || !payload.vk.gamma || !payload.vk.delta) {
+    throw new Error('Invalid verification key format received from prover: missing required vk fields');
+  }
+  
   return {
     proof: {
-      a: ensureBytes(payload.proof.a),
-      b: ensureBytes(payload.proof.b),
-      c: ensureBytes(payload.proof.c)
+      a: ensureBytes(pi_a),
+      b: ensureBytes(pi_b),
+      c: ensureBytes(pi_c)
     },
     vk: {
       alpha: ensureBytes(payload.vk.alpha),
