@@ -29,13 +29,15 @@ function buildInput(body) {
   const wave = Math.max(0, Math.floor(Number(body.wave) || 0));
   const nonce = BigInt(body.nonce != null ? body.nonce : 0).toString();
   const season_id = Math.max(0, Math.floor(Number(body.season_id) || 1));
+  const used_zk_weapon = Number(body.used_zk_weapon) ? 1 : 0;
   return {
     run_hash_hi,
     run_hash_lo,
     score: String(score),
     wave: String(wave),
     nonce,
-    season_id: String(season_id)
+    season_id: String(season_id),
+    used_zk_weapon: String(used_zk_weapon)
   };
 }
 
@@ -78,7 +80,7 @@ export function generateProofV2(body) {
   if (!fs.existsSync(BUILD_DIR)) {
     throw new Error('circuits/build not found. Run npm run zk:build first.');
   }
-  if (!fs.existsSync(path.join(BUILD_DIR, 'GameRunV2_js', 'GameRunV2_js', 'GameRunV2.wasm'))) {
+  if (!fs.existsSync(path.join(BUILD_DIR, 'GameRunV2_js', 'GameRunV2.wasm'))) {
     throw new Error('GameRunV2 circuit not built. Run npm run zk:build first.');
   }
   fs.writeFileSync(inputPath, JSON.stringify(input, null, 2));
@@ -96,12 +98,20 @@ export function generateProofV2(body) {
 }
 
 function buildInputV2(body) {
-  // Convert all inputs to strings for circom compatibility
-  const run_hash_hi = String(body.run_hash_hi || '0');
-  const run_hash_lo = String(body.run_hash_lo || '0');
+  // Normalize any numeric/hex-ish value to decimal string for snarkjs/circom runtime.
+  const toDecimalString = (val) => {
+    if (val === undefined || val === null || val === '') return '0';
+    let str = String(val).trim();
+    if (/^[0-9a-fA-F]+$/.test(str) && !str.startsWith('0x')) str = `0x${str}`;
+    return BigInt(str).toString(10);
+  };
+
+  // Convert all inputs to decimal strings for circom compatibility
+  const run_hash_hi = toDecimalString(body.run_hash_hi);
+  const run_hash_lo = toDecimalString(body.run_hash_lo);
   const score = String(Math.max(0, Math.floor(Number(body.score) || 0)));
   const wave = String(Math.max(0, Math.floor(Number(body.wave) || 0)));
-  const nonce = String(body.nonce != null ? body.nonce : '0');
+  const nonce = toDecimalString(body.nonce != null ? body.nonce : '0');
   const season_id = String(Math.max(0, Math.floor(Number(body.season_id) || 1)));
   const challenge_id = String(Math.max(0, Math.floor(Number(body.challenge_id) || 1)));
   
@@ -120,11 +130,17 @@ function buildInputV2(body) {
     return { hi, lo };
   };
   
-  const player_address_hi = stellarAddressTo128BitParts(body.player_address).hi;
-  const player_address_lo = stellarAddressTo128BitParts(body.player_address).lo;
-  const contract_id_hi = stellarAddressTo128BitParts(body.contract_id).hi;
-  const contract_id_lo = stellarAddressTo128BitParts(body.contract_id).lo;
-  const domain_separator = String(body.domain_separator || '0');
+  const playerParts = body.player_address_hi != null && body.player_address_lo != null
+    ? { hi: toDecimalString(body.player_address_hi), lo: toDecimalString(body.player_address_lo) }
+    : stellarAddressTo128BitParts(body.player_address);
+  const contractParts = body.contract_id_hi != null && body.contract_id_lo != null
+    ? { hi: toDecimalString(body.contract_id_hi), lo: toDecimalString(body.contract_id_lo) }
+    : stellarAddressTo128BitParts(body.contract_id);
+  const player_address_hi = playerParts.hi;
+  const player_address_lo = playerParts.lo;
+  const contract_id_hi = contractParts.hi;
+  const contract_id_lo = contractParts.lo;
+  const domain_separator = toDecimalString(body.domain_separator || '0');
   
   return {
     run_hash_hi,

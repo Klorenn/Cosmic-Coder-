@@ -213,7 +213,7 @@ app.post('/leaderboard', (req, res) => {
 });
 
 app.post('/zk/prove', (req, res) => {
-  const { run_hash_hex, score, wave, nonce, season_id } = req.body || {};
+  const { run_hash_hex, score, wave, nonce, season_id, used_zk_weapon } = req.body || {};
   if (!run_hash_hex || score == null || wave == null || nonce == null) {
     return res.status(400).json({
       error: 'Missing required fields: run_hash_hex, score, wave, nonce. season_id optional (default 1).'
@@ -225,7 +225,8 @@ app.post('/zk/prove', (req, res) => {
       score: Number(score),
       wave: Number(wave),
       nonce: Number(nonce),
-      season_id: season_id != null ? Number(season_id) : 1
+      season_id: season_id != null ? Number(season_id) : 1,
+      used_zk_weapon: used_zk_weapon != null ? Number(used_zk_weapon) : 0
     });
     res.status(200).json(payload);
   } catch (err) {
@@ -286,11 +287,12 @@ app.post('/zk/prove_v2', async (req, res) => {
   };
 
   // Convert hex addresses to BigInt and split into 128-bit parts
-  const playerBN = BigInt(player_address.replace(/^0x/, ''));
+  // FIX: Add 0x prefix for BigInt to parse hex correctly
+  const playerBN = BigInt('0x' + player_address.replace(/^0x/, ''));
   const player_hi = playerBN >> 128n;
   const player_lo = playerBN & ((1n << 128n) - 1n);
   
-  const contractBN = BigInt(contract_id.replace(/^0x/, ''));
+  const contractBN = BigInt('0x' + contract_id.replace(/^0x/, ''));
   const contract_hi = contractBN >> 128n;
   const contract_lo = contractBN & ((1n << 128n) - 1n);
 

@@ -59,9 +59,16 @@ impl Verifier {
         }
 
         // Unpack proof bytes
-        let proof_a_bytes = BytesN::<64>::from_array(&env, &proof.to_array()[..64]);
-        let proof_b_bytes = BytesN::<128>::from_array(&env, &proof.to_array()[64..192]);
-        let proof_c_bytes = BytesN::<64>::from_array(&env, &proof.to_array()[192..256]);
+        let proof_arr = proof.to_array();
+        let mut a = [0u8; 64];
+        a.copy_from_slice(&proof_arr[0..64]);
+        let mut b = [0u8; 128];
+        b.copy_from_slice(&proof_arr[64..192]);
+        let mut c = [0u8; 64];
+        c.copy_from_slice(&proof_arr[192..256]);
+        let proof_a_bytes = BytesN::<64>::from_array(&env, &a);
+        let proof_b_bytes = BytesN::<128>::from_array(&env, &b);
+        let proof_c_bytes = BytesN::<64>::from_array(&env, &c);
 
         let proof_a = Bn254G1Affine::from_bytes(proof_a_bytes);
         let proof_b = Bn254G2Affine::from_bytes(proof_b_bytes);

@@ -4655,11 +4655,18 @@ export default class ArenaScene extends Phaser.Scene {
             this.zkProofSubmitted = true;
             console.log('[ZK Submit V2] Starting ZK prover flow');
             try { zkStatusText.setText('Compiling ZK Proof of Survival... Please wait.').setAlpha(1); } catch (_) {}
+            // Ensure we have a valid session in Game Hub before submit_zk calls end_game().
+            try {
+              await gameClient.startMatch(addr, sign);
+            } catch (e) {
+              console.warn('[ZK Submit] start_match failed, continuing anyway:', e?.message || e);
+            }
             // Derive run_hash_hi/lo from computeGameHash
             const runHashHex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
             const runHashHi = runHashHex.slice(0, 64);
             const runHashLo = runHashHex.slice(64, 128);
-            const nonce = Date.now();
+            // Use high-entropy u64 nonce to minimize collisions across retries/rapid submissions.
+            const nonce = (BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000))).toString();
             const seasonId = 1;
             const challengeId = 1;
             const contractId = gameClient.getContractId();
@@ -4677,14 +4684,46 @@ export default class ArenaScene extends Phaser.Scene {
               challenge_id: challengeId,
               player_address: addr,
               contract_id: contractId,
-              domain_separator: domainSeparator
+              domain_separator: domainSeparator,
+              used_zk_weapon: this.usedZkWeapon ? 1 : 0 // ZK Plasma Rifle flag
             };
-            // TODO: load vk_hash from environment or contract storage; for now use placeholder
-            const vkHash = '0000000000000000000000000000000000000000000000000000000000000000';
-            console.log('[ZK Submit V2] Starting ZK submission...');
-            console.log('[ZK Submit V2] Payload:', JSON.stringify(payload, null, 2));
-            const txResult = await gameClient.submitZkFromProverV2(addr, sign, undefined, payload, vkHash);
-            console.log('[ZK Submit V2] submitZkFromProverV2 success:', txResult);
+            
+            // Check if trustless mode is enabled (local proof generation, no server)
+            const useTrustless = typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_TRUSTLESS === 'true';
+            
+            const submitOnce = async (p) => {
+              if (useTrustless) {
+                // TRUSTLESS MODE (like xray-games): Generate proof locally, no server needed
+                console.log('[ZK Trustless] Generating local proof...');
+                try { zkStatusText.setText('Generating local ZK proof...').setAlpha(1); } catch (_) {}
+                const r = await gameClient.submitZkTrustless(addr, sign, p);
+                console.log('[ZK Trustless] Local proof submitted:', r);
+                return r;
+              }
+              // SERVER MODE: Backend generates proof
+              const vkHash = '0000000000000000000000000000000000000000000000000000000000000000';
+              console.log('[ZK Submit] Starting ZK submission...');
+              console.log('[ZK Submit] Payload:', JSON.stringify(p, null, 2));
+              const r = await gameClient.submitZkFromProverV2(addr, sign, undefined, p, vkHash);
+              console.log('[ZK Submit] submitZkFromProverV2 success:', r);
+              return r;
+            };
+
+            let txResult;
+            try {
+              txResult = await submitOnce(payload);
+            } catch (firstErr) {
+              const msg = String(firstErr?.message || '');
+              // Retry once with a fresh nonce if chain trapped (commonly replay panic path).
+              if (msg.includes('UnreachableCodeReached') || msg.includes('proof already used')) {
+                const retryNonce = (BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000))).toString();
+                const retryPayload = { ...payload, nonce: retryNonce };
+                console.warn('[ZK Submit] Retrying once with fresh nonce:', retryNonce);
+                txResult = await submitOnce(retryPayload);
+              } else {
+                throw firstErr;
+              }
+            }
             console.log('[ZK Submit V2] Transaction hash:', txResult?.hash);
             try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
             clear();

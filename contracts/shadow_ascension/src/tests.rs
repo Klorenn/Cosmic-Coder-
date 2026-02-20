@@ -7,7 +7,7 @@ extern crate std;
 use std::panic::catch_unwind;
 
 use soroban_sdk::{
-    contract, contractimpl, vec, Address, Env, Vec as SorobanVec,
+    contract, contractimpl, vec, Address, Bytes, Env, Vec as SorobanVec,
     testutils::Address as _,
 };
 use zk_types::{ZkProof, ZkVerificationKey, G1_SIZE, G2_SIZE, FR_SIZE};
@@ -41,6 +41,7 @@ fn g2(env: &Env) -> soroban_sdk::BytesN<128> {
     soroban_sdk::BytesN::from_array(env, &[0u8; G2_SIZE])
 }
 
+/// Default VK with 7 ic elements (for 6 pub_signals)
 fn default_vk(env: &Env) -> ZkVerificationKey {
     let g1 = g1(env);
     ZkVerificationKey {
@@ -48,7 +49,8 @@ fn default_vk(env: &Env) -> ZkVerificationKey {
         beta: g2(env),
         gamma: g2(env),
         delta: g2(env),
-        ic: vec![env, g1.clone(), g1],
+        // ic.len() = pub_signals.len() + 1 = 7
+        ic: vec![env, g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1.clone(), g1],
     }
 }
 
@@ -60,15 +62,18 @@ fn default_proof(env: &Env) -> ZkProof {
     }
 }
 
-fn default_pub_signals(env: &Env) -> SorobanVec<soroban_sdk::BytesN<32>> {
-    vec![env, soroban_sdk::BytesN::from_array(env, &[0u8; FR_SIZE])]
+/// Default pub_signals with 6 elements matching circuit outputs:
+/// [run_hash_hi, run_hash_lo, score, wave, nonce, season_id]
+fn default_pub_signals(env: &Env) -> SorobanVec<Bytes> {
+    let zero = Bytes::from_slice(env, &[0u8; FR_SIZE]);
+    vec![env, zero.clone(), zero.clone(), zero.clone(), zero.clone(), zero.clone(), zero]
 }
 
-fn run_hash_32(env: &Env) -> soroban_sdk::BytesN<32> {
-    soroban_sdk::BytesN::from_array(env, &[0u8; 32])
+fn run_hash_32(env: &Env) -> Bytes {
+    Bytes::from_slice(env, &[0u8; 32])
 }
 
-/// submit_zk must fail (panic) when verifier is not set.
+/// submit_zk must fail (panic) when verifier address is invalid/unusable.
 #[test]
 fn test_submit_zk_fails_when_verifier_not_set() {
     let env = Env::default();
@@ -78,7 +83,8 @@ fn test_submit_zk_fails_when_verifier_not_set() {
     let policy = env.register(CosmicCoder, ());
     let policy_client = CosmicCoderClient::new(&env, &policy);
 
-    policy_client.init(&hub);
+    let invalid_verifier = Address::generate(&env);
+    policy_client.init(&hub, &invalid_verifier);
     let player = Address::generate(&env);
 
     let res = catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -108,8 +114,7 @@ fn test_submit_zk_anti_replay() {
     let policy = env.register(CosmicCoder, ());
     let policy_client = CosmicCoderClient::new(&env, &policy);
 
-    policy_client.init(&hub);
-    policy_client.set_verifier(&verifier);
+    policy_client.init(&hub, &verifier);
 
     let player = Address::generate(&env);
     let nonce = 42u64;
@@ -160,8 +165,7 @@ fn test_submit_zk_invalid_proof_verifier_error() {
     let policy = env.register(CosmicCoder, ());
     let policy_client = CosmicCoderClient::new(&env, &policy);
 
-    policy_client.init(&hub);
-    policy_client.set_verifier(&verifier);
+    policy_client.init(&hub, &verifier);
 
     let player = Address::generate(&env);
     let g1 = g1(&env);
@@ -201,8 +205,7 @@ fn test_submit_zk_invalid_input_score_below_min() {
     let policy = env.register(CosmicCoder, ());
     let policy_client = CosmicCoderClient::new(&env, &policy);
 
-    policy_client.init(&hub);
-    policy_client.set_verifier(&verifier);
+    policy_client.init(&hub, &verifier);
     let player = Address::generate(&env);
 
     // wave=5 -> min_score=50; score=40 fails
@@ -233,8 +236,7 @@ fn test_submit_zk_invalid_input_zero_score() {
     let policy = env.register(CosmicCoder, ());
     let policy_client = CosmicCoderClient::new(&env, &policy);
 
-    policy_client.init(&hub);
-    policy_client.set_verifier(&verifier);
+    policy_client.init(&hub, &verifier);
     let player = Address::generate(&env);
 
     let res = catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -264,8 +266,7 @@ fn test_submit_zk_valid_updates_nonce_leaderboard_and_emits_event() {
     let policy = env.register(CosmicCoder, ());
     let policy_client = CosmicCoderClient::new(&env, &policy);
 
-    policy_client.init(&hub);
-    policy_client.set_verifier(&verifier);
+    policy_client.init(&hub, &verifier);
 
     let player = Address::generate(&env);
     let nonce = 77u64;
@@ -308,6 +309,17 @@ fn hex_to_array<const N: usize>(env: &Env, hex: &str) -> soroban_sdk::BytesN<N> 
     soroban_sdk::BytesN::from_array(env, &arr)
 }
 
+fn hex_to_bytes(env: &Env, hex: &str) -> Bytes {
+    let hex = hex.trim_start_matches("0x");
+    assert!(hex.len() % 2 == 0, "hex must have even length");
+    let mut out: std::vec::Vec<u8> = std::vec::Vec::with_capacity(hex.len() / 2);
+    for c in hex.as_bytes().chunks(2) {
+        let s = std::str::from_utf8(c).unwrap();
+        out.push(u8::from_str_radix(s, 16).unwrap());
+    }
+    Bytes::from_slice(env, &out)
+}
+
 /// When circuits/build/contract_proof.json exists (after `npm run zk:proof`), verifies proof on verifier and submit_zk on policy.
 #[test]
 fn test_real_proof_verifier_and_submit_zk() {
@@ -344,26 +356,28 @@ fn test_real_proof_verifier_and_submit_zk() {
         delta: hex_to_array::<128>(&env, vk_j.get("delta").unwrap().as_str().unwrap()),
         ic,
     };
+    let mut pub_signals_n = SorobanVec::new(&env);
     let mut pub_signals = SorobanVec::new(&env);
     for h in pub_j {
-        pub_signals.push_back(hex_to_array::<32>(&env, h.as_str().unwrap()));
+        let bn = hex_to_array::<32>(&env, h.as_str().unwrap());
+        pub_signals_n.push_back(bn.clone());
+        pub_signals.push_back(Bytes::from_slice(&env, &bn.to_array()));
     }
 
     let verifier = env.register(Groth16Verifier, ());
     let verifier_client = Groth16VerifierClient::new(&env, &verifier);
-    let ok = verifier_client.verify_proof(&vk, &proof, &pub_signals);
+    let ok = verifier_client.verify_proof(&vk, &proof, &pub_signals_n);
     assert!(ok, "real proof must verify to true");
 
     let hub = env.register(MockHub, ());
     let policy = env.register(CosmicCoder, ());
     let policy_client = CosmicCoderClient::new(&env, &policy);
-    policy_client.init(&hub);
-    policy_client.set_verifier(&verifier);
+    policy_client.init(&hub, &verifier);
 
     let player = Address::generate(&env);
     let nonce = 1u64;
     let season_id = 1u32;
-    let run_hash = hex_to_array::<32>(&env, pub_j.get(0).unwrap().as_str().unwrap());
+    let run_hash = pub_signals.get(0).unwrap().clone();
     let score = 100u32;
     let wave = 5u32;
 

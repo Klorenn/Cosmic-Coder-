@@ -16,7 +16,7 @@ export default defineConfig({
     fs: {
       allow: [
         // Keep project root accessible by Vite dev server
-        '/Users/paukoh/vibe-coder',
+        '/Users/paukoh/Cosmic-Coder-',
         // Allow loading local art packs via /@fs during development
         '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version',
         '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version/layered'

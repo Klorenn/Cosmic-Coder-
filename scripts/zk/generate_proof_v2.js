@@ -17,11 +17,16 @@ const CIRCUIT_NAME = 'GameRunV2';
 
 const inputPath = process.argv[2] || path.join(CIRCUITS, 'input.json');
 const buildDir = process.argv[3] || BUILD;
-const wasmDir = path.join(buildDir, `${CIRCUIT_NAME}_js`, `${CIRCUIT_NAME}_js`);
-const zkeyPath = path.join(buildDir, `${CIRCUIT_NAME}_js`, `${CIRCUIT_NAME}.zkey`);
-
-if (!fs.existsSync(path.join(buildDir, `${CIRCUIT_NAME}_js`, `${CIRCUIT_NAME}.r1cs`))) {
+if (!fs.existsSync(path.join(buildDir, `${CIRCUIT_NAME}.r1cs`))) {
   console.error('Run build_GameRunV2.sh first.');
+  process.exit(1);
+}
+if (!fs.existsSync(path.join(buildDir, `${CIRCUIT_NAME}_js`, `${CIRCUIT_NAME}.wasm`))) {
+  console.error('Missing wasm. Run npm run zk:build first.');
+  process.exit(1);
+}
+if (!fs.existsSync(path.join(buildDir, `${CIRCUIT_NAME}_final.zkey`))) {
+  console.error('Missing zkey. Run npm run zk:build first.');
   process.exit(1);
 }
 if (!fs.existsSync(inputPath)) {
@@ -35,7 +40,7 @@ fs.writeFileSync(path.join(buildDir, 'input.json'), JSON.stringify(input, null, 
 
 console.log('Running snarkjs fullprove for GameRunV2...');
 execSync(
-  `cd "${buildDir}" && snarkjs groth16 fullprove input.json ${CIRCUIT_NAME}_js/${CIRCUIT_NAME}_js/${CIRCUIT_NAME}.wasm ${CIRCUIT_NAME}_js/${CIRCUIT_NAME}.zkey proof.json public.json`,
+  `cd "${buildDir}" && snarkjs groth16 fullprove input.json ${CIRCUIT_NAME}_js/${CIRCUIT_NAME}.wasm ${CIRCUIT_NAME}_final.zkey proof.json public.json`,
   { stdio: 'inherit' }
 );
 

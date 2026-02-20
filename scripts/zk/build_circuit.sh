@@ -11,7 +11,7 @@ BUILD_DIR="$CIRCUITS_DIR/build"
 PTAU_FILE="$BUILD_DIR/pot12_final.ptau"
 
 # List of circuits to build
-CIRCUITS=("GameRun" "SkillProof" "PoseidonHash")
+CIRCUITS=("GameRun" "GameRunV2" "SkillProof" "PoseidonHash")
 
 mkdir -p "$BUILD_DIR"
 cd "$CIRCUITS_DIR"
@@ -84,3 +84,9 @@ for CIRCUIT_NAME in "${CIRCUITS[@]}"; do
     echo "  - ${CIRCUIT_NAME}_vkey.json"
   fi
 done
+
+# Copy main circuit vkey as vkey.json for export_for_contract.js compatibility
+if [ -f "$BUILD_DIR/GameRun_vkey.json" ]; then
+  cp "$BUILD_DIR/GameRun_vkey.json" "$BUILD_DIR/vkey.json"
+  echo "  - vkey.json (symlink to GameRun_vkey.json)"
+fi

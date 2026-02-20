@@ -24,6 +24,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "application"
+version = "0.2.0"
+dependencies = [
+ "soroban-sdk",
+ "zk_types",
+]
+
+[[package]]
 name = "arbitrary"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -952,6 +960,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "policy"
+version = "0.2.0"
+dependencies = [
+ "soroban-sdk",
+ "zk_types",
+]
+
+[[package]]
 name = "powerfmt"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1616,6 +1632,14 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "verifier"
+version = "0.2.0"
+dependencies = [
+ "soroban-sdk",
+ "zk_types",
+]
 
 [[package]]
 name = "version_check"
