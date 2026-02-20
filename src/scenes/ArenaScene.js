@@ -4625,11 +4625,11 @@ export default class ArenaScene extends Phaser.Scene {
             };
             // TODO: load vk_hash from environment or contract storage; for now use placeholder
             const vkHash = '0000000000000000000000000000000000000000000000000000000000000000';
-            await gameClient.submitZkFromProverV2(addr, sign, undefined, payload, vkHash);
+            const txResult = await gameClient.submitZkFromProverV2(addr, sign, undefined, payload, vkHash);
             console.log('[ZK Submit V2] submitZkFromProverV2 success');
             try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
             clear();
-            resolve('zk');
+            resolve({ status: 'zk', txHash: txResult.hash });
           } else {
             console.log('[Score Submit] submitResult starting');
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
@@ -4660,10 +4660,76 @@ export default class ArenaScene extends Phaser.Scene {
       this.input.keyboard.on('keydown', handleKeydown);
       blackBg.on('pointerdown', goToMenu);
 
-      if (status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
+      // Show ZK Proof Success UI if transaction was successful
+      if (status && status.status === 'zk' && status.txHash) {
+        this.showZkProofSuccessUI(status.txHash, cx, cy, gameOverContainer);
+      }
+
+      if (status && status.status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
         const bonus = Math.floor(totalBits * (BALANCE.ZK_BITS_MULTIPLIER - 1));
         window.VIBE_UPGRADES.addCurrency(bonus);
       }
+    });
+  }
+
+  showZkProofSuccessUI(txHash, cx, cy, gameOverContainer) {
+    const uiScale = this.uiScale || 1;
+    const buttonY = cy + 280; // Position below other UI elements
+    
+    // Create the ZK Proof Success button
+    const zkProofBtn = this.add.text(cx, buttonY, '🔍 View ZK Proof on Stellar Expert', {
+      fontFamily: 'monospace',
+      fontSize: `${Math.round(14 * uiScale)}px`,
+      color: '#00ffff',
+      fontStyle: 'bold',
+      backgroundColor: '#0a0a14',
+      padding: { x: 12, y: 8 }
+    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
+    
+    // Add background panel for the button
+    const btnBg = this.add.rectangle(cx, buttonY, 380, 50, 0x0a0a14, 0.9);
+    btnBg.setStrokeStyle(2, 0x00ffff, 0.8);
+    btnBg.setOrigin(0.5).setAlpha(0);
+    
+    // Add label above the button
+    const zkLabel = this.add.text(cx, buttonY - 35, '✅ ZK Proof of Survival Verified On-Chain', {
+      fontFamily: 'monospace',
+      fontSize: `${Math.round(12 * uiScale)}px`,
+      color: '#00ff88',
+      fontStyle: 'bold'
+    }).setOrigin(0.5).setAlpha(0);
+    
+    gameOverContainer.add([btnBg, zkLabel, zkProofBtn]);
+    
+    // Fade in animation
+    this.tweens.add({ targets: [btnBg, zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
+    
+    // Button interactions
+    zkProofBtn.on('pointerover', () => {
+      zkProofBtn.setColor('#ffffff');
+      btnBg.setStrokeStyle(2, 0xffffff, 1);
+    });
+    
+    zkProofBtn.on('pointerout', () => {
+      zkProofBtn.setColor('#00ffff');
+      btnBg.setStrokeStyle(2, 0x00ffff, 0.8);
+    });
+    
+    zkProofBtn.on('pointerdown', () => {
+      // Open Stellar Expert in a new tab
+      const network = 'testnet'; // We're using testnet
+      const url = `https://stellar.expert/explorer/${network}/tx/${txHash}`;
+      window.open(url, '_blank');
+    });
+    
+    // Add subtle glow effect
+    this.createTrackedTween({
+      targets: btnBg,
+      alpha: { from: 0.9, to: 1 },
+      duration: 2000,
+      yoyo: true,
+      repeat: -1,
+      ease: 'Sine.easeInOut'
     });
   }
 

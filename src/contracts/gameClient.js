@@ -5,6 +5,8 @@
  * @see https://github.com/jamesbachini/Stellar-Game-Studio
  */
 
+import { StrKey } from '@stellar/stellar-sdk';
+
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 
@@ -102,6 +104,13 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
  * @returns {Promise<{ proof: { a, b, c }, vk: object, pub_signals: string[] }>} hex strings
  */
 export async function requestZkProofV2(baseUrl, payload) {
+  // Helper to convert bytes to hex string
+  const toHexString = (bytes) => bytes.reduce((str, byte) => str + byte.toString(16).padStart(2, '0'), '');
+  
+  // Decode Stellar Base32 addresses to hex strings
+  const playerAddressHex = toHexString(StrKey.decodeEd25519PublicKey(payload.player_address));
+  const contractIdHex = toHexString(StrKey.decodeContract(payload.contract_id || getContractId()));
+  
   const url = (baseUrl || getZkProverUrl()).replace(/\/$/, '') + '/zk/prove_v2';
   const res = await fetch(url, {
     method: 'POST',
@@ -114,8 +123,8 @@ export async function requestZkProofV2(baseUrl, payload) {
       nonce: payload.nonce != null ? payload.nonce.toString() : payload.nonce,
       season_id: payload.season_id != null ? payload.season_id : 1,
       challenge_id: payload.challenge_id != null ? payload.challenge_id : 1,
-      player_address: payload.player_address,
-      contract_id: payload.contract_id || getContractId(),
+      player_address: playerAddressHex,
+      contract_id: contractIdHex,
       domain_separator: payload.domain_separator
     })
   });
