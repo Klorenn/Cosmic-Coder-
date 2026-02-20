@@ -63,7 +63,7 @@ function normalizeWebAuthDomain(urlOrDomain) {
   }
 }
 
-const rawWebAuthDomain = getEnv('SEP10_WEB_AUTH_DOMAIN', process.env.RENDER_EXTERNAL_URL || 'http://localhost:3333');
+const rawWebAuthDomain = getEnv('SEP10_WEB_AUTH_DOMAIN', process.env.RENDER_EXTERNAL_URL || 'https://cosmic-coder.onrender.com');
 export const SEP10_WEB_AUTH_DOMAIN = normalizeWebAuthDomain(rawWebAuthDomain) || rawWebAuthDomain;
 export const SEP10_NETWORK_PASSPHRASE = getEnv('SEP10_NETWORK_PASSPHRASE', NETWORK_PASSPHRASES.testnet);
 export const SEP10_CHALLENGE_TIMEOUT = Math.min(

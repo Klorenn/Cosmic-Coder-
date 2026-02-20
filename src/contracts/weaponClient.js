@@ -119,8 +119,9 @@ export async function getUnlockedWeapons(publicKey) {
     );
     
     // Parse result as array of weapon IDs
-    const weaponIds = JSON.parse(result.results[0] || '[1]');
-    return weaponIds.length > 0 ? weaponIds : [1];
+    const rawResult = result.results?.[0];
+    const weaponIds = rawResult ? JSON.parse(rawResult) : [];
+    return Array.isArray(weaponIds) && weaponIds.length > 0 ? weaponIds : [1];
   } catch (e) {
     console.warn('[WeaponClient] Failed to get unlocked weapons:', e);
     return [1]; // Default to starter weapon

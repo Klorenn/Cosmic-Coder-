@@ -16,7 +16,7 @@ export function getContractId() {
 /** Base URL for ZK prover backend (option B: backend generates proof). */
 export function getZkProverUrl() {
   return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_ZK_PROVER_URL) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || 'http://localhost:3333';
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || 'https://cosmic-coder-zk-prover.onrender.com';
 }
 
 /**
@@ -97,7 +97,7 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
 /**
  * Request ZK proof from backend (option B). Backend runs fullprove and returns contract_proof format.
  * V2: includes challenge_id, player_address, contract_id, domain_separator.
- * @param {string} [baseUrl] - Prover server URL (default VITE_ZK_PROVER_URL or http://localhost:3333)
+ * @param {string} [baseUrl] - Prover server URL (default VITE_ZK_PROVER_URL or https://cosmic-coder-zk-prover.onrender.com)
  * @param {{ run_hash_hi: string, run_hash_lo: string, score: number, wave: number, nonce: number, season_id?: number, challenge_id?: number, player_address?: string, contract_id?: string, domain_separator?: string }} payload
  * @returns {Promise<{ proof: { a, b, c }, vk: object, pub_signals: string[] }>} hex strings
  */
@@ -111,7 +111,7 @@ export async function requestZkProofV2(baseUrl, payload) {
       run_hash_lo: payload.run_hash_lo,
       score: payload.score,
       wave: payload.wave,
-      nonce: payload.nonce,
+      nonce: payload.nonce != null ? payload.nonce.toString() : payload.nonce,
       season_id: payload.season_id != null ? payload.season_id : 1,
       challenge_id: payload.challenge_id != null ? payload.challenge_id : 1,
       player_address: payload.player_address,
@@ -242,7 +242,7 @@ export async function submitZkV2(
   const domainMap = [
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('challenge_id'), val: xdr.ScVal.scvU32(domain.challenge_id) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('player_address'), val: new Address(domain.player_address).toScVal() }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('nonce'), val: xdr.ScVal.scvU64(BigInt(domain.nonce)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('nonce'), val: xdr.ScVal.scvU64(toBigInt(domain.nonce)) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('contract_id'), val: new Address(domain.contract_id).toScVal() }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('domain_separator'), val: xdr.ScVal.scvBytes(hexToBytes(domain.domain_separator)) })
   ];
@@ -253,7 +253,7 @@ export async function submitZkV2(
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('run_hash_lo'), val: xdr.ScVal.scvBytes(hexToBytes(publicInputs.run_hash_lo)) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('score'), val: xdr.ScVal.scvU32(publicInputs.score) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('wave'), val: xdr.ScVal.scvU32(publicInputs.wave) }),
-    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('nonce'), val: xdr.ScVal.scvU64(BigInt(publicInputs.nonce)) }),
+    new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('nonce'), val: xdr.ScVal.scvU64(toBigInt(publicInputs.nonce)) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('season_id'), val: xdr.ScVal.scvU32(publicInputs.season_id) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('challenge_id'), val: xdr.ScVal.scvU32(publicInputs.challenge_id) }),
     new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol('player_address'), val: xdr.ScVal.scvBytes(hexToBytes(publicInputs.player_address)) }),
@@ -280,6 +280,12 @@ function hexToBytes(hex) {
   for (let i = 0; i < 32; i++) arr[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   return arr;
 }
+
+/** Helper: safely convert hex string to BigInt with 0x prefix */
+const toBigInt = (str) => {
+  if (typeof str !== 'string') return BigInt(str);
+  return BigInt(str.startsWith('0x') ? str : '0x' + str);
+};
 
 /**
  * Ranked submit V2 (option B): request proof from backend, then submit_proof (v2 contracts).

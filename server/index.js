@@ -232,6 +232,7 @@ app.post('/zk/prove', (req, res) => {
 
 // --- ZK Proof V2 (GameRunV2) ---
 app.post('/zk/prove_v2', async (req, res) => {
+  console.log('RAW BODY RECEIVED:', req.body);
   const {
     run_hash_hi,
     run_hash_lo,
@@ -254,19 +255,45 @@ app.post('/zk/prove_v2', async (req, res) => {
     });
   }
 
-  // Build input object for GameRunV2 circuit (order must match circuit inputs)
-  const circuitInput = {
-    run_hash_hi: String(run_hash_hi),
-    run_hash_lo: String(run_hash_lo),
-    score: Number(score),
-    wave: Number(wave),
-    nonce: Number(nonce),
-    season_id: Number(season_id),
-    challenge_id: Number(challenge_id),
-    player_address: String(player_address),
-    contract_id: String(contract_id),
-    domain_separator: String(domain_separator)
+  // Bulletproof helper: convert any value to pure decimal string for snarkjs
+  const toDecimalString = (val) => {
+    if (val === undefined || val === null) return "0";
+    let str = val.toString();
+    // If it's a raw hex string without 0x, add it
+    if (/^[0-9a-fA-F]+$/.test(str) && !str.startsWith('0x')) {
+      str = '0x' + str;
+    }
+    return BigInt(str).toString(10); // Forces it into a pure decimal number string
   };
+
+  // Build input object for GameRunV2 circuit (order must match circuit inputs) with per-field error logging
+  let circuitInput;
+  try {
+    circuitInput = {
+      run_hash_hi: toDecimalString(run_hash_hi),
+      run_hash_lo: toDecimalString(run_hash_lo),
+      score: toDecimalString(score),
+      wave: toDecimalString(wave),
+      nonce: toDecimalString(nonce),
+      season_id: toDecimalString(season_id),
+      challenge_id: toDecimalString(challenge_id),
+      player_address: toDecimalString(player_address),
+      contract_id: toDecimalString(contract_id),
+      domain_separator: toDecimalString(domain_separator)
+    };
+  } catch (fieldErr) {
+    // Identify which field failed
+    const fields = ['run_hash_hi', 'run_hash_lo', 'score', 'wave', 'nonce', 'season_id', 'challenge_id', 'player_address', 'contract_id', 'domain_separator'];
+    for (const fieldName of fields) {
+      try {
+        toDecimalString(req.body[fieldName]);
+      } catch (_) {
+        console.error(`FAILED ON FIELD: [${fieldName}], WITH RAW VALUE: [${req.body[fieldName]}]`, fieldErr);
+        break;
+      }
+    }
+    throw fieldErr;
+  }
 
   // Paths to GameRunV2 artifacts
   const wasmPath = path.join(__dirname, '../circuits/build/GameRunV2_js/GameRunV2_js/GameRunV2.wasm');

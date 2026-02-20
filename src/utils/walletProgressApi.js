@@ -9,7 +9,7 @@ function getProgressApiUrl() {
     (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_ZK_PROVER_URL) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PROGRESS_API_URL) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) ||
-    'http://localhost:3333';
+    'https://cosmic-coder-zk-prover.onrender.com';
 }
 
 export async function fetchProgress(address) {

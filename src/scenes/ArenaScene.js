@@ -4537,7 +4537,11 @@ export default class ArenaScene extends Phaser.Scene {
     const goToMenu = () => {
       if (returned) return;
       returned = true;
-      this.input.keyboard.off('keydown', handleKeydown);
+      try {
+        this.input.keyboard.off('keydown', handleKeydown);
+      } catch (_) {
+        // handleKeydown may not be defined in this scope; ignore
+      }
       gameOverContainer.destroy();
       SaveManager.clearSave();
       this.cameras.main.fade(400, 0, 0, 0);
@@ -4634,6 +4638,7 @@ export default class ArenaScene extends Phaser.Scene {
             resolve('casual');
           }
         } catch (e) {
+          console.error('ZK ERROR DETAILS:', e);
           console.warn('[Cosmic Coder] Submit failed:', e?.message || e);
           try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
           try {

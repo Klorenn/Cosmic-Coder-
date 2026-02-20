@@ -8,7 +8,7 @@ const MAX_ENTRIES = 10;
 
 const LEADERBOARD_API =
   (typeof import.meta !== 'undefined' && import.meta.env?.VITE_LEADERBOARD_URL) ||
-  'http://localhost:3333';
+  'https://cosmic-coder-zk-prover.onrender.com';
 
 function shortAddress(address, chars = 8) {
   if (!address || address.length <= chars * 2) return address || '???';
