@@ -396,6 +396,15 @@ export default class ArenaScene extends Phaser.Scene {
     this.showZkStartupOverlay('Generating circuit…');
 
     try {
+      // Test ZK connection first
+      console.log('[ZK Startup] Testing ZK connection...');
+      const zkTest = await this.testZKConnection();
+      if (!zkTest) {
+        this.hideZkStartupOverlay();
+        this.showZkStartupOverlay('ZK connection failed');
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+
       const addr = await stellarWallet.getAddress();
       if (addr) {
         // Local fallback: if player has completed a ranked run before on this device,
@@ -482,6 +491,25 @@ export default class ArenaScene extends Phaser.Scene {
   create() {
     console.log('[Cosmic Coder] Game start:', this.isContinuedGame ? 'continued' : 'new', 'mode:', this.gameMode === 'zk_ranked' ? 'ZK Ranked' : 'Casual');
     if (typeof this.zkProofSubmitted === 'undefined') this.zkProofSubmitted = false;
+
+    // ZK Configuration Check
+    if (this.gameMode === 'zk_ranked') {
+      console.log('[ZK Config] Checking configuration...');
+      console.log('[ZK Config] Contract ID:', gameClient.getContractId());
+      console.log('[ZK Config] Prover URL:', gameClient.getZkProverUrl());
+      console.log('[ZK Config] Is contract configured:', gameClient.isContractConfigured());
+      console.log('[ZK Config] Is prover configured:', gameClient.isZkProverConfigured());
+      
+      if (!gameClient.isContractConfigured()) {
+        console.error('[ZK Config] ❌ Contract NOT configured! ZK will fail.');
+      }
+      if (!gameClient.isZkProverConfigured()) {
+        console.error('[ZK Config] ❌ Prover NOT configured! ZK will fail.');
+      }
+      if (gameClient.isContractConfigured() && gameClient.isZkProverConfigured()) {
+        console.log('[ZK Config] ✅ ZK configuration looks good!');
+      }
+    }
 
     // Gameplay music mode — cambiar música del menú a gameplay al entrar
     Audio.setMusicMode('gameplay');
@@ -4790,6 +4818,36 @@ export default class ArenaScene extends Phaser.Scene {
         // Reload the page to retry ZK submission
         window.location.reload();
       });
+    }
+  }
+
+  async testZKConnection() {
+    console.log('[ZK Test] Testing ZK connection...');
+    try {
+      const health = await gameClient.checkZkProverHealth();
+      console.log('[ZK Test] Prover health:', health);
+      
+      // Test with minimal payload
+      const testPayload = {
+        run_hash_hi: "0000000000000000000000000000000000000000000000000000000000000000",
+        run_hash_lo: "0000000000000000000000000000000000000000000000000000000000000000",
+        score: 1,
+        wave: 1,
+        nonce: 1,
+        season_id: 1,
+        challenge_id: 1,
+        player_address: "GBGZ7J5Y6KZVMZQ5Q5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5Z5",
+        contract_id: gameClient.getContractId(),
+        domain_separator: "0000000000000000000000000000000000000000000000000000000000000000"
+      };
+      
+      console.log('[ZK Test] Testing proof generation...');
+      const proof = await gameClient.requestZkProofV2(undefined, testPayload);
+      console.log('[ZK Test] ✅ Proof generation successful:', proof);
+      return true;
+    } catch (e) {
+      console.error('[ZK Test] ❌ ZK connection failed:', e);
+      return false;
     }
   }
 
