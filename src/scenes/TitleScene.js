@@ -1219,34 +1219,27 @@ export default class TitleScene extends Phaser.Scene {
     ];
 
     this.warglaiveQuotesEn = [
-      // Luu - artwork credit
-      "Artwork by Luu\n*absolute masterpiece*",
-      // DareDev256 - the almighty
-      "DareDev256...\nthe ALMIGHTY",
-      "ALL HAIL\nDareDev256",
-      "DareDev256\nblessed this game",
-      "DareDev256 is\nbuilt different",
-      // Raw references
-      "Can't wait to swing\nthe RAWGLAIVE",
-      "Raw mode\nACTIVATED",
-      "Raw's watching...\n*no pressure*",
-      // Claude
-      "Claude coded this\nwith me btw",
-      "Opus-powered\ngameplay",
-      // General hype
+      "Stellar...\nthe ALMIGHTY",
+      "ALL HAIL\nStellar",
+      "Stellar\nblessed this game",
+      "Stellar is\nbuilt different",
+      "Can't wait to swing\nthis blade",
+      "Stellar mode\nACTIVATED",
+      "The network's watching...\n*no pressure*",
+      "Built on Stellar\nwith me btw",
+      "Stellar-powered\ngameplay",
       "0.01% drop rate\nworth it tho"
     ];
     this.warglaiveQuotesEs = [
-      "Arte por Luu\n*obra maestra*",
-      "Da...\nel TODOPODEROSO",
-      "TODOS ALABAMOS\na CosmicCoder",
-      "DareDev256\nbendijo este juego",
-      "DareDev256 es\notro nivel",
-      "Qué ganas de blandir\nla RAWGLAIVE",
-      "Modo raw\nACTIVADO",
-      "Raw nos mira...\n*sin presión*",
-      "Claude codió esto\nconmigo por cierto",
-      "Gameplay con\nOpus",
+      "Stellar...\nel TODOPODEROSO",
+      "TODOS ALABAMOS\na Stellar",
+      "Stellar\nbendijo este juego",
+      "Stellar es\notro nivel",
+      "Qué ganas de blandir\nesta espada",
+      "Modo Stellar\nACTIVADO",
+      "La red nos mira...\n*sin presión*",
+      "Hecho en Stellar\nconmigo por cierto",
+      "Gameplay con\nStellar",
       "0.01% de drop\npero vale la pena"
     ];
 
@@ -1552,9 +1545,7 @@ export default class TitleScene extends Phaser.Scene {
 
     // Level up event
     this.levelUpHandler = (event) => {
-      const level = event.detail.level;
-      const msg = currentLang() === 'es' ? `¡NIVEL ${level}!\n¡VAMOS!` : `LEVEL ${level}!\nLET'S GOOO`;
-      this.sayQuote(msg);
+      this.sayQuote(`LEVEL ${event.detail.level}!\nLET'S GOOO`);
     };
 
     // Add the listeners
