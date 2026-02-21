@@ -2635,19 +2635,29 @@ export default class TitleScene extends Phaser.Scene {
     }
 
     const scoreOf = (e) => Number(e.bestScore ?? e.score ?? 0) || 0;
+    const isRealPlay = (e) => (Number(e.bestScore ?? e.score ?? 0) || 0) > 0;
     const byWallet = new Map();
     top.forEach((entry) => {
       const wallet = (entry.wallet || entry.address || '').trim();
       const key = normAddr(wallet);
       if (!key) return;
+      if (!isRealPlay(entry)) return;
       const existing = byWallet.get(key);
       if (!existing || scoreOf(entry) > scoreOf(existing)) byWallet.set(key, { ...entry });
     });
     top = Array.from(byWallet.values());
     if (top.length === 0) {
-      const localEntries = LeaderboardManager.getTop(50).map((e, i) => ({
+      const rawLocal = LeaderboardManager.getTop(50).filter((e) => (Number(e.score ?? 0) || 0) > 0);
+      const byName = new Map();
+      rawLocal.forEach((e) => {
+        const nameKey = (e.name || '').trim().toLowerCase() || 'anonymous';
+        const existing = byName.get(nameKey);
+        const score = Number(e.score ?? 0) || 0;
+        if (!existing || score > scoreOf(existing)) byName.set(nameKey, { ...e, name: (e.name || '').trim() || 'Anonymous' });
+      });
+      const localEntries = Array.from(byName.values()).map((e, i) => ({
         position: i + 1,
-        name: e.name || `Player ${i + 1}`,
+        name: e.name || 'Anonymous',
         wallet: '',
         rank: 0,
         bestScore: e.score ?? 0,
@@ -2656,6 +2666,9 @@ export default class TitleScene extends Phaser.Scene {
       }));
       top = localEntries;
     }
+
+    // Only show players who really played (score > 0); no filler entries
+    top = top.filter(isRealPlay);
 
     // Sort by bestScore DESC, then bestWave DESC, then gamesPlayed DESC
     top.sort((a, b) => {
@@ -2729,8 +2742,8 @@ export default class TitleScene extends Phaser.Scene {
 
         const isCurrentUserRow = currentAddr && entry.wallet && normAddr(entry.wallet) === normAddr(currentAddr);
         let displayName = (isCurrentUserRow ? (currentDisplayName || entry.name) : (entry.name || '')).trim().slice(0, 20);
-        if (!displayName || /^g[a-z0-9]{4}\.\.\.[a-z0-9]{4}$/i.test(displayName) || (displayName.length >= 10 && /[a-z0-9]{4}\.\.\.[a-z0-9]{4}/i.test(displayName))) displayName = `Player ${globalIdx + 1}`;
-        if (!displayName) displayName = 'Unknown';
+        if (!displayName || /^g[a-z0-9]{4}\.\.\.[a-z0-9]{4}$/i.test(displayName) || (displayName.length >= 10 && /[a-z0-9]{4}\.\.\.[a-z0-9]{4}/i.test(displayName))) displayName = entry.wallet ? stellarWallet.shortAddress(entry.wallet, 6) : 'Anonymous';
+        if (!displayName) displayName = 'Anonymous';
         const nameColor = globalIdx === 0 ? '#ffd700' : '#ffffff';
         const nm = this.add.text(colName, y, displayName, { fontFamily: tableFont, fontSize: fs(12), color: nameColor });
         container.add(nm);

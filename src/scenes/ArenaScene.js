@@ -4694,9 +4694,17 @@ export default class ArenaScene extends Phaser.Scene {
         } catch (_) {}
       }
 
-      // 3) Local
+      // 3) Local — only real plays (score > 0), one entry per player (best score per name)
       if (entries.length === 0) {
-        const local = LeaderboardManager.getTop(15);
+        const rawLocal = LeaderboardManager.getTop(15).filter((e) => (Number(e.score ?? 0) || 0) > 0);
+        const byName = new Map();
+        rawLocal.forEach((e) => {
+          const nameKey = (e.name || '').trim().toLowerCase() || 'anonymous';
+          const score = Number(e.score ?? 0) || 0;
+          const existing = byName.get(nameKey);
+          if (!existing || score > (Number(existing.score ?? 0) || 0)) byName.set(nameKey, { ...e, name: (e.name || '').trim() || 'Anonymous' });
+        });
+        const local = Array.from(byName.values());
         if (local.length > 0) {
           entries = local.map((e) => ({
             player: e.name,
@@ -4706,6 +4714,21 @@ export default class ArenaScene extends Phaser.Scene {
           }));
           source = 'local';
         }
+      }
+
+      // Only show entries that really played (score > 0); dedupe by wallet for on-chain/API
+      if (source !== 'local' && entries.length > 0) {
+        const byPlayer = new Map();
+        const normAddr = (a) => (a || '').toLowerCase().trim();
+        entries.forEach((e) => {
+          const key = typeof e.player === 'string' && e.player.length > 30 ? normAddr(e.player) : e.player || '';
+          if (!key) return;
+          const score = Number(e.score ?? 0) || 0;
+          if (score <= 0) return;
+          const existing = byPlayer.get(key);
+          if (!existing || score > (Number(existing.score ?? 0) || 0)) byPlayer.set(key, e);
+        });
+        entries = Array.from(byPlayer.values());
       }
 
       const normalizeAddr = (a) => (a || '').toLowerCase().trim();
