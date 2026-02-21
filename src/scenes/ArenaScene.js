@@ -5144,7 +5144,10 @@ export default class ArenaScene extends Phaser.Scene {
           
           // Check for wrong network (txBadAuth / Freighter on Mainnet)
           const msg = e?.message || '';
-          if (msg.includes('Freighter is on') || msg.includes('txBadAuth') || msg.includes('Stellar Testnet')) {
+          const isChunk404 = msg.includes('Failed to fetch dynamically imported module') || msg.includes('dynamically imported module');
+          if (isChunk404) {
+            try { zkStatusText.setText('New version deployed. Please refresh the page (Ctrl+Shift+R or Cmd+Shift+R).').setAlpha(1); } catch (_) {}
+          } else if (msg.includes('Freighter is on') || msg.includes('txBadAuth') || msg.includes('Stellar Testnet')) {
             try { zkStatusText.setText('Switch Freighter to Testnet, then try again. Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else if (this.zkContractMissing || msg.includes('not found') || msg.includes('404')) {
             try { zkStatusText.setText('ZK Contract not deployed. Using local leaderboard.').setAlpha(1); } catch (_) {}

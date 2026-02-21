@@ -6,6 +6,7 @@
  */
 
 import { StrKey } from '@stellar/stellar-sdk';
+import { validateGameRules } from '../zk/gameProof.js';
 import { NoirService } from '../services/NoirService.js';
 import { getAssetPath } from '../utils/assetBase.js';
 import { getFreighterNetwork } from '../utils/stellarWallet.js';
@@ -562,7 +563,6 @@ export async function submitZkV2(
   if (!zk?.proof || !zk?.vk || !zk?.pubSignals) {
     throw new Error('submitZkV2 requires zk.proof, zk.vk, zk.pubSignals (BN254 Groth16)');
   }
-  const { validateGameRules } = await import('../zk/gameProof.js');
   const { valid, reason } = validateGameRules(wave, score);
   if (!valid) throw new Error(`submit_zk_v2 rules: ${reason || 'score >= wave * MIN_SCORE_PER_WAVE'}`);
   const { xdr, Address } = await import('@stellar/stellar-sdk');
