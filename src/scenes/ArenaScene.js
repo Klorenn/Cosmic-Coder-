@@ -4758,7 +4758,7 @@ export default class ArenaScene extends Phaser.Scene {
       }
 
       const rankStartY = leaderboardTopY + 44;
-      const sourceLabel = source === 'ranked' ? 'ON-CHAIN' : source === 'casual' ? 'CASUAL' : source === 'api' ? 'API' : 'LOCAL';
+      const sourceLabel = source === 'ranked' ? 'ON-CHAIN' : source === 'casual' ? 'CASUAL' : source === 'api' ? 'SCORE' : 'LOCAL';
       const srcText = this.add.text(leaderboardLeftX + leaderboardWidth - 12, leaderboardTopY + 14, sourceLabel, {
         fontFamily: 'monospace', fontSize: `${Math.round(10 * uiScale)}px`, color: '#555577'
       }).setOrigin(1, 0);

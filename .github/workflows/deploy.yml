@@ -49,6 +49,8 @@ jobs:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Build
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: npm run build
 
       - name: Setup Pages

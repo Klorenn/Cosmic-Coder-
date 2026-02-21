@@ -1,30 +1,16 @@
 import Phaser from 'phaser';
-import { getAssetPath } from '../utils/assetBase.js';
+import { getAssetPath, getAssetBase } from '../utils/assetBase.js';
 
-/** Resolve base path for background assets at runtime (GitHub Pages /Cosmic-Coder-/, Vercel /, or local). */
+/** Resolve base path for background assets (uses shared getAssetBase for GitHub Pages). */
 function getBackgroundBase() {
-  if (typeof window !== 'undefined' && window.location && window.location.pathname) {
-    const path = window.location.pathname;
-    const dir = path.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '/';
-    const prefix = dir === '/' ? '' : dir;
-    return `${prefix}/assets/backgrounds/blue`;
-  }
-  const base = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) ? import.meta.env.BASE_URL : '/';
-  const trimmed = base.endsWith('/') ? base.slice(0, -1) : base;
-  return (trimmed === '.' ? '' : trimmed) + '/assets/backgrounds/blue';
+  const base = getAssetBase();
+  return (base ? base + '/' : '') + 'assets/backgrounds/blue';
 }
 
-/** Base path for arena (gameplay) space backgrounds — same resolution logic as blue pack. */
+/** Base path for arena (gameplay) space backgrounds. */
 function getArenaBackgroundBase() {
-  if (typeof window !== 'undefined' && window.location && window.location.pathname) {
-    const path = window.location.pathname;
-    const dir = path.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '/';
-    const prefix = dir === '/' ? '' : dir;
-    return `${prefix}/assets/backgrounds/arena`;
-  }
-  const base = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) ? import.meta.env.BASE_URL : '/';
-  const trimmed = base.endsWith('/') ? base.slice(0, -1) : base;
-  return (trimmed === '.' ? '' : trimmed) + '/assets/backgrounds/arena';
+  const base = getAssetBase();
+  return (base ? base + '/' : '') + 'assets/backgrounds/arena';
 }
 
 export default class BootScene extends Phaser.Scene {

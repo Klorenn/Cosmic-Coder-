@@ -11,7 +11,25 @@ export function getAssetBase() {
     const dir = path.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '/';
     if (dir !== '/' && dir !== '') return dir;
   }
-  // 2) Built app (local or root deploy): use Vite BASE_URL
+  // 2) Fallback: derive base from the main script URL (reliable on GitHub Pages when pathname is /)
+  if (typeof document !== 'undefined') {
+    const script = document.querySelector('script[type="module"][src]');
+    if (script && script.src) {
+      try {
+        const u = new URL(script.src);
+        const pathname = u.pathname || '';
+        // e.g. /Cosmic-Coder-/assets/main-xxx.js -> base = /Cosmic-Coder-
+        const segments = pathname.split('/').filter(Boolean);
+        if (segments.length >= 2 && segments[0] && segments[1] === 'assets') {
+          return '/' + segments[0];
+        }
+        if (segments.length >= 1 && segments[0]) {
+          return '/' + segments[0];
+        }
+      } catch (_) {}
+    }
+  }
+  // 3) Built app (local or root deploy): use Vite BASE_URL
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) {
     const b = String(import.meta.env.BASE_URL || '');
     const trimmed = b.endsWith('/') ? b.slice(0, -1) : b;

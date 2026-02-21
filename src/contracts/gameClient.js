@@ -26,6 +26,12 @@ export function getContractId() {
   );
 }
 
+/** Soroban contract IDs are StrKey, 56 chars, start with C. Returns false if empty or malformed. */
+function isContractIdValid(contractId) {
+  const id = typeof contractId === 'string' ? contractId.trim() : '';
+  return id.length === 56 && id.startsWith('C') && /^C[A-Z2-7]{55}$/i.test(id);
+}
+
 /** Base URL for ZK prover backend. Only from config (deployed page) or env — no localhost fallback to avoid errors on deploy. */
 export function getZkProverUrl() {
   const runtimeUrl =
@@ -454,12 +460,11 @@ function computeSafeNoirHashInputs(payload) {
     };
   }
 
-  // Circuit uses u128 additions; fold into a guaranteed-safe representation.
+  // Circuit uses u128 additions; fold into a guaranteed-safe representation (proof remains valid).
   const folded = BigInt('0x' + fullHex64) % (safeLimit + 1n);
-  console.warn(
-    '[Noir] Folding run_hash to avoid u128 overflow in circuit',
-    { safeLimit: safeLimit.toString(10) }
-  );
+  if (typeof console !== 'undefined' && console.debug) {
+    console.debug('[Noir] Folding run_hash to fit u128 in circuit (expected when hash is large)', { safeLimit: safeLimit.toString(10) });
+  }
   return {
     runHashHiDec: folded.toString(10),
     runHashLoDec: '0'
@@ -751,7 +756,8 @@ export async function submitZkFromProverV2(signerPublicKey, signTransaction, pro
  * Get leaderboard (read-only). Returns [] if contract not configured or on error.
  */
 export async function getLeaderboard(limit = 10) {
-  if (!getContractId()) return [];
+  const contractId = getContractId();
+  if (!contractId || !isContractIdValid(contractId)) return [];
   try {
     const {
       Contract,
@@ -761,7 +767,7 @@ export async function getLeaderboard(limit = 10) {
       xdr,
     } = await import('@stellar/stellar-sdk');
     const server = await getServer();
-    const contract = new Contract(getContractId());
+    const contract = new Contract(contractId);
     const dummyAccount = new Account(
       'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       '0'
@@ -806,7 +812,8 @@ export async function getLeaderboard(limit = 10) {
  * ScoreEntry has { player, score } (no wave).
  */
 export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
-  if (!getContractId()) return [];
+  const contractId = getContractId();
+  if (!contractId || !isContractIdValid(contractId)) return [];
   try {
     const {
       Contract,
@@ -818,7 +825,7 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
     } = await import('@stellar/stellar-sdk');
     const { scValToNative } = await import('@stellar/stellar-base');
     const server = await getServer();
-    const contract = new Contract(getContractId());
+    const contract = new Contract(contractId);
     const dummyAccount = new Account(
       'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       '0'
@@ -909,7 +916,10 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
     out.sort((a, b) => (b.score - a.score) || (b.wave - a.wave) || 0);
     return out;
   } catch (e) {
-    console.warn('[Cosmic Coder] getLeaderboardBySeason failed:', e?.message || e);
+    const msg = e?.message || String(e);
+    if (msg && !/accountId is invalid|invalid.*contract/i.test(msg)) {
+      console.warn('[Cosmic Coder] getLeaderboardBySeason failed:', msg);
+    }
     return [];
   }
 }
@@ -968,7 +978,7 @@ export async function getPlayerMilestone(playerAddress, seasonId = 1) {
 }
 
 export function isContractConfigured() {
-  return !!getContractId();
+  return isContractIdValid(getContractId());
 }
 
 /** True if ranked (ZK) submit is available: contract + prover URL. */
