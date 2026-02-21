@@ -1,5 +1,6 @@
 // Procedural Audio System for Vibe Coder
 // Generates retro-style sound effects using Web Audio API
+import { getAssetPath } from './assetBase.js';
 
 let audioContext = null;
 let masterGain = null;
@@ -392,19 +393,13 @@ export function playMagnet() {
   osc.stop(audioContext.currentTime + 0.5);
 }
 
-// One-shot music/SFX (MP3) — same base path as music
-const DEATH_SONG_URL = '/assets/audio/death-song.mp3';
-const GAME_OVER_MUSIC_URL = '/assets/audio/game-over-music.mp3';
-const START_GAME_CHARACTER_URL = '/assets/audio/start-game-character.mp3';
-const LEVEL_UP_SONG_URL = '/assets/audio/level-up.mp3';
-// -3 dB ≈ 0.708
 const QUIETER_VOLUME = 0.7;
 
 /** Play death song when player dies (slightly quieter). */
 export function playDeathSong() {
   if (!window.VIBE_SETTINGS?.sfxEnabled) return;
   try {
-    const a = new Audio(DEATH_SONG_URL);
+    const a = new Audio(getAssetPath('assets/audio/death-song.mp3'));
     a.volume = QUIETER_VOLUME;
     a.play().catch(() => {});
   } catch (e) {
@@ -417,7 +412,7 @@ export function playGameOverMusic() {
   stopGameplayMusic();
   if (!window.VIBE_SETTINGS?.musicEnabled) return;
   try {
-    const a = new Audio(GAME_OVER_MUSIC_URL);
+    const a = new Audio(getAssetPath('assets/audio/game-over-music.mp3'));
     a.volume = getGameplayMusicVolume();
     a.loop = false;
     a.play().catch(() => {});
@@ -431,7 +426,7 @@ export function playGameOverMusic() {
 export function playStartGameCharacter() {
   if (!window.VIBE_SETTINGS?.sfxEnabled) return;
   try {
-    const a = new Audio(START_GAME_CHARACTER_URL);
+    const a = new Audio(getAssetPath('assets/audio/start-game-character.mp3'));
     a.volume = 1;
     a.play().catch(() => {});
   } catch (e) {
@@ -443,7 +438,7 @@ export function playStartGameCharacter() {
 export function playLevelUpSong() {
   if (!window.VIBE_SETTINGS?.sfxEnabled) return;
   try {
-    const a = new Audio(LEVEL_UP_SONG_URL);
+    const a = new Audio(getAssetPath('assets/audio/level-up.mp3'));
     a.volume = QUIETER_VOLUME;
     a.play().catch(() => {});
   } catch (e) {
@@ -451,14 +446,15 @@ export function playLevelUpSong() {
   }
 }
 
-// === MUSIC ===
-// Use relative URLs so it works both locally (/) and on GitHub Pages (/Cosmic-Coder-/)
-const MENU_MUSIC_URL = '/assets/audio/arcade-by-lucjo.mp3';
-// Gameplay playlist: se repite en ciclo (1 → 2 → 1 → 2...)
-const GAMEPLAY_PLAYLIST = [
-  '/assets/audio/Galaxy_Guppy_KLICKAUD.mp3',
-  '/assets/audio/Kubbi-Ember.mp3'
-];
+function getMenuMusicUrl() {
+  return getAssetPath('assets/audio/arcade-by-lucjo.mp3');
+}
+function getGameplayPlaylist() {
+  return [
+    getAssetPath('assets/audio/Galaxy_Guppy_KLICKAUD.mp3'),
+    getAssetPath('assets/audio/Kubbi-Ember.mp3')
+  ];
+}
 
 export function setMusicMode(mode) {
   musicMode = mode;
@@ -490,7 +486,7 @@ export function startMenuMusic() {
   if (!window.VIBE_SETTINGS?.musicEnabled) return;
 
   try {
-    menuAudio = new Audio(MENU_MUSIC_URL);
+    menuAudio = new Audio(getMenuMusicUrl());
     menuAudio.loop = true;
     menuAudio.volume = getMenuMusicVolume();
     menuAudio.play().catch(() => {});
@@ -513,11 +509,12 @@ export function stopMenuMusic() {
 
 function playNextGameplayTrack() {
   if (!window.VIBE_SETTINGS?.musicEnabled || !gameplayAudio) return;
-  const url = GAMEPLAY_PLAYLIST[gameplayTrackIndex];
+  const playlist = getGameplayPlaylist();
+  const url = playlist[gameplayTrackIndex];
   gameplayAudio.src = url;
   gameplayAudio.volume = getGameplayMusicVolume();
   gameplayAudio.play().catch(() => {});
-  console.log(`🎵 Gameplay track ${gameplayTrackIndex + 1}/${GAMEPLAY_PLAYLIST.length} started`);
+  console.log(`🎵 Gameplay track ${gameplayTrackIndex + 1}/${playlist.length} started`);
 }
 
 export function startGameplayMusic() {
@@ -532,7 +529,7 @@ export function startGameplayMusic() {
     // Cuando termina una canción, pasa a la siguiente (cíclico)
     gameplayAudio.addEventListener('ended', () => {
       if (!gameplayAudio || !window.VIBE_SETTINGS?.musicEnabled) return;
-      gameplayTrackIndex = (gameplayTrackIndex + 1) % GAMEPLAY_PLAYLIST.length;
+      gameplayTrackIndex = (gameplayTrackIndex + 1) % getGameplayPlaylist().length;
       playNextGameplayTrack();
     });
 

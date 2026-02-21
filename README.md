@@ -49,6 +49,16 @@ Open http://localhost:3000. Optional: `npm run server` for the XP/prover backend
 
 **Language:** English and Spanish in **Settings → Language** on the title screen.
 
+### Deploy (GitHub Pages)
+
+All assets (images, music, sprites) and config live **inside the repo** under `public/`. No local or absolute paths — the build uses the same base for assets and `config.json` so deploy does not 404.
+
+- **Images & audio:** `public/assets/` (sprites, backgrounds, UI, audio). Vite copies them to `dist/`; the game resolves URLs with the same base as the build (GitHub Pages `/repo-name/` or root `/`).
+- **Config:** `public/config.json` is loaded at runtime. In CI, `scripts/write_config_from_env.js` writes it from GitHub secrets before build so ZK prover URL, contract ID, and leaderboard API are set. If secrets are missing, the repo’s existing `config.json` or `config.json.example` is used.
+- **ZK:** Contract ID and prover URL come from `config.json`. Circuit artifacts (`public/circuits/`) are in the repo; the frontend only needs the verification key and config — no local paths.
+
+Set optional secrets in the repo: `VITE_COSMIC_CODER_CONTRACT_ID`, `VITE_ZK_PROVER_URL`, `VITE_LEADERBOARD_URL`, `VITE_API_URL`, etc. Then push to `main` or run the “Deploy to GitHub Pages” workflow manually.
+
 ---
 
 ## How We Use Stellar and ZK

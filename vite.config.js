@@ -1,5 +1,10 @@
 import { defineConfig } from 'vite';
 import { fileURLToPath, URL } from 'node:url';
+import path from 'node:path';
+
+// Project root (portable: relative to this config file)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(__dirname);
 
 // Derive base path automatically for GitHub Pages based on repo name.
 // Example: owner/repo ⇒ base "/repo/" when running in GitHub Actions / Pages.
@@ -24,11 +29,7 @@ export default defineConfig({
     open: true,
     fs: {
       allow: [
-        // Keep project root accessible by Vite dev server
-        '/Users/paukoh/Cosmic-Coder-',
-        // Allow loading local art packs via /@fs during development
-        '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version',
-        '/Users/paukoh/Downloads/space_background_pack 3/Assets/Blue Version/layered'
+        projectRoot
       ]
     }
   },

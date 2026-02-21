@@ -16,6 +16,7 @@ import ArenaScene from './scenes/ArenaScene.js';
 import { connectToXPServer, isConnected } from './utils/socket.js';
 import RebirthManager from './systems/RebirthManager.js';
 import { persistIfWalletConnected, progressStore } from './utils/walletProgressService.js';
+import { getConfigJsonUrl } from './utils/assetBase.js';
 
 // bb.js expects Node-style Buffer in browser context.
 if (typeof globalThis !== 'undefined' && !globalThis.Buffer) {
@@ -488,16 +489,9 @@ window.VIBE_CODER = {
   }
 };
 
-/** Load config.json from same origin (works on GitHub Pages). Sets window.__VITE_CONFIG__. */
-function getConfigBase() {
-  if (typeof window === 'undefined' || !window.location?.pathname) return '';
-  const path = window.location.pathname.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '';
-  return path ? path : '';
-}
-
+/** Load config.json from same origin (same base as assets — no 404 on deploy). Sets window.__VITE_CONFIG__. */
 function loadRuntimeConfig() {
-  const base = getConfigBase();
-  const url = (base ? base + '/' : '/') + 'config.json';
+  const url = getConfigJsonUrl();
   return fetch(url)
     .then((r) => (r.ok ? r.json() : {}))
     .then((data) => {

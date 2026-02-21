@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { getAssetPath } from '../utils/assetBase.js';
 
 /** Resolve base path for background assets at runtime (GitHub Pages /Cosmic-Coder-/, Vercel /, or local). */
 function getBackgroundBase() {
@@ -78,26 +79,24 @@ export default class BootScene extends Phaser.Scene {
       }
     });
 
-    // Character/enemy sprite sheets (local assets first, robust fallback in create()).
-    // These paths match the original repository structure under public/assets/sprites.
-    this.load.spritesheet('robot-idle', '/assets/sprites/player/robot-idle.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('robot-walk', '/assets/sprites/player/robot-walk.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('robot-hurt', '/assets/sprites/player/robot-hurt.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('robot-death', '/assets/sprites/player/robot-death.png', { frameWidth: 128, frameHeight: 128 });
-    // Death sprites: spritesheet por personaje (secuencia: pie → caída → tumbado)
-    this.load.spritesheet('vibecoder-death', '/assets/sprites/player/VibeCoder/vibecoder-death.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('destroyer-death', '/assets/sprites/player/VoidNull/voidnull-death.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('swordsman-death', '/assets/sprites/player/SyncStorm/sync-death.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('robot-enabling', '/assets/sprites/player/robot-enabling.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('destroyer-idle', '/assets/sprites/player/destroyer-idle.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('destroyer-walk', '/assets/sprites/player/destroyer-walk.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('destroyer-hurt', '/assets/sprites/player/destroyer-hurt.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('destroyer-enabling', '/assets/sprites/player/destroyer-enabling.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('swordsman-idle', '/assets/sprites/player/swordsman-idle.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('swordsman-walk', '/assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('swordsman-hurt', '/assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('swordsman-enabling', '/assets/sprites/player/swordsman-enabling.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('werewolf-run', '/assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
+    const asset = (p) => getAssetPath(p);
+    this.load.spritesheet('robot-idle', asset('assets/sprites/player/robot-idle.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-walk', asset('assets/sprites/player/robot-walk.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-hurt', asset('assets/sprites/player/robot-hurt.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-death', asset('assets/sprites/player/robot-death.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('vibecoder-death', asset('assets/sprites/player/VibeCoder/vibecoder-death.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-death', asset('assets/sprites/player/VoidNull/voidnull-death.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-death', asset('assets/sprites/player/SyncStorm/sync-death.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('robot-enabling', asset('assets/sprites/player/robot-enabling.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-idle', asset('assets/sprites/player/destroyer-idle.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-walk', asset('assets/sprites/player/destroyer-walk.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-hurt', asset('assets/sprites/player/destroyer-hurt.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-enabling', asset('assets/sprites/player/destroyer-enabling.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-idle', asset('assets/sprites/player/swordsman-idle.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-walk', asset('assets/sprites/player/swordsman-walk.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-hurt', asset('assets/sprites/player/swordsman-hurt.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-enabling', asset('assets/sprites/player/swordsman-enabling.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('werewolf-run', asset('assets/sprites/enemies/werewolf-run.png'), { frameWidth: 128, frameHeight: 128 });
     // Blue Version background pack — resolve base at runtime so it works on GitHub Pages, Vercel, and local
     const bgBase = getBackgroundBase();
     this.load.image('bg-blue-back', `${bgBase}/blue-back.png`);
@@ -113,11 +112,10 @@ export default class BootScene extends Phaser.Scene {
       this.load.image(`arena-bg-${i}`, `${arenaBgBase}/arena-bg-${i}.png`);
     }
 
-    // Rank icons for leaderboard and profile
-    this.load.image('rank_bronze', '/assets/UI/Ranks/rank_bronze.png');
-    this.load.image('rank_silver', '/assets/UI/Ranks/rank_silver.png');
-    this.load.image('rank_gold', '/assets/UI/Ranks/rank_gold.png');
-    this.load.image('rank_diamond', '/assets/UI/Ranks/rank_diamond.png');
+    this.load.image('rank_bronze', asset('assets/UI/Ranks/rank_bronze.png'));
+    this.load.image('rank_silver', asset('assets/UI/Ranks/rank_silver.png'));
+    this.load.image('rank_gold', asset('assets/UI/Ranks/rank_gold.png'));
+    this.load.image('rank_diamond', asset('assets/UI/Ranks/rank_diamond.png'));
 
     // We'll generate all textures procedurally (and with fallbacks) in create()
     this.time.delayedCall(500, () => {

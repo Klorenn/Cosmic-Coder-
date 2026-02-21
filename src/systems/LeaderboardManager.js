@@ -7,9 +7,12 @@ const STORAGE_KEY = 'cosmicCoderLeaderboard';
 const LOCAL_GAMES_KEY = 'cosmicCoderGamesPlayed';
 const MAX_ENTRIES = 10;
 
-const LEADERBOARD_API =
-  (typeof import.meta !== 'undefined' && import.meta.env?.VITE_LEADERBOARD_URL) ||
-  'https://cosmic-coder-zk-prover.onrender.com';
+function getLeaderboardApiUrl() {
+  if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_LEADERBOARD_URL) return window.__VITE_CONFIG__.VITE_LEADERBOARD_URL.replace(/\/$/, '');
+  if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_API_URL) return window.__VITE_CONFIG__.VITE_API_URL.replace(/\/$/, '');
+  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_LEADERBOARD_URL) return import.meta.env.VITE_LEADERBOARD_URL;
+  return 'https://cosmic-coder-zk-prover.onrender.com';
+}
 
 function shortAddress(address, chars = 8) {
   if (!address || address.length <= chars * 2) return address || '???';
@@ -82,7 +85,7 @@ export default class LeaderboardManager {
   static async submitOnChain(address, wave, score, name = '') {
     if (!address) return { success: false };
     try {
-      const res = await fetch(`${LEADERBOARD_API}/leaderboard`, {
+      const res = await fetch(`${getLeaderboardApiUrl()}/leaderboard`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -109,7 +112,7 @@ export default class LeaderboardManager {
    */
   static async fetchOnChain() {
     try {
-      const res = await fetch(`${LEADERBOARD_API}/leaderboard`);
+      const res = await fetch(`${getLeaderboardApiUrl()}/leaderboard`);
       const data = await res.json().catch(() => ({}));
       const entries = Array.isArray(data.entries) ? data.entries : [];
       return entries.map((e, i) => ({

@@ -126,8 +126,8 @@ pub struct ZkRunSubmitted {
     pub run_hash: Bytes,
 }
 
-/// Minimum score per wave for legacy submit_result.
-const MIN_SCORE_PER_WAVE: u32 = 10;
+/// Minimum score per wave for legacy submit_result and ZK.
+const MIN_SCORE_PER_WAVE: u32 = 5;
 
 /// Weapon unlock data structure
 #[contracttype]

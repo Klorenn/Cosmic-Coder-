@@ -1,6 +1,6 @@
 // Cosmic Coder - ZK run attestation (BN254 / Groth16).
 // Binds: run_hash (hi/lo), score, wave, nonce, season_id, used_zk_weapon.
-// Enforces: score >= wave * MIN_SCORE_PER_WAVE (10).
+// Enforces: score >= wave * MIN_SCORE_PER_WAVE (5).
 // used_zk_weapon: 0 = no ZK weapon used, 1 = ZK Plasma Rifle used.
 pragma circom 2.1.4;
 
@@ -15,9 +15,9 @@ template GameRun() {
     signal input season_id;        // u32
     signal input used_zk_weapon;   // 0 or 1 (boolean flag for ZK Plasma Rifle)
 
-    // Enforce game rule: score >= wave * 10 (MIN_SCORE_PER_WAVE)
+    // Enforce game rule: score >= wave * 5 (MIN_SCORE_PER_WAVE)
     signal minScore;
-    minScore <== wave * 10;
+    minScore <== wave * 5;
     component gte = GreaterEqThan(32);
     gte.in[0] <== score;
     gte.in[1] <== minScore;

@@ -1,6 +1,6 @@
 // Cosmic Coder - ZK run attestation v2 (BN254 / Groth16).
 // Binds: run_hash (hi/lo), score, wave, nonce, season_id, challenge_id, player_address, contract_id, domain_separator.
-// Enforces: score >= wave * MIN_SCORE_PER_WAVE (10).
+// Enforces: score >= wave * MIN_SCORE_PER_WAVE (5).
 pragma circom 2.1.4;
 
 include "../node_modules/circomlib/circuits/comparators.circom";
@@ -20,9 +20,9 @@ template GameRunV2() {
     signal input contract_id_lo;     // low 128 bits of contract address (field)
     signal input domain_separator;   // 32 bytes (field element, derived from domain binding)
 
-    // Enforce game rule: score >= wave * 10 (MIN_SCORE_PER_WAVE)
+    // Enforce game rule: score >= wave * 5 (MIN_SCORE_PER_WAVE)
     signal minScore;
-    minScore <== wave * 10;
+    minScore <== wave * 5;
     component gte = GreaterEqThan(32);
     gte.in[0] <== score;
     gte.in[1] <== minScore;

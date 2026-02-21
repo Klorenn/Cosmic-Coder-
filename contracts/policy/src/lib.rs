@@ -101,8 +101,8 @@ impl Policy {
             return Err(PolicyError::Replay);
         }
 
-        // 5) Semantic rules (example: score >= wave * MIN_SCORE_PER_WAVE)
-        const MIN_SCORE_PER_WAVE: u32 = 10;
+        // 5) Semantic rules: score >= wave * MIN_SCORE_PER_WAVE
+        const MIN_SCORE_PER_WAVE: u32 = 5;
         if score < wave.saturating_mul(MIN_SCORE_PER_WAVE) {
             env.events().publish(
                 (Symbol::new(&env, "policy"), Symbol::new(&env, "invalid_input")),

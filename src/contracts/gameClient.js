@@ -459,9 +459,10 @@ function validateNoirSubmitPayload(payload) {
   if (!Number.isFinite(score) || !Number.isFinite(wave) || score <= 0 || wave <= 0) {
     throw new Error(`[submit_zk_noir] invalid payload: score=${payload?.score} wave=${payload?.wave}`);
   }
-  const minScore = wave * 10;
+  const MIN_SCORE_PER_WAVE = 5;
+  const minScore = wave * MIN_SCORE_PER_WAVE;
   if (score < minScore) {
-    throw new Error(`[submit_zk_noir] invalid score: score=${score} wave=${wave} requires score>=${minScore}`);
+    throw new Error(`[submit_zk_noir] invalid score: score=${score} wave=${wave} requires score>=${minScore} (min ${MIN_SCORE_PER_WAVE} per wave)`);
   }
 }
 
@@ -804,20 +805,31 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
     const retval = sim.result?.retval;
     if (!retval) return [];
 
-    // Prefer native decoding (handles Vec<Map> and Address/u32 correctly)
     try {
       const native = scValToNative(retval);
       if (Array.isArray(native) && native.length > 0) {
-        return native.map((entry) => {
-          const o = entry && typeof entry === 'object' ? entry : {};
-          const player = typeof o.player === 'string' ? o.player : '';
-          const score = Number(o.score) || 0;
-          return { player, wave: 0, score };
-        });
+        const out = [];
+        for (const entry of native) {
+          try {
+            const o = entry && typeof entry === 'object' ? entry : {};
+            let player = '';
+            if (typeof o.player === 'string') player = o.player;
+            else if (o.player != null && typeof o.player === 'object') player = String(o.player);
+            let score = 0;
+            const raw = o.score ?? o.best_score;
+            if (typeof raw === 'number' && !Number.isNaN(raw)) score = Math.max(0, raw);
+            else if (typeof raw === 'bigint') score = Math.max(0, Number(raw));
+            else if (raw != null) score = Math.max(0, Number(raw));
+            const wave = Number(o.wave) || 0;
+            out.push({ player, wave, score });
+          } catch (_) {}
+        }
+        out.sort((a, b) => (b.score - a.score) || 0);
+        return out;
       }
       if (Array.isArray(native)) return [];
     } catch (nativeErr) {
-      console.warn('[Cosmic Coder] getLeaderboardBySeason scValToNative:', nativeErr?.message || nativeErr);
+      console.warn('[Cosmic Coder] getLeaderboardBySeason decode:', nativeErr?.message || nativeErr);
     }
 
     // Fallback: manual XDR parsing (ScVal vec -> map entries)
@@ -833,6 +845,7 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
       if (!m.length) continue;
       let player = '';
       let score = 0;
+      let wave = 0;
       for (let j = 0; j < m.length; j++) {
         const pair = m[j];
         const key = pair.key?.() ?? pair.key;
@@ -847,12 +860,20 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
         }
         if (k === 'score') {
           try {
-            score = typeof val?.u32 === 'function' ? val.u32() : Number(val?.i128?.()?.toString?.() ?? val ?? 0);
+            if (val && typeof val.u32 === 'function') score = val.u32();
+            else if (val && typeof val.i128 === 'function') score = Number(val.i128().toString());
+            else score = Math.max(0, Number(val?.toString?.() ?? val ?? 0));
+          } catch (_) {}
+        }
+        if (k === 'wave') {
+          try {
+            wave = val && typeof val.u32 === 'function' ? val.u32() : Math.max(0, Number(val ?? 0));
           } catch (_) {}
         }
       }
-      out.push({ player, wave: 0, score });
+      out.push({ player, wave, score });
     }
+    out.sort((a, b) => (b.score - a.score) || (b.wave - a.wave) || 0);
     return out;
   } catch (e) {
     console.warn('[Cosmic Coder] getLeaderboardBySeason failed:', e?.message || e);

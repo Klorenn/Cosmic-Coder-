@@ -13,7 +13,7 @@ Use this checklist before presenting to confirm the full flow works.
 
 **Mensaje esperado al morir:** "Submitted to ZK leaderboard" o "Submitted to casual leaderboard".
 
-**Circuito real:** El circuito Circom exige `score >= wave * 10`; una proof inválida (p. ej. score < wave*10) no verifica. Anti-replay: mismo (player, nonce, season_id) no puede usarse dos veces.
+**Circuito real:** El circuito Circom exige `score >= wave * 5` (MIN_SCORE_PER_WAVE = 5); una proof inválida (p. ej. score < wave*5) no verifica. Anti-replay: mismo (player, nonce, season_id) no puede usarse dos veces.
 
 ## Contract tests (automated)
 

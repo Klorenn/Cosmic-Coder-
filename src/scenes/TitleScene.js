@@ -1222,7 +1222,7 @@ export default class TitleScene extends Phaser.Scene {
       "Stellar...\nthe ALMIGHTY",
       "ALL HAIL\nStellar",
       "Stellar\nblessed this game",
-      "Stellar is\nbuilt different",
+      "ZK is\nbuilt different",
       "Can't wait to swing\nthis blade",
       "Stellar mode\nACTIVATED",
       "The network's watching...\n*no pressure*",
@@ -1234,7 +1234,7 @@ export default class TitleScene extends Phaser.Scene {
       "Stellar...\nel TODOPODEROSO",
       "TODOS ALABAMOS\na Stellar",
       "Stellar\nbendijo este juego",
-      "Stellar es\notro nivel",
+      "ZK es\notro nivel",
       "Qué ganas de blandir\nesta espada",
       "Modo Stellar\nACTIVADO",
       "La red nos mira...\n*sin presión*",
@@ -1658,14 +1658,14 @@ export default class TitleScene extends Phaser.Scene {
     // Don't interrupt if any menu is open
     if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen) return;
 
-    // Show time-based quote on first idle action (personalized if name set)
     if (!this.shownTimeQuote) {
       this.shownTimeQuote = true;
       const name = window.VIBE_SETTINGS?.playerName;
-      if (name) {
-        this.sayQuote(`Hey ${name}!\n${this.getTimeBasedQuote()}`);
-      } else {
-        this.sayQuote(this.getTimeBasedQuote());
+      const timeQuote = this.getTimeBasedQuote();
+      if (name && String(name).trim()) {
+        this.sayQuote(`Hey ${String(name).trim()}!\n${timeQuote}`);
+      } else if (timeQuote) {
+        this.sayQuote(timeQuote);
       }
       return;
     }
@@ -1679,11 +1679,11 @@ export default class TitleScene extends Phaser.Scene {
       // Walk toward warglaive
       this.walkTo(600, 490, true);
     } else if (action < 7) {
-      // Say random idle quote
-      this.sayQuote(Phaser.Utils.Array.GetRandom(this.idleQuotes));
+      const idlePool = currentLang() === 'es' ? (this.idleQuotesEs || this.idleQuotesEn) : (this.idleQuotesEn || this.idleQuotesEs);
+      if (Array.isArray(idlePool) && idlePool.length) this.sayQuote(Phaser.Utils.Array.GetRandom(idlePool));
     } else if (action < 9) {
-      // Say time-based quote (occasionally)
-      this.sayQuote(this.getTimeBasedQuote());
+      const timeQuote = this.getTimeBasedQuote();
+      if (timeQuote) this.sayQuote(timeQuote);
     } else {
       // Just chill, play idle
       this.playIdleForActiveCharacter();
@@ -1888,27 +1888,19 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   getTimeBasedQuote() {
+    const safeRandom = (arr) => (Array.isArray(arr) && arr.length ? Phaser.Utils.Array.GetRandom(arr) : '');
+    const pick = (esArr, enArr) => safeRandom(esArr) || safeRandom(enArr) || '…';
     const lang = currentLang();
     const hour = new Date().getHours();
-    const day = new Date().getDay(); // 0 = Sunday
+    const day = new Date().getDay();
     const isEs = lang === 'es';
 
-    if (day === 0 || day === 6) {
-      return Phaser.Utils.Array.GetRandom(isEs ? this.weekendQuotesEs : this.weekendQuotesEn);
-    }
-    if (hour >= 0 && hour < 5) {
-      return Phaser.Utils.Array.GetRandom(isEs ? this.lateNightQuotesEs : this.lateNightQuotesEn);
-    }
-    if (hour >= 5 && hour < 9) {
-      return Phaser.Utils.Array.GetRandom(isEs ? this.earlyMorningQuotesEs : this.earlyMorningQuotesEn);
-    }
-    if (hour >= 9 && hour < 17) {
-      return Phaser.Utils.Array.GetRandom(isEs ? this.workHoursQuotesEs : this.workHoursQuotesEn);
-    }
-    if (hour >= 17 && hour < 21) {
-      return Phaser.Utils.Array.GetRandom(isEs ? this.eveningQuotesEs : this.eveningQuotesEn);
-    }
-    return Phaser.Utils.Array.GetRandom(isEs ? this.nightQuotesEs : this.nightQuotesEn);
+    if (day === 0 || day === 6) return pick(isEs ? this.weekendQuotesEs : this.weekendQuotesEn, this.weekendQuotesEn || this.weekendQuotesEs);
+    if (hour >= 0 && hour < 5) return pick(isEs ? this.lateNightQuotesEs : this.lateNightQuotesEn, this.lateNightQuotesEn || this.lateNightQuotesEs);
+    if (hour >= 5 && hour < 9) return pick(isEs ? this.earlyMorningQuotesEs : this.earlyMorningQuotesEn, this.earlyMorningQuotesEn || this.earlyMorningQuotesEs);
+    if (hour >= 9 && hour < 17) return pick(isEs ? this.workHoursQuotesEs : this.workHoursQuotesEn, this.workHoursQuotesEn || this.workHoursQuotesEs);
+    if (hour >= 17 && hour < 21) return pick(isEs ? this.eveningQuotesEs : this.eveningQuotesEn, this.eveningQuotesEn || this.eveningQuotesEs);
+    return pick(isEs ? this.nightQuotesEs : this.nightQuotesEn, this.nightQuotesEn || this.nightQuotesEs);
   }
 
   startTitleDefense() {
@@ -2555,18 +2547,20 @@ export default class TitleScene extends Phaser.Scene {
         // Contract does not return player_name; resolve names from API (user-submitted name per wallet)
         let addrToName = {};
         if (currentAddr && currentDisplayName) addrToName[normAddr(currentAddr)] = currentDisplayName;
+        let apiEntries = [];
         try {
-          const apiEntries = await LeaderboardManager.fetchOnChain();
+          apiEntries = await LeaderboardManager.fetchOnChain();
           apiEntries.forEach((entry) => {
             const a = (entry.address || entry.player || '').toString().trim().toLowerCase();
             const nom = (entry.name || '').toString().trim();
             if (a && nom) addrToName[a] = nom;
           });
         } catch (_) {}
+        const onChainWallets = new Set(onChain.map((e) => normAddr(e.player || '')).filter(Boolean));
         top = onChain.map((e, i) => {
           const isCurrentUser = currentAddr && e.player && normAddr(e.player) === normAddr(currentAddr);
           const resolved = e.player_name || addrToName[normAddr(e.player)] || (e.player ? stellarWallet.shortAddress(e.player, 6) : 'Unknown');
-          const name = isCurrentUser ? (currentDisplayName || resolved) : resolved;
+          const name = isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || resolved) : resolved;
           return {
             position: i + 1,
             name,
@@ -2577,14 +2571,33 @@ export default class TitleScene extends Phaser.Scene {
             gamesPlayed: e.gamesPlayed ?? 0
           };
         });
+        // Include API-only entries so top 3 names appear even when contract returns fewer
+        apiEntries.forEach((e) => {
+          const addr = (e.address || e.player || '').toString().trim();
+          const key = normAddr(addr);
+          if (!key || onChainWallets.has(key)) return;
+          onChainWallets.add(key);
+          const isCurrentUser = currentAddr && normAddr(addr) === normAddr(currentAddr);
+          const name = isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || e.name || 'Unknown') : (e.name || 'Unknown');
+          top.push({
+            position: 0,
+            name,
+            wallet: addr,
+            rank: 0,
+            bestScore: Number(e.score) || 0,
+            bestWave: Number(e.wave) || 0,
+            gamesPlayed: 0
+          });
+        });
         hasRankData = true;
       } else {
-        const entries = await LeaderboardManager.fetchOnChain();
+        let entries = await LeaderboardManager.fetchOnChain();
+        if (entries.length === 0) entries = LeaderboardManager.getTop(50).map((e) => ({ address: '', name: e.name, score: e.score ?? 0, wave: e.wave ?? 0 }));
         top = entries.map((e, i) => {
           const isCurrentUser = currentAddr && e.address && normAddr(e.address) === normAddr(currentAddr);
           return {
             position: i + 1,
-            name: isCurrentUser && currentDisplayName ? currentDisplayName : (e.name || 'Unknown'),
+            name: isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || e.name || 'Unknown') : (e.name || 'Unknown'),
             wallet: e.address || '',
             rank: 0,
             bestScore: e.score ?? 0,
@@ -2594,12 +2607,13 @@ export default class TitleScene extends Phaser.Scene {
         });
       }
     } else if (walletConnected) {
-      const entries = await LeaderboardManager.fetchOnChain();
+      let entries = await LeaderboardManager.fetchOnChain();
+      if (entries.length === 0) entries = LeaderboardManager.getTop(50).map((e) => ({ address: '', name: e.name, score: e.score ?? 0, wave: e.wave ?? 0 }));
       top = entries.map((e, i) => {
         const isCurrentUser = currentAddr && e.address && normAddr(e.address) === normAddr(currentAddr);
         return {
           position: i + 1,
-          name: isCurrentUser && currentDisplayName ? currentDisplayName : (e.name || 'Unknown'),
+          name: isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || e.name || 'Unknown') : (e.name || 'Unknown'),
           wallet: e.address || '',
           rank: 0,
           bestScore: e.score ?? 0,
@@ -2620,20 +2634,38 @@ export default class TitleScene extends Phaser.Scene {
       }));
     }
 
-    // One entry per player: keep best score per wallet
-    const byWallet = new Map();
     const scoreOf = (e) => Number(e.bestScore ?? e.score ?? 0) || 0;
+    const byWallet = new Map();
     top.forEach((entry) => {
-      const key = normAddr(entry.wallet || entry.address || '');
+      const wallet = (entry.wallet || entry.address || '').trim();
+      const key = normAddr(wallet);
+      if (!key) return;
       const existing = byWallet.get(key);
       if (!existing || scoreOf(entry) > scoreOf(existing)) byWallet.set(key, { ...entry });
     });
     top = Array.from(byWallet.values());
+    if (top.length === 0) {
+      const localEntries = LeaderboardManager.getTop(50).map((e, i) => ({
+        position: i + 1,
+        name: e.name || `Player ${i + 1}`,
+        wallet: '',
+        rank: 0,
+        bestScore: e.score ?? 0,
+        bestWave: e.wave ?? 0,
+        gamesPlayed: 0
+      }));
+      top = localEntries;
+    }
 
-    // Sort by bestScore DESC, then gamesPlayed DESC
+    // Sort by bestScore DESC, then bestWave DESC, then gamesPlayed DESC
     top.sort((a, b) => {
-      if (b.bestScore !== a.bestScore) return b.bestScore - a.bestScore;
-      return b.gamesPlayed - a.gamesPlayed;
+      const sa = Number(a.bestScore ?? a.score ?? 0) || 0;
+      const sb = Number(b.bestScore ?? b.score ?? 0) || 0;
+      if (sb !== sa) return sb - sa;
+      const wa = Number(a.bestWave ?? a.wave ?? 0) || 0;
+      const wb = Number(b.bestWave ?? b.wave ?? 0) || 0;
+      if (wb !== wa) return wb - wa;
+      return (b.gamesPlayed ?? 0) - (a.gamesPlayed ?? 0);
     });
 
     // Re-assign positions after sort
@@ -2695,9 +2727,10 @@ export default class TitleScene extends Phaser.Scene {
         container.add(posText);
         rowObjects.push(posText);
 
-        // Solo nombre de usuario; la wallet solo en Stellar Expert (ENTER). El usuario actual siempre con su nombre (personaje/settings).
         const isCurrentUserRow = currentAddr && entry.wallet && normAddr(entry.wallet) === normAddr(currentAddr);
-        const displayName = (isCurrentUserRow ? (currentDisplayName || entry.name) : (entry.name || 'Unknown')).slice(0, 20);
+        let displayName = (isCurrentUserRow ? (currentDisplayName || entry.name) : (entry.name || '')).trim().slice(0, 20);
+        if (!displayName || /^g[a-z0-9]{4}\.\.\.[a-z0-9]{4}$/i.test(displayName) || (displayName.length >= 10 && /[a-z0-9]{4}\.\.\.[a-z0-9]{4}/i.test(displayName))) displayName = `Player ${globalIdx + 1}`;
+        if (!displayName) displayName = 'Unknown';
         const nameColor = globalIdx === 0 ? '#ffd700' : '#ffffff';
         const nm = this.add.text(colName, y, displayName, { fontFamily: tableFont, fontSize: fs(12), color: nameColor });
         container.add(nm);

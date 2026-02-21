@@ -10,7 +10,7 @@ fn main(
     // Keep constraints aligned with the on-chain business rule.
     assert(wave > 0);
     assert(score > 0);
-    assert(score >= wave * 10);
+    assert(score >= wave * 5); // MIN_SCORE_PER_WAVE = 5
     assert(season_id > 0);
 
     // Inputs must be wired so they can't be optimized away.

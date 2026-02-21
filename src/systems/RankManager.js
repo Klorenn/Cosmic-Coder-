@@ -2,6 +2,7 @@
  * Rank Manager - Centralized rank system configuration
  * Maps rank IDs to display properties and gameplay bonuses
  */
+import { getAssetPath } from '../utils/assetBase.js';
 
 // Rank definitions (0-4). emoji = clean symbol without number (no 🥉🥈🥇 numbers)
 export const RANKS = {
@@ -192,11 +193,9 @@ export function getAllRanks() {
  * @param {Phaser.Scene} scene - Phaser scene
  */
 export function loadRankSprites(scene) {
-  const basePath = '/assets/UI/Ranks/';
-  
   Object.values(RANKS).forEach(rank => {
     if (rank.sprite) {
-      scene.load.image(rank.sprite, basePath + rank.sprite + '.png');
+      scene.load.image(rank.sprite, getAssetPath('assets/UI/Ranks/' + rank.sprite + '.png'));
     }
   });
 }

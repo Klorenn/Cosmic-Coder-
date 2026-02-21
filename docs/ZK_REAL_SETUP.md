@@ -11,7 +11,7 @@ Guía para compilar el circuito Circom, generar VK/proof real y usarlos con `zk_
 
 ## 1. Circuito (Circom)
 
-El circuito `circuits/GameRun.circom` **valida la regla de juego**: `score >= wave * 10` (MIN_SCORE_PER_WAVE). Usa `GreaterEqThan` de circomlib; una proof solo es válida si cumple la regla.
+El circuito `circuits/GameRun.circom` **valida la regla de juego**: `score >= wave * 5` (MIN_SCORE_PER_WAVE = 5). Usa `GreaterEqThan` de circomlib; una proof solo es válida si cumple la regla.
 
 Tiene **6 señales públicas**:
 

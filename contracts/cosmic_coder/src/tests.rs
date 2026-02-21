@@ -227,7 +227,7 @@ fn test_submit_zk_invalid_input_score_below_min() {
     policy_client.init(&hub, &verifier);
     let player = Address::generate(&env);
 
-    // wave=5 -> min_score=50; score=40 fails
+    // wave=5 -> min_score=25 (MIN_SCORE_PER_WAVE=5); score=20 fails
     let res = catch_unwind(std::panic::AssertUnwindSafe(|| {
         policy_client.submit_zk(
             &player,
@@ -237,7 +237,7 @@ fn test_submit_zk_invalid_input_score_below_min() {
             &1u64,
             &run_hash_32(&env),
             &1u32,
-            &40u32,
+            &20u32,
             &5u32,
         );
     }));
