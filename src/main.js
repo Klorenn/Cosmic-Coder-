@@ -541,8 +541,10 @@ function startGame() {
     game.events.on('ready', () => {
       console.log('✅ Juego listo y renderizando');
       setOverlayText('Running');
-      // Hide status overlay after a short delay so the game canvas is visible
-      game.time.delayedCall(2500, () => setOverlayText(''));
+      // Hide status overlay after a short delay (guard: time may not be ready on texturesReady path)
+      if (game.time && typeof game.time.delayedCall === 'function') {
+        game.time.delayedCall(2500, () => setOverlayText(''));
+      }
     });
     
     game.events.on('resize', (gameSize) => {

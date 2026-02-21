@@ -104,9 +104,11 @@ export default class BootScene extends Phaser.Scene {
     this.load.image('rank_diamond', asset('assets/UI/Ranks/rank_diamond.png'));
 
     // We'll generate all textures procedurally (and with fallbacks) in create()
-    this.time.delayedCall(500, () => {
-      loadingText.destroy();
-    });
+    if (this.time && typeof this.time.delayedCall === 'function') {
+      this.time.delayedCall(500, () => {
+        if (loadingText && loadingText.destroy) loadingText.destroy();
+      });
+    }
   }
 
   create() {
