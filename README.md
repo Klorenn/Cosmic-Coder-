@@ -102,7 +102,7 @@ So: **Stellar** provides the chain and the Game Hub session lifecycle; **ZK** en
 |----------|------|----------------|
 | **Game Hub** | Session lifecycle: `start_game`, `end_game` | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG) |
 | **Policy (Cosmic Coder)** | Our game: `start_match`, `submit_result`, `submit_zk`, leaderboard | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO) |
-| **Verifier (groth16_verifier)** | BN254 Groth16 proof verification | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA) |
+| **Verifier (zk_verifier)** | BN254 Groth16 proof verification | [View on Stellar Expert](https://stellar.expert/explorer/testnet/contract/CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA) |
 
 - **Play:** [Cosmic Coder](https://klorenn.github.io/Cosmic-Coder-/)
 - **Deploy contracts & prover:** [docs/DEPLOY_ZK_STEPS.md](docs/DEPLOY_ZK_STEPS.md)
