@@ -3,12 +3,12 @@
  * Maps on-chain weapon IDs to game weapon types
  */
 
-// Weapon tiers with thresholds and round 1 bonuses
+// Weapon tiers aligned with RankManager (Bronze/Silver/Gold/Diamond). Thresholds = min score to unlock.
 export const WEAPON_TIERS = {
   1: { name: 'Bronze', threshold: 0, round1Bonus: 0 },
-  2: { name: 'Silver', threshold: 1000, round1Bonus: 0.2 },
-  3: { name: 'Gold', threshold: 5000, round1Bonus: 0.5 },
-  4: { name: 'Mythic', threshold: 10000, round1Bonus: 1.0 }
+  2: { name: 'Silver', threshold: 10, round1Bonus: 0.2 },   // Shotgun: 10 score for testing
+  3: { name: 'Gold', threshold: 1000, round1Bonus: 0.5 },
+  4: { name: 'Diamond', threshold: 10000, round1Bonus: 1.0 }
 };
 
 // Weapon definitions mapping IDs to game types

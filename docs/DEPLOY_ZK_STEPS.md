@@ -9,7 +9,7 @@ Si ya están desplegados en testnet, puedes usar estos IDs en el frontend (`.env
 | Contrato | ID (Testnet) | Stellar Expert |
 |----------|--------------|----------------|
 | **Policy (cosmic_coder)** | `CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO` | [Ver policy](https://stellar.expert/explorer/testnet/contract/CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO) |
-| **Verifier (groth16_verifier)** | `CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA` | [Ver verifier](https://stellar.expert/explorer/testnet/contract/CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA) |
+| **Verifier (zk_verifier)** | `CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA` | [Ver verifier](https://stellar.expert/explorer/testnet/contract/CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA) |
 | **Game Hub** | `CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG` | [Ver Game Hub](https://stellar.expert/explorer/testnet/contract/CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG) |
 
 Para jugar con este despliegue: `VITE_COSMIC_CODER_CONTRACT_ID=CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO`.
@@ -25,7 +25,7 @@ export PATH="$HOME/.cargo/bin:$PATH"
 rustup target add wasm32v1-none
 cd contracts
 cargo build -p zk_types
-cargo build -p groth16_verifier --target wasm32v1-none --release
+cargo build -p zk_verifier --target wasm32v1-none --release
 cargo build -p cosmic_coder --target wasm32v1-none --release
 cd ..
 ```
@@ -36,7 +36,7 @@ Necesitas una cuenta en testnet con XLM (p. ej. desde [Friendbot](https://labora
 
 ```bash
 cd contracts
-stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/groth16_verifier.wasm
+stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/zk_verifier.wasm
 ```
 
 **Guarda el ID que devuelve** como `VERIFIER_ID`.

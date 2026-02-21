@@ -7,12 +7,12 @@
 
 # 1. Executive Summary
 
-Cosmic Coder is a Vampire-Survivors-style survival game with an off-chain Phaser front-end and on-chain ranked mode on Stellar/Soroban. Ranked scores are accepted only when accompanied by a zero-knowledge (ZK) proof that attests to a valid run. The system comprises: (1) an off-chain game engine and ZK proof generation, (2) a Groth16 verifier contract (BN254), (3) a policy contract (Shadow Ascension) that enforces replay protection and maintains a per-season leaderboard, and (4) integration with a Stellar Game Hub for session lifecycle. All ZK-related types are shared via a single crate (`zk_types`); the verifier has no game logic; the policy delegates proof verification to the verifier and handles replay, leaderboard updates, and events.
+Cosmic Coder is a Vampire-Survivors-style survival game with an off-chain Phaser front-end and on-chain ranked mode on Stellar/Soroban. Ranked scores are accepted only when accompanied by a zero-knowledge (ZK) proof that attests to a valid run. The system comprises: (1) an off-chain game engine and ZK proof generation, (2) a ZK verifier contract (zk_verifier, BN254), (3) a policy contract (Cosmic Coder) that enforces replay protection and maintains a per-season leaderboard, and (4) integration with a Stellar Game Hub for session lifecycle. All ZK-related types are shared via a single crate (`zk_types`); the verifier has no game logic; the policy delegates proof verification to the verifier and handles replay, leaderboard updates, and events.
 
 ---
 
 **Resumen ejecutivo (ES)**  
-Cosmic Coder es un juego de supervivencia al estilo Vampire Survivors con front-end off-chain en Phaser y modo ranked on-chain en Stellar/Soroban. Las puntuaciones ranked solo se aceptan cuando van acompañadas de una prueba de conocimiento cero (ZK) que acredita una partida válida. El sistema consta de: (1) motor de juego off-chain y generación de pruebas ZK, (2) contrato verificador Groth16 (BN254), (3) contrato de política (Shadow Ascension) que aplica protección anti-replay y mantiene un leaderboard por temporada, y (4) integración con un Game Hub de Stellar para el ciclo de vida de sesión. Los tipos ZK se comparten en un único crate (`zk_types`); el verificador no contiene lógica de juego; la política delega la verificación en el verificador y gestiona replay, leaderboard y eventos.
+Cosmic Coder es un juego de supervivencia al estilo Vampire Survivors con front-end off-chain en Phaser y modo ranked on-chain en Stellar/Soroban. Las puntuaciones ranked solo se aceptan cuando van acompañadas de una prueba de conocimiento cero (ZK) que acredita una partida válida. El sistema consta de: (1) motor de juego off-chain y generación de pruebas ZK, (2) contrato verificador ZK (zk_verifier, BN254), (3) contrato de política (Cosmic Coder) que aplica protección anti-replay y mantiene un leaderboard por temporada, y (4) integración con un Game Hub de Stellar para el ciclo de vida de sesión. Los tipos ZK se comparten en un único crate (`zk_types`); el verificador no contiene lógica de juego; la política delega la verificación en el verificador y gestiona replay, leaderboard y eventos.
 
 ---
 
@@ -26,10 +26,10 @@ Cosmic Coder es un juego de supervivencia al estilo Vampire Survivors con front-
 - **ZK proof generation layer**  
   A Circom circuit (`GameRun.circom`) defines the statement. Inputs are private; public inputs (run_hash_hi, run_hash_lo, score, wave, nonce, season_id) are exposed. snarkjs (Groth16) produces the proof and the verification key. A script exports proof and VK into the binary format expected by the Soroban verifier (G1/G2 points and field elements as fixed-size byte arrays).
 
-- **Soroban policy contract (Shadow Ascension)**  
-  Single entry point for ranked submission: `submit_zk`. It checks that a verifier is set, validates VK shape (e.g. `ic.len() == pub_signals.len() + 1`), enforces `score > 0` and `wave > 0`, checks anti-replay for `(player, nonce, season_id)`, invokes the Groth16 verifier contract, and on success marks the nonce used, updates the per-season leaderboard (by score), notifies the Game Hub (`end_game`), and emits a `zk_run_submitted` event.
+- **Soroban policy contract (Cosmic Coder)**  
+  Single entry point for ranked submission: `submit_zk`. It checks that a verifier is set, validates VK shape (e.g. `ic.len() == pub_signals.len() + 1`), enforces `score > 0` and `wave > 0`, checks anti-replay for `(player, nonce, season_id)`, invokes the ZK verifier contract (zk_verifier), and on success marks the nonce used, updates the per-season leaderboard (by score), notifies the Game Hub (`end_game`), and emits a `zk_run_submitted` event.
 
-- **Groth16 verifier contract**  
+- **ZK verifier contract (zk_verifier)**  
   Stateless. Accepts a verification key, a proof, and a list of public signals (each 32 bytes). It checks that `vk.ic.len() == pub_signals.len() + 1`, deserializes points (G1/G2) and scalars (Fr), computes the linear combination `vk_x = ic[0] + sum(pub_signals[i] * ic[i+1])`, and runs the BN254 pairing check. Returns `Ok(true)` if the proof is valid, or an error (e.g. `MalformedVerifyingKey`).
 
 - **Stellar Game Hub**  
@@ -88,7 +88,7 @@ Cosmic Coder es un juego de supervivencia al estilo Vampire Survivors con front-
 ---
 
 **Arquitectura del sistema (ES)**  
-Los mismos componentes: motor Phaser off-chain, capa de generación de pruebas ZK (Circom/snarkjs), contrato de política Shadow Ascension, contrato verificador Groth16, Game Hub de Stellar y almacenamiento del leaderboard. El diagrama ASCII muestra el flujo desde el navegador hasta los contratos Soroban y el uso compartido de `zk_types`.
+Los mismos componentes: motor Phaser off-chain, capa de generación de pruebas ZK (Circom/snarkjs), contrato de política Cosmic Coder, contrato verificador ZK (zk_verifier), Game Hub de Stellar y almacenamiento del leaderboard. El diagrama ASCII muestra el flujo desde el navegador hasta los contratos Soroban y el uso compartido de `zk_types`.
 
 ---
 
@@ -208,7 +208,7 @@ Se comprueba que el producto de los pairings indicados sea la identidad; vk_x es
 
 ## 3.8 Constraint: score ≥ wave × MIN_SCORE_PER_WAVE
 
-The policy enforces **score > 0** and **wave > 0** for `submit_zk`. The rule that score must be at least `wave * MIN_SCORE_PER_WAVE` (e.g. 10 per wave) is enforced in the **legacy** path (`submit_result`) with an explicit check. For the ZK path, the same rule can be encoded as a circuit constraint so that only runs satisfying it produce valid proofs; the current Circom circuit binds the public inputs and can be extended with that inequality. The on-chain policy does not re-check that inequality for `submit_zk`; it relies on the verifier and the circuit design.
+The policy enforces **score > 0** and **wave > 0** for `submit_zk`. The rule that score must be at least `wave * MIN_SCORE_PER_WAVE` (e.g. 5 per wave) is enforced in the **legacy** path (`submit_result`) with an explicit check. For the ZK path, the same rule can be encoded as a circuit constraint so that only runs satisfying it produce valid proofs; the current Circom circuit binds the public inputs and can be extended with that inequality. The on-chain policy does not re-check that inequality for `submit_zk`; it relies on the verifier and the circuit design.
 
 ---
 
@@ -247,7 +247,7 @@ Define los tipos y errores ZK compartidos; `#[contracttype]` para ABI; `no_std` 
 
 ---
 
-## 4.2 groth16_verifier
+## 4.2 zk_verifier
 
 - **Input validation:** The only explicit check is `pub_signals.len() + 1 != vk.ic.len()` → `Err(MalformedVerifyingKey)`. Invalid point or scalar encodings are not validated byte-by-byte; bad data can lead to failed deserialization or an incorrect pairing result (verification fails).
 - **ic length check:** Ensures the VK matches the number of public inputs; without it, the linear combination vk_x would be ill-defined or out-of-bounds.
@@ -257,12 +257,12 @@ Define los tipos y errores ZK compartidos; `#[contracttype]` para ABI; `no_std` 
 
 ---
 
-**Contrato groth16_verifier (ES)**  
+**Contrato zk_verifier (ES)**  
 Valida longitud de ic; calcula vk_x y ejecuta el pairing check; devuelve Ok(true)/Err; el coste en gas viene de las operaciones criptográficas BN254.
 
 ---
 
-## 4.3 shadow_ascension policy
+## 4.3 cosmic_coder policy
 
 - **`set_verifier(verifier: Address)`:** Stores the verifier contract address in persistent storage under the symbol `"Verifier"`. Required before any successful `submit_zk`; if not set, `submit_zk` returns `VerifierNotSet`.
 - **`submit_zk(...)`:**  
@@ -279,7 +279,7 @@ Valida longitud de ic; calcula vk_x y ejecuta el pairing check; devuelve Ok(true
 
 ---
 
-**Contrato shadow_ascension (ES)**  
+**Contrato cosmic_coder (ES)**  
 set_verifier guarda el verificador; submit_zk valida verifier, VK, score/wave, replay, invoca el verificador, actualiza replay y leaderboard por temporada y emite el evento zk_run_submitted.
 
 ---
@@ -306,12 +306,12 @@ ReplayKey = (player, nonce, season_id) garantiza unicidad por partida aceptada; 
   For `submit_zk`, pass the policy contract ID and all arguments (player, proof, vk, pub_signals, nonce, run_hash, season_id, score, wave). For `verify_proof`, pass the verifier contract ID and (vk, proof, pub_signals).
 
 - **Output:** The CLI reports estimated CPU instructions, memory, and other resources. This gives a cost envelope for the transaction before deployment or mainnet use.
-- **Groth16 cost envelope:** Verification is dominated by BN254 pairing and group operations. The number of pairings and multiplications is fixed for a given circuit (six public inputs, so a fixed vk_x computation and one pairing check). Run simulation with a real-sized proof and VK to obtain numbers for the target network and fee model.
+- **ZK verifier cost envelope:** Verification is dominated by BN254 pairing and group operations. The number of pairings and multiplications is fixed for a given circuit (six public inputs, so a fixed vk_x computation and one pairing check). Run simulation with a real-sized proof and VK to obtain numbers for the target network and fee model.
 
 ---
 
 **Gas y simulación de recursos (ES)**  
-`stellar contract invoke --sim-only` permite medir CPU/memoria sin enviar la transacción; el coste de Groth16 es fijo por verificación y debe comprobarse con una prueba y VK reales.
+`stellar contract invoke --sim-only` permite medir CPU/memoria sin enviar la transacción; el coste del verifier ZK es fijo por verificación y debe comprobarse con una prueba y VK reales.
 
 ---
 

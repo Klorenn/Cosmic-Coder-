@@ -1,6 +1,6 @@
 # ZK Real Proof Setup (Cosmic Coder)
 
-Guía para compilar el circuito Circom, generar VK/proof real y usarlos con `groth16_verifier` y `submit_zk`.
+Guía para compilar el circuito Circom, generar VK/proof real y usarlos con `zk_verifier` y `submit_zk`.
 
 ## Requisitos
 

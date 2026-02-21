@@ -1,6 +1,16 @@
 import Phaser from 'phaser';
 import { Buffer } from 'buffer';
 import BootScene from './scenes/BootScene.js';
+
+// Suppress Phaser "Frame X not found in texture Y" console warnings (no code removed)
+(function () {
+  const orig = console.warn;
+  console.warn = function (...args) {
+    const msg = args.length && typeof args[0] === 'string' ? args[0] : '';
+    if (msg.includes('not found in texture') && msg.includes('Frame')) return;
+    orig.apply(console, args);
+  };
+})();
 import TitleScene from './scenes/TitleScene.js';
 import ArenaScene from './scenes/ArenaScene.js';
 import { connectToXPServer, isConnected } from './utils/socket.js';

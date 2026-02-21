@@ -84,20 +84,19 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('robot-walk', '/assets/sprites/player/robot-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-hurt', '/assets/sprites/player/robot-hurt.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-death', '/assets/sprites/player/robot-death.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('vibecoder-death', '/assets/sprites/player/vibecoder-death.png', { frameWidth: 128, frameHeight: 128 });
+    // Death sprites: spritesheet por personaje (secuencia: pie → caída → tumbado)
+    this.load.spritesheet('vibecoder-death', '/assets/sprites/player/VibeCoder/vibecoder-death.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-death', '/assets/sprites/player/VoidNull/voidnull-death.png', { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('swordsman-death', '/assets/sprites/player/SyncStorm/sync-death.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-enabling', '/assets/sprites/player/robot-enabling.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-idle', '/assets/sprites/player/destroyer-idle.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-walk', '/assets/sprites/player/destroyer-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-hurt', '/assets/sprites/player/destroyer-hurt.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('destroyer-death', '/assets/sprites/player/destroyer-death.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-enabling', '/assets/sprites/player/destroyer-enabling.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-idle', '/assets/sprites/player/swordsman-idle.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-walk', '/assets/sprites/player/swordsman-walk.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-hurt', '/assets/sprites/player/swordsman-hurt.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('swordsman-death', '/assets/sprites/player/swordsman-death.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-enabling', '/assets/sprites/player/swordsman-enabling.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('sync-death', '/assets/sprites/player/sync-death.png', { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('voidnull-death', '/assets/sprites/player/voidnull-death.png', { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('werewolf-run', '/assets/sprites/enemies/werewolf-run.png', { frameWidth: 128, frameHeight: 128 });
     // Blue Version background pack — resolve base at runtime so it works on GitHub Pages, Vercel, and local
     const bgBase = getBackgroundBase();
@@ -236,34 +235,26 @@ export default class BootScene extends Phaser.Scene {
       console.warn('[BootScene] Skipping player animations — texture "player" or "robot-hurt" missing');
     }
   
-    // VibeCoder death animation (for game over screen) — standing → fall → lying on ground
+    // VibeCoder death animation (game over): 5 frames (640×128), frameRate 4, play once
     if (this.textures.exists('vibecoder-death')) {
-      const frameTotal = this.textures.get('vibecoder-death')?.frameTotal || 1;
-      const end = Math.max(0, frameTotal - 1);
-      console.log(`[BootScene] vibecoder-death texture has ${frameTotal} frames, creating animation from 0 to ${end} (last = on ground)`);
+      const end = Math.max(0, (this.textures.get('vibecoder-death')?.frameTotal || 1) - 2);
       this.anims.create({
         key: 'vibecoder-death',
         frames: this.anims.generateFrameNumbers('vibecoder-death', { start: 0, end }),
         frameRate: 4,
         repeat: 0
       });
-    } else {
-      console.warn('[BootScene] Skipping vibecoder-death animation — texture missing');
     }
 
-    // Robot (legacy/fallback) death animation (for game over screen)
+    // Robot (legacy/fallback) death animation (game over)
     if (this.textures.exists('robot-death')) {
-      const frameTotal = this.textures.get('robot-death')?.frameTotal || 1;
-      const end = Math.max(0, frameTotal - 1);
-      console.log(`[BootScene] robot-death texture has ${frameTotal} frames, creating animation from 0 to ${end}`);
+      const end = Math.max(0, (this.textures.get('robot-death')?.frameTotal || 1) - 2);
       this.anims.create({
         key: 'robot-death',
         frames: this.anims.generateFrameNumbers('robot-death', { start: 0, end }),
         frameRate: 4,
         repeat: 0
       });
-    } else {
-      console.warn('[BootScene] Skipping robot-death animation — texture missing');
     }
   
     // VibeCoder enabling animation (for character selection)
@@ -285,18 +276,15 @@ export default class BootScene extends Phaser.Scene {
       console.warn('[BootScene] Skipping player-destroyer animations — textures missing');
     }
 
-    // Destroyer death animation (for game over screen) — dynamic frame count so last frame = on ground
+    // VoidNull/Destroyer death animation (game over): 4 frames (512×128)
     if (this.textures.exists('destroyer-death')) {
-      const frameTotal = this.textures.get('destroyer-death')?.frameTotal || 1;
-      const end = Math.max(0, frameTotal - 1);
+      const end = Math.max(0, (this.textures.get('destroyer-death')?.frameTotal || 1) - 2);
       this.anims.create({
         key: 'destroyer-death',
         frames: this.anims.generateFrameNumbers('destroyer-death', { start: 0, end }),
         frameRate: 4,
         repeat: 0
       });
-    } else {
-      console.warn('[BootScene] Skipping destroyer-death animation — texture missing');
     }
 
     // Destroyer enabling animation (for character selection)
@@ -311,44 +299,15 @@ export default class BootScene extends Phaser.Scene {
       console.warn('[BootScene] Skipping destroyer-enabling animation — texture missing');
     }
 
-    // StormMan death animation (for game over screen) — dynamic frame count so last frame = on ground
+    // SyncStorm/Swordsman death animation (game over): 4 frames (512×128)
     if (this.textures.exists('swordsman-death')) {
-      const frameTotal = this.textures.get('swordsman-death')?.frameTotal || 1;
-      const end = Math.max(0, frameTotal - 1);
+      const end = Math.max(0, (this.textures.get('swordsman-death')?.frameTotal || 1) - 2);
       this.anims.create({
         key: 'swordsman-death',
         frames: this.anims.generateFrameNumbers('swordsman-death', { start: 0, end }),
         frameRate: 4,
         repeat: 0
       });
-    } else {
-      console.warn('[BootScene] Skipping swordsman-death animation — texture missing');
-    }
-
-    // Sync death animation (for game over screen)
-    if (this.textures.exists('sync-death')) {
-      const end = Math.max(0, (this.textures.get('sync-death')?.frameTotal || 1) - 1);
-      this.anims.create({
-        key: 'sync-death',
-        frames: this.anims.generateFrameNumbers('sync-death', { start: 0, end }),
-        frameRate: 4,
-        repeat: 0
-      });
-    } else {
-      console.warn('[BootScene] Skipping sync-death animation — texture missing');
-    }
-
-    // VoidNull death animation (for game over screen)
-    if (this.textures.exists('voidnull-death')) {
-      const end = Math.max(0, (this.textures.get('voidnull-death')?.frameTotal || 1) - 1);
-      this.anims.create({
-        key: 'voidnull-death',
-        frames: this.anims.generateFrameNumbers('voidnull-death', { start: 0, end }),
-        frameRate: 4,
-        repeat: 0
-      });
-    } else {
-      console.warn('[BootScene] Skipping voidnull-death animation — texture missing');
     }
 
     // StormMan enabling animation (for character selection)

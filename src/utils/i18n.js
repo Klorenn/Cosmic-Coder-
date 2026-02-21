@@ -41,4 +41,16 @@ export function t(key) {
   return typeof value === 'string' ? value : key;
 }
 
-export default { t, currentLang, setLanguage };
+/**
+ * Get array of dev/hacker bark phrases for a character (vibecoder, destroyer, swordsman).
+ * @param {string} charId - character id
+ * @returns {string[]}
+ */
+export function getBarks(charId) {
+  const lang = getLanguage();
+  const locale = locales[lang] || en;
+  const arr = locale.barks && locale.barks[charId];
+  return Array.isArray(arr) ? arr : [];
+}
+
+export default { t, currentLang, setLanguage, getBarks };

@@ -18,8 +18,7 @@ export function getContractId() {
   return (
     (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID) ||
     (typeof import.meta !== 'undefined' && import.meta.env?.VITE_COSMIC_CODER_CONTRACT_ID) ||
-    (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SHADOW_ASCENSION_CONTRACT_ID) ||
+    // Legacy fallback env var (removed — use VITE_COSMIC_CODER_CONTRACT_ID)
     ''
   );
 }

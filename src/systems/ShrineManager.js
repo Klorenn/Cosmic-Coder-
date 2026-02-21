@@ -305,6 +305,8 @@ export default class ShrineManager {
    * Try to interact with nearby shrine
    */
   tryInteract() {
+    // Prioritize ZK weapon pickup (press E) when standing near a ZK drop
+    if (typeof this.scene.getNearestZkDropDistance === 'function' && this.scene.getNearestZkDropDistance() <= 70) return;
     if (!this.nearbyShrine || this.nearbyShrine.isUsed) return;
 
     const shrine = this.nearbyShrine;

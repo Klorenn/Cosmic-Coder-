@@ -8,7 +8,7 @@
 
 Tanto el **contrato** como el **cliente** exigen que la partida cumpla:
 
-- **score ≥ wave × MIN_SCORE_PER_WAVE** (por ejemplo MIN_SCORE_PER_WAVE = 10).
+- **score ≥ wave × MIN_SCORE_PER_WAVE** (por ejemplo MIN_SCORE_PER_WAVE = 5).
 
 Así se evitan envíos con puntuación desproporcionadamente baja para la oleada. Con el nuevo balance (armas nerfeadas, enemigos más duros), sigue siendo alcanzable: el jugador gana XP por kills y por completar oleadas; si llega a wave 5, debe tener al menos 50 de score (total XP).
 
@@ -27,7 +27,7 @@ Así se evitan envíos con puntuación desproporcionadamente baja para la oleada
 6. **En el contrato:**  
    - Comprueba verifier configurado, forma de VK, `score > 0`, `wave > 0`, **score ≥ wave × MIN_SCORE_PER_WAVE**.  
    - Comprueba anti-replay: si `(player, nonce, season_id)` ya usado → `Replay`.  
-   - Invoca al verifier Groth16; si la proof es válida, marca el nonce como usado, actualiza el leaderboard de la temporada, llama al Game Hub `end_game` y emite el evento `zk_run_submitted`.
+   - Invoca al verifier zk_verifier; si la proof es válida, marca el nonce como usado, actualiza el leaderboard de la temporada, llama al Game Hub `end_game` y emite el evento `zk_run_submitted`.
 
 La proof real (Circom) se integra usando el mismo flujo: el backend genera la proof con los mismos `run_hash`, `score`, `wave`, `nonce`, `season_id` que luego se envían en `submit_zk`.
 
@@ -105,7 +105,7 @@ Los tests usan (wave, score) que cumplen la regla (por ejemplo wave=5 score=100,
 
 Both the **contract** and the **client** require:
 
-- **score ≥ wave × MIN_SCORE_PER_WAVE** (e.g. MIN_SCORE_PER_WAVE = 10).
+- **score ≥ wave × MIN_SCORE_PER_WAVE** (e.g. MIN_SCORE_PER_WAVE = 5).
 
 This avoids submissions with unreasonably low score for the wave. With the new balance (weapon nerfs, stronger enemies), the rule remains achievable: the player gains XP from kills and wave completion.
 
@@ -119,7 +119,7 @@ This avoids submissions with unreasonably low score for the wave. With the new b
 3. **Client validation:** `validateGameRules(wave, score)`; if invalid, do not submit.  
 4. **Proof request (option B):** Client calls backend `POST /zk/prove` with `{ run_hash_hex, score, wave, nonce, season_id }`; backend returns `contract_proof.json`.  
 5. **On-chain submit:** Client signs and calls `submit_zk(...)`.  
-6. **Contract:** Validates rule, anti-replay, invokes Groth16 verifier; on success, marks nonce used, updates per-season leaderboard, calls Hub `end_game`, emits `zk_run_submitted`.
+6. **Contract:** Validates rule, anti-replay, invokes zk_verifier; on success, marks nonce used, updates per-season leaderboard, calls Hub `end_game`, emits `zk_run_submitted`.
 
 Real proof (Circom) integrates by having the backend produce the proof with the same inputs used in `submit_zk`.
 

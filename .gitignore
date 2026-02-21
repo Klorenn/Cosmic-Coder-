@@ -13,3 +13,4 @@ contracts/target/
 contracts/*/target/
 **/test_snapshots/
 *.code-workspace
+tmp/

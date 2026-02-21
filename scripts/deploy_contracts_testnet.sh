@@ -18,11 +18,11 @@ CONTRACTS="$ROOT/contracts"
 WASM_DIR="$CONTRACTS/target/wasm32v1-none/release"
 GAME_HUB="CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG"
 
-if [ ! -f "$WASM_DIR/groth16_verifier.wasm" ] || [ ! -f "$WASM_DIR/shadow_ascension.wasm" ]; then
+if [ ! -f "$WASM_DIR/groth16_verifier.wasm" ] || [ ! -f "$WASM_DIR/cosmic_coder.wasm" ]; then
   echo "Build WASM first (use target wasm32v1-none for Soroban testnet):"
   echo "  export PATH=\"\$HOME/.cargo/bin:\$PATH\""
   echo "  rustup target add wasm32v1-none"
-  echo "  cd $CONTRACTS && cargo build -p zk_types && cargo build -p groth16_verifier --target wasm32v1-none --release && cargo build -p shadow_ascension --target wasm32v1-none --release"
+  echo "  cd $CONTRACTS && cargo build -p zk_types && cargo build -p groth16_verifier --target wasm32v1-none --release && cargo build -p cosmic_coder --target wasm32v1-none --release"
   exit 1
 fi
 
@@ -34,7 +34,7 @@ if [ -z "$SOURCE_ACCOUNT" ]; then
   echo "cd $CONTRACTS"
   echo "stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/groth16_verifier.wasm"
   echo "# Save the returned ID as VERIFIER_ID"
-  echo "stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/shadow_ascension.wasm"
+  echo "stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/cosmic_coder.wasm"
   echo "# Save the returned ID as POLICY_ID"
   echo "stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network testnet -- init --game_hub $GAME_HUB"
   echo "stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network testnet -- set_verifier --verifier <VERIFIER_ID>"
@@ -50,7 +50,7 @@ VERIFIER_ID=$(stellar contract deploy --source-account "$SOURCE_ACCOUNT" --netwo
 echo "VERIFIER_ID=$VERIFIER_ID"
 
 echo "Deploying policy..."
-POLICY_ID=$(stellar contract deploy --source-account "$SOURCE_ACCOUNT" --network testnet --wasm target/wasm32v1-none/release/shadow_ascension.wasm 2>&1 | tee /dev/stderr | tail -1)
+POLICY_ID=$(stellar contract deploy --source-account "$SOURCE_ACCOUNT" --network testnet --wasm target/wasm32v1-none/release/cosmic_coder.wasm 2>&1 | tee /dev/stderr | tail -1)
 echo "POLICY_ID=$POLICY_ID"
 
 echo "Initing policy with Game Hub..."

@@ -31,8 +31,8 @@ Contratos actuales en Testnet:
 
 | Contrato | ID |
 |----------|-----|
-| Policy (shadow_ascension) | `CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO` |
-| Verifier (groth16) | `CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA` |
+| Policy (cosmic_coder) | `CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO` |
+| Verifier (zk_verifier) | `CCQQDZBSOREFGWRX7BJKG4S42CPYASWVOUFLTFNKV5IQ3STOJ7ROSOBA` |
 | Game Hub | `CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG` |
 
 Si quieres desplegar los tuyos: [DEPLOY_ZK_STEPS.md](DEPLOY_ZK_STEPS.md) o [HACKATHON_DO_THIS.md](HACKATHON_DO_THIS.md).
@@ -73,7 +73,7 @@ Para que el build de GitHub Pages incluya contrato y prover:
 
 1. GitHub → Repo → **Settings → Secrets and variables → Actions**
 2. **New repository secret:**
-   - **Name:** `VITE_SHADOW_ASCENSION_CONTRACT_ID`
+   - **Name:** `VITE_COSMIC_CODER_CONTRACT_ID`
    - **Value:** `CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO`
 3. **New repository secret:**
    - **Name:** `VITE_ZK_PROVER_URL`
@@ -112,6 +112,6 @@ Si el prover falla o está caído, el juego hace fallback a `submit_result` (cas
 
 - [ ] `npm run zk:build` y `git add circuits/build/` + commit
 - [ ] Deploy prover en Render, copiar URL
-- [ ] Añadir secrets `VITE_SHADOW_ASCENSION_CONTRACT_ID` y `VITE_ZK_PROVER_URL`
+- [ ] Añadir secrets `VITE_COSMIC_CODER_CONTRACT_ID` y `VITE_ZK_PROVER_URL`
 - [ ] `git push origin main`
 - [ ] Verificar en la URL de GitHub Pages

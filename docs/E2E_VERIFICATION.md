@@ -30,7 +30,7 @@ Compila circuito, genera proof real (score=100, wave=5) y ejecuta los tests de v
 ```bash
 npm run zk:proof   # genera contract_proof.json
 cd contracts
-cargo test -p groth16_verifier -p cosmic_coder
+cargo test -p zk_verifier -p cosmic_coder
 ```
 
 All tests should pass. These cover verifier behaviour, policy init, `submit_zk` (anti-replay, invalid proof, valid proof), and `submit_result`.

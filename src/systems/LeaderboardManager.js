@@ -4,6 +4,7 @@
  * Without: local-only fallback.
  */
 const STORAGE_KEY = 'cosmicCoderLeaderboard';
+const LOCAL_GAMES_KEY = 'cosmicCoderGamesPlayed';
 const MAX_ENTRIES = 10;
 
 const LEADERBOARD_API =
@@ -116,11 +117,46 @@ export default class LeaderboardManager {
         address: e.address ? String(e.address) : '',
         name: (e.name ? String(e.name) : (e.address ? shortAddress(e.address) : '???')).slice(0, 20),
         wave: e.wave ?? 0,
-        score: e.score ?? 0
+        score: e.score ?? 0,
+        gamesPlayed: e.games_played ?? e.gamesPlayed ?? 0
       }));
     } catch (e) {
       console.warn('[Leaderboard] fetch failed:', e);
       return [];
+    }
+  }
+
+  /**
+   * Get local games-played count for a wallet (only this player sees their own count).
+   * @param {string} address - Stellar public key
+   * @returns {number}
+   */
+  static getLocalGamesPlayed(address) {
+    if (!address) return 0;
+    try {
+      const raw = localStorage.getItem(LOCAL_GAMES_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      const count = map[String(address)];
+      return typeof count === 'number' && count >= 0 ? count : 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /**
+   * Increment local games-played for a wallet (call when a game is submitted / game over).
+   * @param {string} address - Stellar public key
+   */
+  static incrementLocalGamesPlayed(address) {
+    if (!address) return;
+    try {
+      const raw = localStorage.getItem(LOCAL_GAMES_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      const key = String(address);
+      map[key] = (map[key] ?? 0) + 1;
+      localStorage.setItem(LOCAL_GAMES_KEY, JSON.stringify(map));
+    } catch (e) {
+      console.warn('LeaderboardManager.incrementLocalGamesPlayed failed:', e);
     }
   }
 

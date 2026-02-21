@@ -71,6 +71,7 @@ export default {
     diamond_desc: 'Combatiente de primer nivel. Alta probabilidad de spawn temprano.',
     bonus_label: 'Bonus Ronda 1',
     best_score: 'Mejor Puntuación',
+    ranked_best_score: 'Mejor Puntuación (Ranked)',
     games_played: 'Partidas Jugadas',
     back: '[ CLIC O ESC PARA CERRAR ]'
   },
@@ -81,7 +82,7 @@ export default {
     zk_enabled: 'ZK PROOF: ACTIVADO',
     zk_disabled: 'ZK PROOF: DESACTIVADO',
     description: 'Cosmic Coder valida tu partida con Zero-Knowledge Proofs.\nNo se revelan detalles de puntuación on-chain; solo se confirma elegibilidad.',
-    zk_weapon_hint: 'ARMA ZK: En partidas Ranked (ZK), si ya jugaste antes tendrás un drop temprano garantizado de Plasma Rifle. Si es tu primera vez, no aparece. Es una pequeña ventaja inicial, no un boost de score.',
+    zk_weapon_hint: 'ARMAS ZK: La Shotgun se desbloquea con 10+ puntos (para pruebas). Cuando está desbloqueada, puede aparecer como arma inicial en partidas Ranked (ZK) y se muestra al lado de tu personaje solo si la desbloqueaste. Otras armas ZK se desbloquean en rangos superiores (Silver/Gold/Diamond).',
     sep10_ok: 'SEP-10: OK',
     sep10_fail: 'SEP-10: NO CONFIGURADO',
     prover_ok: 'ZK PROVER: LISTO',
@@ -97,7 +98,9 @@ export default {
     play_casual: '[ JUGAR CASUAL ]',
     close: '[ CERRAR ]',
     wallet_required: 'Wallet requerida para modo Ranked.',
-    rank_title: 'RANGO ACTUAL'
+    rank_title: 'RANGO ACTUAL',
+    min_score_warning: '⚠ SCORE MÍNIMO: 5 POR WAVE ⚠',
+    min_score_detail: 'Necesitas al menos 5 de score por wave para enviar una prueba ZK válida. Por debajo de ese umbral tu partida NO se registrará on-chain.'
   },
   game_over_screen: {
     title: 'GAME OVER',
@@ -213,6 +216,10 @@ export default {
     LEGENDARY: 'LEGENDARIAS',
     MELEE: 'MELEE',
     RANGED: 'A DISTANCIA',
+    ZK_BUFF: 'ARMAS ZK BUFF',
+    zk_title: 'Armas ZK Buff',
+    zk_connect: 'Conecta tu wallet para ver armas ZK buff',
+    zk_info: 'Las armas ZK se desbloquean permanentemente a tu wallet (con prueba).',
     locked: 'Bloqueada - Encuéntrala en partida (0.01% drop)',
     equipped: '[EQUIPADA]',
     equip: '[EQUIPAR]',
@@ -220,7 +227,14 @@ export default {
     legendary_info: '¡Las armas legendarias se desbloquean para siempre!',
     melee_info: 'Armas cuerpo a cuerpo: 15% de drop de enemigos.',
     ranged_info: 'Armas a distancia: se obtienen de enemigos en partida.',
-    tab_instructions: '[ ←/→: Cambiar pestaña | ESC: Cerrar ]'
+    tab_instructions: '[ ←/→: Cambiar pestaña | ↑/↓: Scroll | ESC: Cerrar ]',
+    scroll_more: '↑/↓ Desplazar',
+    drop_starter: 'Inicio',
+    drop_common: 'Drop común',
+    drop_uncommon: 'Drop poco común',
+    drop_evolved: 'Evolucionada (combinar 2)',
+    drop_boss: 'Drop jefe',
+    drop_melee: 'Pool melee'
   },
   pause: {
     resume: 'REANUDAR',
@@ -375,5 +389,58 @@ export default {
     memory_leak_prime: 'MEMORY LEAK PRIME',
     kernel_panic: 'KERNEL PANIC',
     deadlock: 'DEADLOCK'
+  },
+  barks: {
+    vibecoder: [
+      'Awaiting async annihilation...',
+      'Mi código compila a la primera. ¿El tuyo?',
+      'Flow state alcanzado. Latencia en Stellar: 0ms.',
+      'Yo escribo smart contracts en Vim, obviamente.',
+      'while(true) { keepShooting(); }',
+      'Compilando circuitos Noir... sintiendo el groove.',
+      'Tu lógica está mal estructurada, bro.',
+      'Ping: 1ms. Headshot confirmado on-chain.',
+      'Déjame refactorizarte la cara.',
+      'Complejidad O(1). Muerte instantánea.',
+      'Resolviendo promesas y rompiendo sueños.',
+      'Código limpio, kills limpias. #BuildOnStellar',
+      'Uso Arch Linux y compilo en Soroban, por si preguntabas.',
+      'Optimizando uso de gas... Enemigo eliminado.',
+      'Escucha el ritmo del blockchain. ¡Puro ZK!'
+    ],
+    destroyer: [
+      'sudo rm -rf /enemies/*',
+      'DROP TABLE alien_swarm; --',
+      'NullPointerException: Target erradicado.',
+      'Tu Zero-Knowledge proof devolvió FALSE.',
+      'Garbage collection ejecutado con éxito.',
+      'Access Denied. Tu firma en Soroban es inválida.',
+      'kill -9 PID_ENEMY',
+      'Formateando el Stellar Sector...',
+      'WasmVm Trap: UnreachableCodeReached. Ese eres tú.',
+      'Evaluando: enemy.isAlive() == false;',
+      'Limpiando el caché y tu barra de vida.',
+      'Has sido deprecado en esta versión.',
+      'No hay rollback para esta transacción on-chain.',
+      'Ejecutando end_game() sobre tu existencia.',
+      'Strict Mode: ON. Cero bugs, cero piedad.'
+    ],
+    swordsman: [
+      'git push --force origin testnet!',
+      'git commit -m "GG EZ"',
+      'Uncaught TypeError: tu habilidad is undefined.',
+      '¡Haciendo deploy en @BuildOnStellar un viernes!',
+      'Panic! at the Soroban VM!',
+      'Resolviendo conflictos de merge... a la fuerza.',
+      'throw new Error("Skill_Issue_Detectado");',
+      'Status: 200 OK. Enemigo: 404 Not Found.',
+      '¡Overclockeando el ZK prover! #StellarHacks',
+      'cargo run --release --destroy-all',
+      'Memory leak detectado en tu estrategia.',
+      '¡Ctrl+C no te va a salvar esta vez!',
+      'Brute-forcing the nonce... ¡Boom!',
+      '¡Stack Overflow de balas!',
+      'Bypasseando tu firewall con una prueba ZK.'
+    ]
   }
 };

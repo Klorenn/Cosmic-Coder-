@@ -12,7 +12,7 @@
  * - score >= wave * MIN_SCORE_PER_WAVE (base progression)
  * - score and wave within sane bounds
  */
-const MIN_SCORE_PER_WAVE = 10;
+const MIN_SCORE_PER_WAVE = 5;
 const MAX_WAVE = 10000;
 const MAX_SCORE = 1e12;
 

@@ -12,7 +12,7 @@ import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
 import LeaderboardManager from '../systems/LeaderboardManager.js';
 import { getRankById, getRankName, getRankBonus, isUnranked } from '../systems/RankManager.js';
-import { t } from '../utils/i18n.js';
+import { t, getBarks } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
 import { progressStore, saveProgressToWallet, persistIfWalletConnected } from '../utils/walletProgressService.js';
 import * as gameClient from '../contracts/gameClient.js';
@@ -177,8 +177,8 @@ export default class ArenaScene extends Phaser.Scene {
     this.enemyTypes = {
       // Original enemies – buffeados para que peguen más duro
       bug: { health: 24, speed: 45, damage: 14, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 6 }, // base trash mob
-      glitch: { health: 45, speed: 75, damage: 17, xpValue: 15, behavior: 'chase', waveMin: 3, spawnWeight: 2 },
-      'memory-leak': { health: 90, speed: 28, damage: 24, xpValue: 30, behavior: 'chase', waveMin: 5 },
+      glitch: { health: 45, speed: 75, damage: 17, xpValue: 15, behavior: 'chase', waveMin: 0, spawnWeight: 2 },
+      'memory-leak': { health: 90, speed: 28, damage: 24, xpValue: 30, behavior: 'chase', waveMin: 0, spawnWeight: 2 },
       'syntax-error': { health: 18, speed: 110, damage: 13, xpValue: 10, behavior: 'teleport', teleportCooldown: 2800, waveMin: 8, spawnWeight: 2 },
       'infinite-loop': { health: 60, speed: 55, damage: 16, xpValue: 20, behavior: 'orbit', orbitRadius: 120, waveMin: 12 },
       'race-condition': { health: 40, speed: 70, damage: 18, xpValue: 25, behavior: 'erratic', speedVariance: 90, waveMin: 15 },
@@ -465,12 +465,22 @@ export default class ArenaScene extends Phaser.Scene {
           }
         }
 
-        if (hasPlayedBefore) {
-          const starterWeapon = this.getZkStarterWeaponFromMilestone(milestone);
-          console.log('[ZK Startup] Dropping ZK starter weapon:', starterWeapon);
-          this.spawnSpecificWeaponDropNearPlayer(starterWeapon, 52, 0);
+        // Unlocked ZK weapons: API + fallback (score >= 10 unlocks Shotgun for testing)
+        let unlockedWeapons = [1];
+        try {
+          const list = await weaponClient.getUnlockedWeapons(addr);
+          if (Array.isArray(list)) unlockedWeapons = list;
+        } catch (_) {}
+        const displayScore = (stats.bestScore != null && stats.bestScore > 0) ? stats.bestScore : (progressStore.highScore ?? 0);
+        if (displayScore >= 10 && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
+
+        // Spawn best unlocked ZK weapon as drop next to player (press E to pick up)
+        const weaponType = this.getZkWeaponTypeFromUnlocked(unlockedWeapons);
+        if (weaponType && weaponType !== 'basic') {
+          console.log('[ZK Startup] Dropping ZK weapon (unlocked):', weaponType);
+          this.spawnSpecificWeaponDropNearPlayer(weaponType, 52, 0);
         } else {
-          console.log('[ZK Startup] No weapon drop (no prior history detected)');
+          console.log('[ZK Startup] No ZK weapon unlocked beyond starter');
         }
       }
     } catch (_) {
@@ -493,6 +503,37 @@ export default class ArenaScene extends Phaser.Scene {
     return 'basic';
   }
 
+  /** Returns game weapon type for highest unlocked ZK weapon (2=spread, 3=pierce, 4=rapid). */
+  getZkWeaponTypeFromUnlocked(unlockedIds) {
+    if (!Array.isArray(unlockedIds) || unlockedIds.length === 0) return 'basic';
+    if (unlockedIds.includes(4)) {
+      const w = getWeaponById(4);
+      return w ? w.type : 'rapid';
+    }
+    if (unlockedIds.includes(3)) {
+      const w = getWeaponById(3);
+      return w ? w.type : 'pierce';
+    }
+    if (unlockedIds.includes(2)) {
+      const w = getWeaponById(2);
+      return w ? w.type : 'spread';
+    }
+    return 'basic';
+  }
+
+  /** Distance to nearest ZK weapon drop (for E key priority over shrine). Returns Infinity if none. */
+  getNearestZkDropDistance() {
+    if (!this.player || !this.weaponDrops) return Infinity;
+    const drops = this.weaponDrops.getChildren?.() || [];
+    let nearest = Infinity;
+    for (const d of drops) {
+      if (!d || !d.active || !d.isZkDrop) continue;
+      const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, d.x, d.y);
+      if (dist < nearest) nearest = dist;
+    }
+    return nearest;
+  }
+
   /**
    * Phaser init method - receives data passed from scene.start()
    * @param {object} data - Data from scene transition
@@ -507,6 +548,14 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   create() {
+    this._gameOverKeydown = null;
+    this.events.once('shutdown', () => {
+      if (this._gameOverKeydown) {
+        try { this.input.keyboard.off('keydown', this._gameOverKeydown); } catch (_) {}
+        this._gameOverKeydown = null;
+      }
+    });
+
     console.log('[Cosmic Coder] Game start:', this.isContinuedGame ? 'continued' : 'new', 'mode:', this.gameMode === 'zk_ranked' ? 'ZK Ranked' : 'Casual');
     if (typeof this.zkProofSubmitted === 'undefined') this.zkProofSubmitted = false;
 
@@ -658,6 +707,13 @@ export default class ArenaScene extends Phaser.Scene {
     if (!this.isContinuedGame && this.gameMode === 'zk_ranked') {
       this.startZkRankedStartup();
     } else {
+      // Casual: spawn ZK weapon drop next to player if Shotgun unlocked (score >= 10)
+      if (!this.isContinuedGame && this.gameMode === 'casual') {
+        const score = progressStore.highScore ?? 0;
+        if (score >= 10 && this.textures.exists('weapon-spread')) {
+          this.spawnSpecificWeaponDropNearPlayer('spread', 52, 0);
+        }
+      }
       this.startWave();
     }
 
@@ -990,6 +1046,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Create player at center of the larger world
     this.player = this.physics.add.sprite(this.worldWidth / 2, this.worldHeight / 2, char.textureKey);
+    Audio.playStartGameCharacter();
     this.player.setCollideWorldBounds(true);
     this.player.setScale(0.85 * this.uiScale); // Más grande y visible en arena
     // Hurtbox mínimo para que el overlap con enemigos se detecte siempre
@@ -1020,6 +1077,13 @@ export default class ArenaScene extends Phaser.Scene {
     this.speechTimer = null;
     this.lastQuoteTime = 0;
     this.quoteCooldown = 4000;
+
+    // Comentarios/lore del personaje solo en el menú (VIEW HISTORY), no en gameplay
+    this.barkText = null;
+    this.barkBubble = null;
+    this.barkStartTime = 0;
+    this.barkDuration = 2800;
+    this.barkTimer = null;
 
     // Auto-move indicator (shows current mode)
     this.autoMoveIndicator = this.add.text(0, 0, '⚔️', {
@@ -1096,6 +1160,77 @@ export default class ArenaScene extends Phaser.Scene {
       this.speechBubble.setVisible(false);
       this.speechText.setVisible(false);
     });
+  }
+
+  /**
+   * Show a random dev/hacker bark above the player. Bubble and text follow player, float up and fade out (2–3 s).
+   */
+  showBark() {
+    if (this.barkText && this.barkText.scene) {
+      this.barkText.destroy();
+      this.barkText = null;
+    }
+    if (this.barkBubble && this.barkBubble.scene) {
+      this.barkBubble.destroy();
+      this.barkBubble = null;
+    }
+    const charId = this.playingCharacterId || progressStore?.selectedCharacter || 'vibecoder';
+    const phrases = getBarks(charId);
+    if (!phrases.length) return;
+    const phrase = Phaser.Utils.Array.GetRandom(phrases);
+
+    const bubblePad = 10;
+    const maxTextWidth = 150;
+    const fontSize = 11;
+
+    this.barkBubble = this.add.graphics();
+    this.barkText = this.add.text(0, 0, phrase, {
+      fontFamily: '"Segoe UI", system-ui, monospace',
+      fontSize: `${fontSize}px`,
+      color: '#e0e0e0',
+      align: 'center',
+      wordWrap: { width: maxTextWidth }
+    }).setOrigin(0.5).setDepth(1002);
+
+    const bounds = this.barkText.getBounds();
+    const w = Math.min(200, Math.max(bounds.width + bubblePad * 2, 80));
+    const h = Math.min(80, this.barkText.height + bubblePad * 2);
+    this.barkBubbleW = w;
+    this.barkBubbleH = h;
+    this.barkBubble.setDepth(1001);
+
+    this.barkStartTime = this.time.now;
+    this.barkOffsetLeft = 82;
+    this.barkYOff = -28;
+    this.barkBubble.setPosition(this.player.x - this.barkOffsetLeft - w / 2, this.player.y + this.barkYOff - h / 2);
+    this.barkText.setPosition(this.player.x - this.barkOffsetLeft, this.player.y + this.barkYOff);
+
+    const drawBarkBubble = () => {
+      if (!this.barkBubble || !this.barkBubble.scene) return;
+      this.barkBubble.clear();
+      this.barkBubble.fillStyle(0x0a0a14, 0.92);
+      this.barkBubble.lineStyle(2, 0x00ffff, 0.7);
+      this.barkBubble.fillRoundedRect(0, 0, this.barkBubbleW, this.barkBubbleH, 6);
+      this.barkBubble.strokeRoundedRect(0, 0, this.barkBubbleW, this.barkBubbleH, 6);
+    };
+    drawBarkBubble();
+
+    this.tweens.add({
+      targets: [this.barkText, this.barkBubble],
+      alpha: 0,
+      duration: this.barkDuration,
+      onComplete: () => {
+        if (this.barkText && this.barkText.scene) this.barkText.destroy();
+        if (this.barkBubble && this.barkBubble.scene) this.barkBubble.destroy();
+        this.barkText = null;
+        this.barkBubble = null;
+      }
+    });
+  }
+
+  /** Comentarios del personaje solo en el menú (VIEW HISTORY), no en gameplay. */
+  tryBarkOnKill() {
+    return;
   }
 
   getStats() {
@@ -1559,8 +1694,9 @@ export default class ArenaScene extends Phaser.Scene {
       this.modeIndicatorText.setColor(modeColor);
     }
 
-    // Update weapon text — colors derived from weaponTypes/evolutionRecipes (single source of truth)
-    const weaponLabel = this.currentWeapon.isEvolved ? `★${this.currentWeapon.type.toUpperCase()}★` : this.currentWeapon.type.toUpperCase();
+    // Update weapon text — show ZK weapon name (e.g. Shotgun) when from unlock, else type
+    let weaponLabel = this.currentWeapon.isEvolved ? `★${this.currentWeapon.type.toUpperCase()}★` : this.currentWeapon.type.toUpperCase();
+    if (this.currentWeapon.zkWeaponName) weaponLabel = this.currentWeapon.zkWeaponName.toUpperCase();
     this.weaponText.setText(`${t('hud.weapon')}: ${weaponLabel}`);
     this.weaponText.setColor(this.getWeaponColorStr(this.currentWeapon.type));
 
@@ -1657,8 +1793,8 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   showLevelUp(level) {
-    // Level up fanfare!
-    Audio.playLevelUp();
+    // Level up song (slightly quieter)
+    Audio.playLevelUpSong();
 
     // Screen flash
     this.cameras.main.flash(200, 0, 255, 255);
@@ -1859,10 +1995,15 @@ export default class ArenaScene extends Phaser.Scene {
       // Save progress to leaderboard (so wave 13 etc. shows even if player hasn't died yet)
       const state = window.VIBE_CODER;
       const settings = window.VIBE_SETTINGS || {};
+      const nameForLeaderboard = (settings.playerName && String(settings.playerName).trim()) || (() => {
+        const cid = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
+        const ch = window.VIBE_CHARACTERS?.[cid];
+        return ch ? (ch.displayName_en || ch.displayName || ch.name || '') : '';
+      })() || 'Anonymous';
       stellarWallet.getAddress().then((addr) => {
-        const displayName = addr ? stellarWallet.shortAddress(addr) : (settings.playerName || 'Anonymous');
+        const displayName = addr ? nameForLeaderboard : (settings.playerName || 'Anonymous');
         LeaderboardManager.addEntry(displayName, this.waveNumber, state.totalXP);
-        if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP).catch(() => {});
+        if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP, nameForLeaderboard).catch(() => {});
       });
 
       // Check for rebirth milestone
@@ -2404,6 +2545,7 @@ export default class ArenaScene extends Phaser.Scene {
           window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * xpMult));
           window.VIBE_CODER.kills++;
           if (Math.random() < 0.1) this.spawnWeaponDrop(enemy.x, enemy.y);
+          this.tryBarkOnKill();
           enemy.destroy();
           this.updateHUD();
         }
@@ -3679,6 +3821,7 @@ export default class ArenaScene extends Phaser.Scene {
             window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * xpMult));
             window.VIBE_CODER.kills++;
             if (Math.random() < 0.1) this.spawnWeaponDrop(enemy.x, enemy.y);
+            this.tryBarkOnKill();
             enemy.destroy();
             this.updateHUD();
           }
@@ -3809,20 +3952,25 @@ export default class ArenaScene extends Phaser.Scene {
       const addr = await stellarWallet.getAddress();
       if (!addr) return;
 
-      // Get player stats and unlocked weapons
-      const stats = await weaponClient.getPlayerStats(addr);
-      const unlockedWeapons = await weaponClient.getUnlockedWeapons(addr);
-      
-      if (unlockedWeapons.length <= 1) return; // Only starter weapon unlocked
+      let stats = { bestScore: 0, rank: 0, tier: 1 };
+      try {
+        stats = await weaponClient.getPlayerStats(addr);
+      } catch (_) {}
+      const displayScore = (stats.bestScore != null && stats.bestScore > 0) ? stats.bestScore : (progressStore.highScore ?? 0);
 
-      // Use rank from stats if available, otherwise fall back to tier
+      let unlockedWeapons = [1];
+      try {
+        unlockedWeapons = await weaponClient.getUnlockedWeapons(addr);
+        if (!Array.isArray(unlockedWeapons)) unlockedWeapons = [1];
+      } catch (_) {}
+      if (displayScore >= 10 && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
+      
+      if (unlockedWeapons.length <= 1) return;
+
       const playerRank = stats.rank !== undefined ? stats.rank : stats.tier;
-      
-      // Get bonus chance from RankManager
-      const bonusChance = getRankBonus(playerRank);
-      
-      // Skip if unranked or no bonus
-      if (isUnranked(playerRank) || bonusChance <= 0) return;
+      let bonusChance = getRankBonus(playerRank);
+      if (displayScore >= 10 && unlockedWeapons.includes(2) && bonusChance <= 0) bonusChance = 0.2;
+      if (bonusChance <= 0) return;
       
       // Roll for bonus weapon
       if (Math.random() < bonusChance) {
@@ -3836,10 +3984,11 @@ export default class ArenaScene extends Phaser.Scene {
             // Add to collected weapons
             this.collectedWeapons.add(weapon.type);
             
-            // Equip the weapon temporarily
+            // Equip the weapon; mark as ZK so HUD shows name next to character only when unlocked
             this.currentWeapon = {
               type: weapon.type,
-              duration: 30000 // 30 seconds
+              duration: 30000,
+              zkWeaponName: weapon.name
             };
             
             // Show notification using rank name from RankManager
@@ -4211,6 +4360,7 @@ export default class ArenaScene extends Phaser.Scene {
         }
       }
 
+      this.tryBarkOnKill();
       enemy.destroy();
       this.updateHUD();
     }
@@ -4296,6 +4446,7 @@ export default class ArenaScene extends Phaser.Scene {
   playerDeath() {
     if (this.playerDead) return; // Evitar múltiples ejecuciones (explota el PC)
     this.playerDead = true;
+    Audio.playGameOverMusic();
 
     // Parar spawn y limpiar enemigos de inmediato — evita más overlaps/hits
     if (this.iFrameFlashTimer) { this.iFrameFlashTimer.destroy(); this.iFrameFlashTimer = null; }
@@ -4305,7 +4456,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.waveTimer = null;
     this.enemies.clear(true, true);
 
-    // Stop and hide the in-world player sprite immediately.
+    // Stop and hide the in-world player sprite immediately (so it never appears on GAME OVER).
     // The Game Over overlay will play the dedicated death animation once.
     this.player.setVelocity(0, 0);
     this.player.body.checkCollision.none = true;
@@ -4315,6 +4466,8 @@ export default class ArenaScene extends Phaser.Scene {
       if (this.player.disableBody) this.player.disableBody(true, true);
       this.player.setActive(false);
       this.player.setVisible(false);
+      this.player.setAlpha(0);
+      this.player.setDepth(-1);
     } catch (_) {}
 
     const state = window.VIBE_CODER;
@@ -4339,7 +4492,11 @@ export default class ArenaScene extends Phaser.Scene {
     });
 
     // Add run to leaderboard — save locally immediately, then submit on-chain (no duplicate local entries)
-    const localName = settings.playerName || 'Anonymous';
+    // Use custom playerName if set, otherwise the selected character's display name (VoidNull, Vibecoder, SyncStorm)
+    const charId = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
+    const char = typeof window !== 'undefined' && window.VIBE_CHARACTERS ? window.VIBE_CHARACTERS[charId] : null;
+    const characterDisplayName = char ? (char.displayName_en || char.displayName || char.name || '') : '';
+    const localName = (settings.playerName && String(settings.playerName).trim()) || characterDisplayName || 'Anonymous';
     const runScore = Math.floor(state.totalXP);
     const runWave = this.waveNumber;
     const runDate = Date.now();
@@ -4361,11 +4518,12 @@ export default class ArenaScene extends Phaser.Scene {
           const entries = LeaderboardManager.load();
           const idx = entries.findIndex((e) => e && e.score === runScore && e.wave === runWave && (runDate - (e.date || 0)) < 5000);
           if (idx >= 0) {
-            entries[idx].name = stellarWallet.shortAddress(addr).slice(0, 20);
+            entries[idx].name = localName.slice(0, 20);
             LeaderboardManager.save(entries);
           }
         } catch (_) {}
         LeaderboardManager.submitOnChain(addr, runWave, runScore, localName).catch(() => {});
+        LeaderboardManager.incrementLocalGamesPlayed(addr);
       }
     }).catch(() => {});
 
@@ -4403,131 +4561,226 @@ export default class ArenaScene extends Phaser.Scene {
     ];
     const phrase = phrases[Math.floor(Math.random() * phrases.length)];
 
-    // Ensure player stays hidden so only the death sprite is visible
+    // Ensure player stays hidden and behind overlay so it never appears on top of GAME OVER
     try {
       if (this.player) {
         this.player.setVisible(false);
         this.player.setActive(false);
         this.player.setAlpha(0);
+        this.player.setDepth(-1);
       }
     } catch (_) {}
 
-    // Create game over container - scroll-factor 0 so it stays on screen
+    // Create game over container - scroll-factor 0 so it stays on screen; high depth so nothing draws on top
     const gameOverContainer = this.add.container(0, 0);
-    gameOverContainer.setDepth(2000).setScrollFactor(0);
+    gameOverContainer.setDepth(3000).setScrollFactor(0);
 
     // Full black background (opaque immediately; do not show gameplay background)
     const blackBg = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 1);
     blackBg.setInteractive({ useHandCursor: false });
     gameOverContainer.add(blackBg);
 
-    // Leaderboard panel: left side, almost at max left
-    const leaderboardLeftX = 28;
-    const leaderboardWidth = 220;
-    const leaderboardTopY = Math.max(80, Math.floor(h * 0.14));
+    // Leaderboard panel: left side, larger so names and scores fit (same source as menu)
+    const leaderboardLeftX = 24;
+    const leaderboardWidth = 300;
+    const leaderboardTopY = Math.max(72, Math.floor(h * 0.12));
     const uiScale = getUIScale(this);
-    const lineHeight = Math.round(16 * uiScale);
-    const rankFontSize = `${Math.round(11 * uiScale)}px`;
-    const titleFontSize = `${Math.round(14 * uiScale)}px`;
+    const lineHeight = Math.round(22 * uiScale);
+    const rankFontSize = `${Math.round(13 * uiScale)}px`;
+    const titleFontSize = `${Math.round(16 * uiScale)}px`;
 
-    const leaderboardPanelHeight = 12 + 24 + 15 * lineHeight + 16;
+    const leaderboardPanelHeight = 16 + 28 + 15 * lineHeight + 20;
     const leaderboardBg = this.add.rectangle(
       leaderboardLeftX + leaderboardWidth / 2,
       leaderboardTopY + leaderboardPanelHeight / 2,
-      leaderboardWidth + 16,
+      leaderboardWidth + 20,
       leaderboardPanelHeight,
       0x0a0a12,
-      0.92
+      0.94
     );
     leaderboardBg.setStrokeStyle(1, 0x333355);
     gameOverContainer.add(leaderboardBg);
 
-    const leaderboardTitle = this.add.text(leaderboardLeftX + leaderboardWidth / 2, leaderboardTopY + 10, 'RANKING', {
+    const leaderboardTitle = this.add.text(leaderboardLeftX + 12, leaderboardTopY + 12, 'RANKING', {
       fontFamily: 'monospace',
       fontSize: titleFontSize,
       color: '#00aaff',
       fontStyle: 'bold'
-    }).setOrigin(0.5, 0);
+    }).setOrigin(0, 0);
     gameOverContainer.add(leaderboardTitle);
 
-    const leaderboardLoading = this.add.text(leaderboardLeftX + 8, leaderboardTopY + 36, 'Loading...', {
+    const leaderboardLoading = this.add.text(leaderboardLeftX + 12, leaderboardTopY + 40, 'Loading...', {
       fontFamily: 'monospace',
       fontSize: rankFontSize,
       color: '#666666'
     }).setOrigin(0, 0);
     gameOverContainer.add(leaderboardLoading);
 
-    (async () => {
+    const leaderboardRowObjects = [];
+    const playerNameFromSettings = () => (window.VIBE_SETTINGS?.playerName || 'Anonymous').trim() || 'Anonymous';
+
+    const renderLeaderboard = async (onRankReady) => {
+      while (leaderboardRowObjects.length) {
+        const obj = leaderboardRowObjects.pop();
+        try { obj?.destroy(); } catch (_) {}
+      }
+
       let addr = null;
-      try {
-        addr = await stellarWallet.getAddress();
-      } catch (_) {}
+      try { addr = await stellarWallet.getAddress(); } catch (_) {}
+      const currentPlayerName = playerNameFromSettings();
+
       let entries = [];
-      let isCasualFallback = false;
+      let source = 'none';
+
+      // 1) On-chain ranked (same as menu); contract does not return player_name — resolve from API (user name per wallet)
       if (gameClient.isContractConfigured()) {
         try {
-          entries = await gameClient.getLeaderboardBySeason(1, 15);
-          if (entries.length === 0) {
-            const casual = await gameClient.getLeaderboard(15);
-            if (casual.length > 0) {
-              entries = casual.map((e) => ({ player: e.player, score: e.score ?? 0, wave: e.wave }));
-              isCasualFallback = true;
-            }
+          const ranked = await gameClient.getLeaderboardBySeason(1, 15);
+          if (ranked.length > 0) {
+            let addrToName = {};
+            try {
+              const apiList = await LeaderboardManager.fetchOnChain();
+              apiList.forEach((entry) => {
+                const a = (entry.address || '').toString().trim().toLowerCase();
+                if (a) addrToName[a] = (entry.name || '').toString().trim() || addrToName[a];
+              });
+            } catch (_) {}
+            const norm = (addr) => (addr || '').toLowerCase().trim();
+            entries = ranked.map((e) => {
+              const name = e.player_name || addrToName[norm(e.player)] || (e.player ? stellarWallet.shortAddress(e.player, 6) : '???');
+              return { player: e.player, score: e.score ?? 0, wave: e.wave ?? 0, displayName: name };
+            });
+            source = 'ranked';
           }
         } catch (e) {
-          console.warn('[Cosmic Coder] Leaderboard fetch failed:', e?.message || e);
+          console.warn('[Leaderboard] Ranked fetch failed:', e?.message || e);
+        }
+        if (entries.length === 0) {
+          try {
+            const casual = await gameClient.getLeaderboard(15);
+            if (casual.length > 0) {
+              let addrToName = {};
+              try {
+                const apiList = await LeaderboardManager.fetchOnChain();
+                apiList.forEach((entry) => {
+                  const a = (entry.address || '').toString().trim().toLowerCase();
+                  if (a) addrToName[a] = (entry.name || '').toString().trim() || addrToName[a];
+                });
+              } catch (_) {}
+              const norm = (addr) => (addr || '').toLowerCase().trim();
+              entries = casual.map((e) => {
+                const name = addrToName[norm(e.player)] || (e.player ? stellarWallet.shortAddress(e.player, 6) : '???');
+                return { player: e.player, score: e.score ?? 0, wave: e.wave ?? 0, displayName: name };
+              });
+              source = 'casual';
+            }
+          } catch (_) {}
         }
       }
-      if (!gameOverContainer.scene || !leaderboardLoading.scene) return;
-      leaderboardLoading.destroy();
+
+      // 2) API leaderboard (same as menu fallback)
       if (entries.length === 0) {
-        const msg = addr
-          ? 'No ZK ranked runs yet. Play Ranked and submit to appear.'
-          : 'Connect wallet for ranking';
-        const noRank = this.add.text(leaderboardLeftX + 8, leaderboardTopY + 36, msg, {
-          fontFamily: 'monospace',
-          fontSize: rankFontSize,
-          color: '#555555',
-          wordWrap: { width: leaderboardWidth - 16 }
-        }).setOrigin(0, 0);
-        gameOverContainer.add(noRank);
-        return;
+        try {
+          const apiList = await LeaderboardManager.fetchOnChain();
+          if (apiList.length > 0) {
+            entries = apiList.map((e) => ({
+              player: e.address || e.name,
+              score: e.score ?? 0,
+              wave: e.wave ?? 0,
+              displayName: (e.name || (e.address ? stellarWallet.shortAddress(e.address, 6) : '???')).slice(0, 18)
+            }));
+            source = 'api';
+          }
+        } catch (_) {}
       }
-      const rankStartY = leaderboardTopY + 36;
-      if (isCasualFallback) {
-        const casualLabel = this.add.text(leaderboardLeftX + 8, rankStartY, '(casual)', {
-          fontFamily: 'monospace',
-          fontSize: rankFontSize - 1,
-          color: '#666666'
-        }).setOrigin(0, 0);
-        gameOverContainer.add(casualLabel);
+
+      // 3) Local
+      if (entries.length === 0) {
+        const local = LeaderboardManager.getTop(15);
+        if (local.length > 0) {
+          entries = local.map((e) => ({
+            player: e.name,
+            score: e.score ?? 0,
+            wave: e.wave ?? 0,
+            displayName: (e.name || 'Anonymous').slice(0, 18)
+          }));
+          source = 'local';
+        }
       }
-      const entryOffsetY = isCasualFallback ? 14 : 0;
+
       const normalizeAddr = (a) => (a || '').toLowerCase().trim();
       const currentAddr = normalizeAddr(addr || '');
+      const isYouEntry = (e) => {
+        if (currentAddr && typeof e.player === 'string' && e.player.length > 30) return normalizeAddr(e.player) === currentAddr;
+        if (source === 'local') return (e.player || '').trim() === currentPlayerName.trim();
+        return currentAddr && normalizeAddr(e.player) === currentAddr;
+      };
+      let myRank = null;
+      const idx = entries.findIndex(isYouEntry);
+      if (idx >= 0) myRank = idx + 1;
+      if (typeof onRankReady === 'function') onRankReady(myRank, source);
+
+      if (!gameOverContainer.scene) return;
+      try { leaderboardLoading?.destroy(); } catch (_) {}
+
+      if (entries.length === 0) {
+        const msg = 'Play to rank!';
+        const noRank = this.add.text(leaderboardLeftX + 12, leaderboardTopY + 40, msg, {
+          fontFamily: 'monospace', fontSize: rankFontSize, color: '#555555',
+          wordWrap: { width: leaderboardWidth - 24 }
+        }).setOrigin(0, 0);
+        gameOverContainer.add(noRank);
+        leaderboardRowObjects.push(noRank);
+        return;
+      }
+
+      const rankStartY = leaderboardTopY + 44;
+      const sourceLabel = source === 'ranked' ? 'ON-CHAIN' : source === 'casual' ? 'CASUAL' : source === 'api' ? 'API' : 'LOCAL';
+      const srcText = this.add.text(leaderboardLeftX + leaderboardWidth - 12, leaderboardTopY + 14, sourceLabel, {
+        fontFamily: 'monospace', fontSize: `${Math.round(10 * uiScale)}px`, color: '#555577'
+      }).setOrigin(1, 0);
+      gameOverContainer.add(srcText);
+      leaderboardRowObjects.push(srcText);
+
       for (let i = 0; i < entries.length; i++) {
         const e = entries[i];
-        const isYou = currentAddr && normalizeAddr(e.player) === currentAddr;
-        const short = e.player ? stellarWallet.shortAddress(e.player, 5) : '???';
-        const line = `#${i + 1}  ${short}  ${e.score ?? 0}`;
-        const y = rankStartY + entryOffsetY + i * lineHeight;
-        const textObj = this.add.text(leaderboardLeftX + 8, y, line, {
-          fontFamily: 'monospace',
-          fontSize: rankFontSize,
-          color: isYou ? '#00ff88' : '#cccccc'
+        const isYou = isYouEntry(e);
+        const displayName = (e.displayName != null ? e.displayName : (e.player && e.player.length <= 20 ? e.player : (e.player ? stellarWallet.shortAddress(e.player, 6) : '???'))).slice(0, 18);
+        const scoreStr = e.score > 0 ? String(Math.floor(e.score)) : '-';
+        const y = rankStartY + i * lineHeight;
+        const nameObj = this.add.text(leaderboardLeftX + 12, y, `#${i + 1}  ${displayName}`, {
+          fontFamily: 'monospace', fontSize: rankFontSize, color: isYou ? '#00ff88' : '#cccccc'
         }).setOrigin(0, 0);
-        if (isYou) textObj.setStyle({ fontStyle: 'bold' });
-        gameOverContainer.add(textObj);
+        if (isYou) nameObj.setStyle({ fontStyle: 'bold' });
+        gameOverContainer.add(nameObj);
+        leaderboardRowObjects.push(nameObj);
+
+        const scoreObj = this.add.text(leaderboardLeftX + leaderboardWidth - 12, y, scoreStr, {
+          fontFamily: 'monospace', fontSize: rankFontSize, color: isYou ? '#00ff88' : '#aaaaaa'
+        }).setOrigin(1, 0);
+        gameOverContainer.add(scoreObj);
+        leaderboardRowObjects.push(scoreObj);
       }
-      if (addr && !entries.some((e) => normalizeAddr(e.player) === currentAddr)) {
-        const notInTop = this.add.text(leaderboardLeftX + 8, rankStartY + entryOffsetY + entries.length * lineHeight, "You're not in top 15", {
-          fontFamily: 'monospace',
-          fontSize: rankFontSize,
-          color: '#888888'
+
+      if (addr && !entries.some(isYouEntry)) {
+        const y = rankStartY + entries.length * lineHeight;
+        const notInTop = this.add.text(leaderboardLeftX + 12, y, "You're not in top 15", {
+          fontFamily: 'monospace', fontSize: rankFontSize, color: '#666666'
         }).setOrigin(0, 0);
         gameOverContainer.add(notInTop);
+        leaderboardRowObjects.push(notInTop);
       }
-    })();
+    };
+
+    let rankLabelRef = null;
+    const onRankReady = (myRank, _source) => {
+      if (!rankLabelRef || !rankLabelRef.scene) return;
+      rankLabelRef.setText(myRank != null ? `RANK: #${myRank}` : 'RANK: --');
+      rankLabelRef.setColor('#00ff88');
+    };
+
+    this._refreshGameOverLeaderboard = () => renderLeaderboard(onRankReady);
+    renderLeaderboard(onRankReady);
 
     const gameOverTopY = Math.max(86, Math.floor(h * 0.18));
     // Put the death animation clearly below the title
@@ -4535,129 +4788,87 @@ export default class ArenaScene extends Phaser.Scene {
     // Stats block always below the death sprite (avoid overlap)
     const statsStartY = Math.min(h - 210, deathBaseY + 200);
 
-    // --- Phase 1: Death sprite animation — always the character you were playing this run ---
+    // Rank label: real rank from same leaderboard as panel (updated when renderLeaderboard finishes)
+    rankLabelRef = this.add.text(cx, statsStartY + 86, 'RANK: ...', {
+      fontFamily: 'monospace',
+      fontSize: '15px',
+      color: '#00ff88'
+    }).setOrigin(0.5).setAlpha(0);
+    gameOverContainer.add(rankLabelRef);
+
+    // --- Phase 1: Death animation (standing → fall → lying on ground), freeze on last frame ---
     const characterId = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
-    let deathAnimKey = null;
     let deathSpriteKey = null;
-    let lastDeathFrame = 4;
-    if (characterId === 'destroyer') {
-      deathAnimKey = 'destroyer-death';
-      deathSpriteKey = 'destroyer-death';
-      lastDeathFrame = 5;
-    } else if (characterId === 'swordsman') {
-      deathAnimKey = 'swordsman-death';
-      deathSpriteKey = 'swordsman-death';
-      lastDeathFrame = 4;
-    } else if (characterId === 'vibecoder') {
-      deathAnimKey = 'vibecoder-death';
-      deathSpriteKey = 'vibecoder-death';
-      lastDeathFrame = 4; // last frame = lying on ground (5 frames: 0–4)
-    } else if (characterId === 'sync') {
-      deathAnimKey = 'sync-death';
-      deathSpriteKey = 'sync-death';
-      lastDeathFrame = 3;
-    } else if (characterId === 'voidnull') {
-      deathAnimKey = 'voidnull-death';
-      deathSpriteKey = 'voidnull-death';
-      lastDeathFrame = 6;
-    } else if (characterId === 'robot') {
-      deathAnimKey = 'robot-death';
-      deathSpriteKey = 'robot-death';
-      lastDeathFrame = 4;
-    } else {
-      // Unknown ID: use same character's death if we have it, else vibecoder
-      deathAnimKey = 'vibecoder-death';
-      deathSpriteKey = 'vibecoder-death';
-      lastDeathFrame = 4;
-    }
+    let deathAnimKey = null;
+    if (characterId === 'destroyer') { deathSpriteKey = 'destroyer-death'; deathAnimKey = 'destroyer-death'; }
+    else if (characterId === 'swordsman') { deathSpriteKey = 'swordsman-death'; deathAnimKey = 'swordsman-death'; }
+    else if (characterId === 'vibecoder') { deathSpriteKey = 'vibecoder-death'; deathAnimKey = 'vibecoder-death'; }
+    else { deathSpriteKey = 'vibecoder-death'; deathAnimKey = 'vibecoder-death'; }
 
-    // If spritesheet is loaded, prefer the real last frame
-    try {
-      const total = this.textures.get(deathSpriteKey)?.frameTotal;
-      if (typeof total === 'number' && total > 0) {
-        lastDeathFrame = Math.max(0, total - 1);
-        console.log(`[Death Animation] ${deathSpriteKey} has ${total} frames, using last frame: ${lastDeathFrame}`);
-      }
-    } catch (e) {
-      console.warn(`[Death Animation] Error getting frame count for ${deathSpriteKey}:`, e);
-    }
-
-    // Duration of the death anim before showing GAME OVER UI (ms)
     let animDurationMs = 1200;
+    const hasDeathTexture = deathSpriteKey && this.textures.exists(deathSpriteKey);
+    const hasDeathAnim = deathAnimKey && this.anims.exists(deathAnimKey);
 
-    const hasDeathAnim = deathSpriteKey && this.textures.exists(deathSpriteKey) && this.anims.exists(deathAnimKey);
-
-    if (hasDeathAnim) {
-      const deathSprite = this.add.sprite(cx, deathBaseY, deathSpriteKey, 0);
-      deathSprite.setScale(2.5).setAlpha(0).setDepth(2001);
-      gameOverContainer.add(deathSprite);
-
+    if (hasDeathTexture && hasDeathAnim) {
+      // Phaser frameTotal includes __BASE → actual last numbered frame = frameTotal - 2
       const texture = this.textures.get(deathSpriteKey);
       const frameTotal = Math.max(1, texture?.frameTotal ?? 1);
-      const lastFrameIndex = Math.min(lastDeathFrame, frameTotal - 1);
+      const lastFrameIndex = Math.max(0, frameTotal - 2);
 
-      let done = false;
-      const showLyingOnGround = () => {
-        if (done || !gameOverContainer.scene) return;
-        done = true;
-        try {
-          deathSprite.destroy();
-        } catch (_) {}
-        const groundSprite = this.add.sprite(cx, deathBaseY, deathSpriteKey, lastFrameIndex);
-        groundSprite.setScale(2).setDepth(2001).setAlpha(0);
-        gameOverContainer.add(groundSprite);
-        this.tweens.add({ targets: groundSprite, alpha: 1, duration: 250, ease: 'Power2' });
+      const spriteY = Math.round(deathBaseY);
+
+      const deathSprite = this.add.sprite(Math.round(cx), spriteY, deathSpriteKey, 0);
+      deathSprite.setOrigin(0.5, 0.5).setScale(2).setDepth(3001).setAlpha(0);
+      gameOverContainer.add(deathSprite);
+
+      let frozen = false;
+      const freezeOnGround = () => {
+        if (frozen) return;
+        frozen = true;
+        deathSprite.anims.stop();
+        deathSprite.setFrame(lastFrameIndex);
       };
 
-      // 1) Fade in, then play death animation once
+      // Fade in then play death animation once
       this.tweens.add({
         targets: deathSprite,
         alpha: 1,
-        duration: 300,
-        delay: 400,
+        duration: 350,
+        delay: 300,
         ease: 'Power2',
         onComplete: () => {
           deathSprite.play(deathAnimKey);
         }
       });
 
-      // 2) When animation finishes, replace with static sprite (last frame = on ground)
-      deathSprite.once(`animationcomplete-${deathAnimKey}`, showLyingOnGround);
-      deathSprite.once('animationcomplete', showLyingOnGround);
+      // Freeze on last frame (lying on ground) when animation completes — never transition back
+      deathSprite.once(`animationcomplete-${deathAnimKey}`, freezeOnGround);
+      deathSprite.once('animationcomplete', freezeOnGround);
+      // Safety backup
+      this.time.delayedCall(3000, freezeOnGround);
 
-      // 3) Backup: after 3.5s show last frame even if event didn't fire
-      this.time.delayedCall(3500, showLyingOnGround);
-
-      animDurationMs = 3200;
-    } else {
-      // Fallback: no death spritesheet — show same character "muerto en el suelo" with idle sprite rotated
-      const fallbackIdleKey =
-        characterId === 'destroyer' ? 'destroyer-idle'
-          : characterId === 'swordsman' ? 'swordsman-idle'
-          : 'robot-idle'; // vibecoder/robot/other use robot-idle
-      if (this.textures.exists(fallbackIdleKey)) {
-        const fallbackSprite = this.add.sprite(cx, deathBaseY, fallbackIdleKey, 0);
-        fallbackSprite.setAngle(-90);
-        fallbackSprite.setScale(2);
-        fallbackSprite.setAlpha(0);
-        gameOverContainer.add(fallbackSprite);
-        this.tweens.add({
-          targets: fallbackSprite,
-          alpha: 0.85,
-          duration: 500,
-          delay: 400,
-          ease: 'Power2'
-        });
-      }
+      animDurationMs = 2800;
+    } else if (hasDeathTexture) {
+      // No animation available — show last frame directly
+      const texture = this.textures.get(deathSpriteKey);
+      const frameTotal = Math.max(1, texture?.frameTotal ?? 1);
+      const lastFrameIndex = Math.max(0, frameTotal - 2);
+      const spriteY = Math.round(deathBaseY);
+      const groundSprite = this.add.sprite(Math.round(cx), spriteY, deathSpriteKey, lastFrameIndex);
+      groundSprite.setOrigin(0.5, 0.5).setScale(2).setDepth(3001).setAlpha(0);
+      gameOverContainer.add(groundSprite);
+      this.tweens.add({ targets: groundSprite, alpha: 1, duration: 500, delay: 400, ease: 'Power2' });
+      animDurationMs = 1200;
     }
 
     // --- Phase 2: GAME OVER UI (appears after death animation) ---
     const uiDelay = animDurationMs;
 
-    // GAME OVER title (top)
-    const gameOverText = this.add.text(cx, gameOverTopY, 'GAME OVER', {
+    // GAME OVER title — appears after death animation, positioned below death sprite
+    const goTextY = Math.round(gameOverTopY + 30);
+    const gameOverText = this.add.text(cx, goTextY, 'GAME OVER', {
       fontFamily: 'monospace',
-      fontSize: '54px',
+      fontSize: '68px',
       color: '#ff0000',
       fontStyle: 'bold'
     }).setOrigin(0.5).setAlpha(0);
@@ -4669,7 +4880,7 @@ export default class ArenaScene extends Phaser.Scene {
       this.tweens.add({
         targets: gameOverText,
         x: { from: cx - 2, to: cx + 2 },
-        y: { from: gameOverTopY - 2, to: gameOverTopY + 2 },
+        y: { from: goTextY - 2, to: goTextY + 2 },
         duration: 120,
         yoyo: true,
         repeat: -1,
@@ -4677,14 +4888,14 @@ export default class ArenaScene extends Phaser.Scene {
       });
     });
 
-    // Random phrase (italic, dimmer)
-    const phraseText = this.add.text(cx, gameOverTopY + 54, phrase, {
+    // Random phrase (italic, dimmer) — below GAME OVER
+    const phraseText = this.add.text(cx, goTextY + 70, phrase, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '15px',
+      fontSize: '18px',
       color: '#777777',
       fontStyle: 'italic',
       align: 'center',
-      wordWrap: { width: Math.min(480, w - 60) }
+      wordWrap: { width: Math.min(520, w - 60) }
     }).setOrigin(0.5).setAlpha(0);
     gameOverContainer.add(phraseText);
     this.tweens.add({ targets: phraseText, alpha: 1, duration: 800, delay: uiDelay + 300, ease: 'Power2' });
@@ -4725,21 +4936,9 @@ export default class ArenaScene extends Phaser.Scene {
     gameOverContainer.add(killsLabel);
     this.tweens.add({ targets: killsLabel, alpha: 1, duration: 600, delay: uiDelay + 350, ease: 'Power2' });
 
-    let localRank = null;
-    try {
-      const entries = LeaderboardManager.load();
-      const idx = entries.findIndex((e) => e && e.score === runScore && e.wave === runWave && (runDate - (e.date || 0)) < 5000);
-      if (idx >= 0) localRank = idx + 1;
-    } catch (_) {}
-    const rankTextStr = localRank ? `RANK: #${localRank}` : '';
-    const rankLabel = rankTextStr ? this.add.text(cx, statsStartY + 86, rankTextStr, {
-      fontFamily: 'monospace',
-      fontSize: '15px',
-      color: '#aaaaaa'
-    }).setOrigin(0.5).setAlpha(0) : null;
-    if (rankLabel) {
-      gameOverContainer.add(rankLabel);
-      this.tweens.add({ targets: rankLabel, alpha: 1, duration: 600, delay: uiDelay + 420, ease: 'Power2' });
+    // RANK label is created above and updated by renderLeaderboard(onRankReady); show it with stats
+    if (rankLabelRef) {
+      this.tweens.add({ targets: rankLabelRef, alpha: 1, duration: 600, delay: uiDelay + 420, ease: 'Power2' });
     }
 
     // BACK TO MENU button (only shown after ZK submission completes or fails)
@@ -4761,6 +4960,10 @@ export default class ArenaScene extends Phaser.Scene {
       if (this._openingZkLinkUntil && Date.now() < this._openingZkLinkUntil) return;
       if (this._ignoreGameOverInputUntil && Date.now() < this._ignoreGameOverInputUntil) return;
       returned = true;
+      if (this._gameOverKeydown) {
+        try { this.input.keyboard.off('keydown', this._gameOverKeydown); } catch (_) {}
+        this._gameOverKeydown = null;
+      }
       if (handleKeydown) this.input.keyboard.off('keydown', handleKeydown);
       gameOverContainer.destroy();
       SaveManager.clearSave();
@@ -4778,16 +4981,13 @@ export default class ArenaScene extends Phaser.Scene {
     // Only allow click-anywhere-to-exit and keyboard after ZK submission completes
     // We'll enable these in the ZK promise resolution/failure
 
-    // On-chain submit runs fully in background — never blocks UI
+    // On-chain submit runs fully in background — always attempt ZK when possible
     const runZkProof =
-      this.gameMode === 'zk_ranked' &&
       !this.isContinuedGame &&
       score > 0 &&
       !this.zkProofSubmitted &&
-      !!this.runSeed &&
       gameClient.isZkProverConfigured() &&
-      gameClient.isContractConfigured() &&
-      validateGameRules(wave, state.totalXP).valid;
+      gameClient.isContractConfigured();
 
     const submitTimeoutMs = runZkProof ? 90000 : 25000;
 
@@ -4808,13 +5008,15 @@ export default class ArenaScene extends Phaser.Scene {
 
       timeoutId = setTimeout(() => resolve('timeout'), submitTimeoutMs);
 
-      if (!gameClient.isContractConfigured() || !validateGameRules(wave, state.totalXP).valid) {
+      if (!gameClient.isContractConfigured()) {
         clear();
         resolve(null);
         return;
       }
 
-      stellarWallet.getAddress().then(async (addr) => {
+      // Delay 2s before asking for Freighter signature so the death animation is visible
+      this.time.delayedCall(2000, () => {
+        stellarWallet.getAddress().then(async (addr) => {
         if (!addr) { clear(); resolve(null); return; }
         const sign = (xdr) => stellarWallet.signTransaction(xdr);
         try {
@@ -4899,12 +5101,15 @@ export default class ArenaScene extends Phaser.Scene {
               console.log('[ZK Submit V2] Stellar Expert:', `https://stellar.expert/explorer/testnet/tx/${finalTxHash}`);
             }
             try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
+            // Refresh leaderboard now that the ZK proof is on-chain
+            try { if (this._refreshGameOverLeaderboard) this._refreshGameOverLeaderboard(); } catch (_) {}
             clear();
             resolve({ status: 'zk', txHash: finalTxHash });
           } else {
             console.log('[Score Submit] submitResult starting');
             await gameClient.submitResult(addr, sign, wave, state.totalXP);
             console.log('[Score Submit] submitResult success');
+            try { if (this._refreshGameOverLeaderboard) this._refreshGameOverLeaderboard(); } catch (_) {}
             clear();
             resolve('casual');
           }
@@ -4930,14 +5135,17 @@ export default class ArenaScene extends Phaser.Scene {
           resolve({ status: 'zk_failed', error: e?.message || 'Unknown error', contractMissing: this.zkContractMissing });
         }
       }).catch(() => { clear(); resolve(null); });
+      });
     }).then((status) => {
       // Show BACK TO MENU button and enable exit after ZK submission completes or fails
       this.tweens.add({ targets: returnMenuBtn, alpha: 1, duration: 600, ease: 'Power2' });
       // Show ZK Proof UI based on submission result
       let zkUi = null;
       if (status && (status.status === 'zk' || status.status === 'zk_failed')) {
-        zkUi = this.showZkProofResultUI(status, cx, cy, gameOverContainer);
-        if (zkUi?.buttonY) {
+        zkUi = this.showZkProofResultUI(status, cx, cy, gameOverContainer, statsStartY);
+        if (zkUi?.menuY != null) {
+          returnMenuBtn.setY(zkUi.menuY);
+        } else if (zkUi?.buttonY) {
           const menuY = Math.min(this.scale.height - 24, zkUi.buttonY + Math.round(74 * (this.uiScale || 1)));
           returnMenuBtn.setY(menuY);
         }
@@ -5019,6 +5227,7 @@ export default class ArenaScene extends Phaser.Scene {
           goToMenu();
         }
       };
+      this._gameOverKeydown = handleKeydown;
       this.input.keyboard.on('keydown', handleKeydown);
 
       if (status && status.status === 'zk' && BALANCE.ZK_BITS_MULTIPLIER) {
@@ -5028,11 +5237,12 @@ export default class ArenaScene extends Phaser.Scene {
     });
   }
 
-  showZkProofResultUI(result, cx, cy, gameOverContainer) {
+  showZkProofResultUI(result, cx, cy, gameOverContainer, statsStartY) {
     const uiScale = this.uiScale || 1;
-    const buttonY = Math.min(cy + 360, this.scale.height - 70); // Push lower while staying on-screen
-    
+    const h = this.scale.height;
+
     if (result.status === 'zk' && result.txHash) {
+      const buttonY = Math.min(cy + 360, h - 70);
       // SUCCESS: Show verifier so reviewers can open and check the proof on-chain
       const zkProofBtn = this.add.text(cx, buttonY, '[ VIEW ZK PROOF // STELLAR EXPERT ]', {
         fontFamily: '"Press Start 2P", monospace',
@@ -5092,12 +5302,12 @@ export default class ArenaScene extends Phaser.Scene {
       return { zkProofBtn, openExplorer, buttonY };
       
     } else if (result.status === 'zk_failed') {
-      // FAILURE: Show error info and retry option
+      // FAILURE: vertical stack below status line so nothing overlaps
+      const baseY = (statsStartY != null ? statsStartY : cy) + 132;
       let errorMessage = result.error || 'Unknown error';
       let buttonText = '⚠️ ZK Proof Failed - Click to Retry';
       let errorTitle = '❌ ZK Proof Submission Failed';
-      
-      // Special handling for missing contracts
+
       if (result.contractMissing || errorMessage.includes('not found') || errorMessage.includes('404')) {
         errorTitle = '⚠️ ZK Contract Not Deployed';
         buttonText = '🔄 Retry When Contract is Deployed';
@@ -5107,52 +5317,55 @@ export default class ArenaScene extends Phaser.Scene {
         buttonText = '🔄 Retry When Backend is Fixed';
         errorMessage = 'The ZK backend has a technical issue with Stellar addresses. Your score was saved locally.';
       }
-      
-      const errorBtn = this.add.text(cx, buttonY, buttonText, {
+
+      const errorLabel = this.add.text(cx, baseY, errorTitle, {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(13 * uiScale)}px`,
+        color: '#ff4444',
+        fontStyle: 'bold'
+      }).setOrigin(0.5).setAlpha(0);
+
+      const errorMsg = this.add.text(cx, baseY + 28, errorMessage, {
+        fontFamily: 'monospace',
+        fontSize: `${Math.round(10 * uiScale)}px`,
+        color: '#cc6666',
+        align: 'center',
+        wordWrap: { width: 420 }
+      }).setOrigin(0.5, 0).setAlpha(0);
+
+      const errorBtnY = baseY + 28 + 44;
+      const errorBg = this.add.rectangle(cx, errorBtnY, 420, 44, 0x1a0a0a, 0.92);
+      errorBg.setStrokeStyle(2, 0xff6600, 0.85);
+      errorBg.setOrigin(0.5).setAlpha(0);
+
+      const errorBtn = this.add.text(cx, errorBtnY, buttonText, {
         fontFamily: 'monospace',
         fontSize: `${Math.round(12 * uiScale)}px`,
         color: '#ff6600',
         fontStyle: 'bold'
       }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
-      
-      const errorBg = this.add.rectangle(cx, buttonY, 450, 50, 0x1a0a0a, 0.9);
-      errorBg.setStrokeStyle(2, 0xff6600, 0.8);
-      errorBg.setOrigin(0.5).setAlpha(0);
-      
-      const errorLabel = this.add.text(cx, buttonY - 35, errorTitle, {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(12 * uiScale)}px`,
-        color: '#ff4444',
-        fontStyle: 'bold'
-      }).setOrigin(0.5).setAlpha(0);
-      
-      const errorMsg = this.add.text(cx, buttonY + 35, errorMessage, {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(10 * uiScale)}px`,
-        color: '#aa4444',
-        align: 'center',
-        wordWrap: { width: 410 }
-      }).setOrigin(0.5).setAlpha(0);
-      
-      gameOverContainer.add([errorBg, errorLabel, errorMsg, errorBtn]);
-      
-      this.tweens.add({ targets: [errorBg, errorLabel, errorMsg, errorBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
-      
+
+      gameOverContainer.add(errorLabel);
+      gameOverContainer.add(errorMsg);
+      gameOverContainer.add(errorBg);
+      gameOverContainer.add(errorBtn);
+
+      this.tweens.add({ targets: [errorLabel, errorMsg, errorBg, errorBtn], alpha: 1, duration: 600, delay: 300, ease: 'Power2' });
+
       errorBtn.on('pointerover', () => {
         errorBtn.setColor('#ffaa00');
         errorBg.setStrokeStyle(2, 0xffaa00, 1);
       });
-      
       errorBtn.on('pointerout', () => {
         errorBtn.setColor('#ff6600');
-        errorBg.setStrokeStyle(2, 0xff6600, 0.8);
+        errorBg.setStrokeStyle(2, 0xff6600, 0.85);
       });
-      
       errorBtn.on('pointerdown', () => {
-        // Reload the page to retry ZK submission
         window.location.reload();
       });
-      return null;
+
+      const menuY = Math.max(errorBtnY + 52, h - 44);
+      return { buttonY: errorBtnY, menuY };
     }
     return null;
   }
@@ -5456,6 +5669,18 @@ export default class ArenaScene extends Phaser.Scene {
       }
 
       this.player.setVelocity(vx * stats.speed, vy * stats.speed);
+
+      // Update bark position: left of player, slight float up (capped so it doesn't drift far)
+      if (this.barkText && this.barkText.active && this.barkBubble && this.barkBubble.active) {
+        const elapsed = this.time.now - this.barkStartTime;
+        const floatUp = Math.min(elapsed * 0.006, 10);
+        const yOff = (this.barkYOff != null ? this.barkYOff : -28) - floatUp;
+        const left = (this.barkOffsetLeft != null ? this.barkOffsetLeft : 82);
+        this.barkText.x = this.player.x - left;
+        this.barkText.y = this.player.y + yOff;
+        this.barkBubble.x = this.player.x - left - (this.barkBubbleW || 0) / 2;
+        this.barkBubble.y = this.player.y + yOff - (this.barkBubbleH || 0) / 2;
+      }
 
       // Update speech bubble position to follow player
       if (this.speechBubble && this.speechBubble.visible) {

@@ -29,7 +29,7 @@ export SOURCE_ACCOUNT=GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
 El script desplegará verifier y policy, hará `init` con el Game Hub y `set_verifier`, y al final imprimirá algo como:
 
-- `VITE_SHADOW_ASCENSION_CONTRACT_ID=...` (POLICY_ID)
+- `VITE_COSMIC_CODER_CONTRACT_ID=...` (POLICY_ID)
 
 **Si no quieres usar el script**, en [DEPLOY_ZK_STEPS.md](DEPLOY_ZK_STEPS.md) tienes los comandos uno a uno. En todos debes añadir `--source-account <TU_CUENTA>`.
 
@@ -38,7 +38,7 @@ El script desplegará verifier y policy, hará `init` con el Game Hub y `set_ver
 En el `.env` de la raíz del proyecto (usa el POLICY_ID del script o el ya desplegado):
 
 ```env
-VITE_SHADOW_ASCENSION_CONTRACT_ID=CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO
+VITE_COSMIC_CODER_CONTRACT_ID=CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO
 VITE_ZK_PROVER_URL=http://localhost:3333
 ```
 
@@ -82,7 +82,7 @@ Para que el build de GitHub Pages incluya contrato y prover:
 
 1. Abre el repo en GitHub → **Settings → Secrets and variables → Actions**.
 2. **New repository secret**:
-   - **Name:** `VITE_SHADOW_ASCENSION_CONTRACT_ID`  
+   - **Name:** `VITE_COSMIC_CODER_CONTRACT_ID`  
      **Value:** el POLICY_ID (si usas el despliegue actual: `CC73YP4HYHXG42QQDYQGLG3HAQ3VQC2GF4E5Z7ILUOGZNR4M7EUIZBUO`; si desplegaste los tuyos, el que imprimió el script).
 3. **New repository secret**:
    - **Name:** `VITE_ZK_PROVER_URL`  
@@ -108,5 +108,5 @@ Tras el siguiente push a `main`, el workflow de deploy usará estos secrets y el
 |------|--------|-----|
 | 1 | Terminal (con SOURCE_ACCOUNT) | `./scripts/deploy_contracts_testnet.sh` |
 | 2 | Render o Railway | Deploy con `Dockerfile.prover`, copiar URL del prover |
-| 3 | GitHub → Settings → Secrets | Añadir `VITE_SHADOW_ASCENSION_CONTRACT_ID` y `VITE_ZK_PROVER_URL` |
+| 3 | GitHub → Settings → Secrets | Añadir `VITE_COSMIC_CODER_CONTRACT_ID` y `VITE_ZK_PROVER_URL` |
 | 4 | Navegador + Stellar Expert | Jugar y comprobar envíos on-chain |

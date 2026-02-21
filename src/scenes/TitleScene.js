@@ -3,9 +3,9 @@ import * as Audio from '../utils/audio.js';
 import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import LeaderboardManager from '../systems/LeaderboardManager.js';
-import { getRankById, getRankName, getRankColorCSS, getRankBonusPercent, isUnranked, hasRankIcon, getAllRanks } from '../systems/RankManager.js';
+import { getRankById, getRankName, getRankColor, getRankColorCSS, getRankBonusPercent, isUnranked, getRankEmoji, getAllRanks, getRankIdFromScore } from '../systems/RankManager.js';
 import { isConnected } from '../utils/socket.js';
-import { t, setLanguage } from '../utils/i18n.js';
+import { t, setLanguage, currentLang } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
 import { loadProgressForWallet, resetProgressForDisconnect, progressStore, cycleCharacter, selectCharacter } from '../utils/walletProgressService.js';
 import * as authApi from '../utils/authApi.js';
@@ -44,6 +44,10 @@ export default class TitleScene extends Phaser.Scene {
   create(data) {
     // Ensure we always clean up tweens, timers and listeners when the scene shuts down
     this.events.once('shutdown', this.handleShutdown, this);
+
+    // Permitir navegación al volver del gameplay (evitar menú bloqueado)
+    this.menuBlocked = false;
+    this.input.enabled = true;
 
     // Menu music mode (Arcade by Lucjo - loop infinito)
     Audio.setMusicMode('menu');
@@ -149,6 +153,23 @@ export default class TitleScene extends Phaser.Scene {
     // Check if we should show leaderboard (from game over screen)
     if (data?.showLeaderboard) {
       this.time.delayedCall(600, () => this.showLeaderboard());
+    }
+  }
+
+  update() {
+    if (this.speechBubble && this.speechBubble.visible && this.speechShowTime != null && this.time.now - this.speechShowTime > 3200) {
+      this.speechBubble.setVisible(false);
+      if (this.speechText) this.speechText.setVisible(false);
+      this.speechShowTime = null;
+      this._speechBubbleW = this._speechBubbleH = null;
+      if (this.speechTimer) {
+        this.speechTimer.remove();
+        this.speechTimer = null;
+      }
+    }
+    // Keep speech bubble following the character while visible
+    if (this.speechBubble?.visible && this.speechText?.visible && this._speechBubbleW != null && this._speechBubbleH != null && this.idlePlayer) {
+      this.redrawSpeechBubbleAtCharacter();
     }
   }
 
@@ -693,6 +714,7 @@ export default class TitleScene extends Phaser.Scene {
       if (!name) return;
       try {
         await authApi.updateMeUsername(name);
+        if (window.VIBE_SETTINGS) window.VIBE_SETTINGS.setPlayerName(name.slice(0, 20));
         this.updateWalletButton();
         closeModal();
       } catch (e) {
@@ -988,6 +1010,13 @@ export default class TitleScene extends Phaser.Scene {
     // Eliminar todos los eventos de tiempo locales a la escena
     this.time.removeAllEvents();
 
+    // Ocultar burbuja de diálogo para que no quede visible al reiniciar (p. ej. con inspector abierto)
+    if (this.speechBubble) this.speechBubble.setVisible(false);
+    if (this.speechText) this.speechText.setVisible(false);
+    this.speechShowTime = null;
+    this.speechTimer = null;
+    this._speechBubbleW = this._speechBubbleH = null;
+
     // Limpieza adicional ya existente
     this.shutdown();
   }
@@ -1132,6 +1161,9 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5).setDepth(CHARACTER_DEPTH + 2);
     this.speechBubble.setVisible(false);
     this.speechText.setVisible(false);
+    this.speechShowTime = null;
+    // Avoid speech bubble showing on reload with inspector open (no speech for first 4s)
+    this.sceneSpeechAllowedAt = 4000;
 
     // Thinking bubble (shows coding activity)
     this.thinkingBubble = this.add.graphics();
@@ -1162,8 +1194,8 @@ export default class TitleScene extends Phaser.Scene {
     // Disable title combat mobs in menu (requested).
     this.titleDefenseEnabled = false;
 
-    // Random quotes
-    this.idleQuotes = [
+    // Random quotes (EN + ES)
+    this.idleQuotesEn = [
       "Start game bro\nlets get coding",
       "...",
       "*stretches*",
@@ -1174,8 +1206,19 @@ export default class TitleScene extends Phaser.Scene {
       "Coffee break?",
       "npm install\n*infinite*"
     ];
+    this.idleQuotesEs = [
+      "Dale al juego, bro\na codear",
+      "...",
+      "*se estira*",
+      "¿Listo para debugear\nbichos?",
+      "Ctrl+S a todo",
+      "git push --force\njk jk",
+      "Los bugs me temen",
+      "¿Pausa café?",
+      "npm install\n*infinito*"
+    ];
 
-    this.warglaiveQuotes = [
+    this.warglaiveQuotesEn = [
       // Luu - artwork credit
       "Artwork by Luu\n*absolute masterpiece*",
       // DareDev256 - the almighty
@@ -1192,6 +1235,19 @@ export default class TitleScene extends Phaser.Scene {
       "Opus-powered\ngameplay",
       // General hype
       "0.01% drop rate\nworth it tho"
+    ];
+    this.warglaiveQuotesEs = [
+      "Arte por Luu\n*obra maestra*",
+      "Da...\nel TODOPODEROSO",
+      "TODOS ALABAMOS\na CosmicCoder",
+      "DareDev256\nbendijo este juego",
+      "DareDev256 es\notro nivel",
+      "Qué ganas de blandir\nla RAWGLAIVE",
+      "Modo raw\nACTIVADO",
+      "Raw nos mira...\n*sin presión*",
+      "Claude codió esto\nconmigo por cierto",
+      "Gameplay con\nOpus",
+      "0.01% de drop\npero vale la pena"
     ];
 
     // Coding activity quotes
@@ -1219,84 +1275,211 @@ export default class TitleScene extends Phaser.Scene {
       "Context window\ngetting thicc"
     ];
 
-    this.xpConnectedQuotes = [
+    this.xpConnectedQuotesEn = [
       "XP SERVER LIVE!\nLets get this bread",
       "We're connected!\nTime to grind",
       "Live mode activated"
     ];
+    this.xpConnectedQuotesEs = [
+      "¡SERVER XP EN VIVO!\nA darle",
+      "¡Conectados!\nA grindear",
+      "Modo live activado"
+    ];
 
-    this.xpDisconnectedQuotes = [
+    this.xpDisconnectedQuotesEn = [
       "XP server offline",
       "Offline mode"
     ];
+    this.xpDisconnectedQuotesEs = [
+      "Server XP desconectado",
+      "Modo offline"
+    ];
 
-    // Time-based easter egg quotes
-    this.lateNightQuotes = [
+    // Time-based easter egg quotes (EN + ES)
+    this.lateNightQuotesEn = [
       "Coding at this hour?\n*respect*",
       "Sleep is for the weak",
       "3am coding\nhits different",
       "Night owl mode\nACTIVATED",
       "The bugs come out\nat night..."
     ];
+    this.lateNightQuotesEs = [
+      "¿Codear a esta hora?\n*respeto*",
+      "Dormir es para débiles",
+      "Codear a las 3am\nes otro nivel",
+      "Modo búho nocturno\nACTIVADO",
+      "Los bugs salen\npor la noche..."
+    ];
 
-    this.earlyMorningQuotes = [
+    this.earlyMorningQuotesEn = [
       "Early bird\ngets the bugs!",
       "Morning grind\nlet's go",
       "Coffee + code\n= productivity"
     ];
+    this.earlyMorningQuotesEs = [
+      "¡Madrugador\ncaza bugs!",
+      "Grind matutino\nvamos",
+      "Café + código\n= productividad"
+    ];
 
-    this.workHoursQuotes = [
+    this.workHoursQuotesEn = [
       "Work mode?\nI see you",
       "Meeting in 5?\nOne more wave",
       "Standup can wait"
     ];
+    this.workHoursQuotesEs = [
+      "¿Modo trabajo?\nTe veo",
+      "¿Reunión en 5?\nUna oleada más",
+      "El standup puede esperar"
+    ];
 
-    this.eveningQuotes = [
+    this.eveningQuotesEn = [
       "After hours grind!",
       "Off the clock\nstill coding",
       "Side project time?"
     ];
+    this.eveningQuotesEs = [
+      "¡Grind después del curro!",
+      "Fuera de hora\nseguimos codando",
+      "¿Hora del side project?"
+    ];
 
-    this.nightQuotes = [
+    this.nightQuotesEn = [
       "Late night session",
       "One more commit...",
       "Debug o'clock"
     ];
+    this.nightQuotesEs = [
+      "Sesión nocturna",
+      "Un commit más...",
+      "Hora del debug"
+    ];
 
-    this.weekendQuotes = [
+    this.weekendQuotesEn = [
       "Weekend warrior!",
       "No rest for\nthe dedicated",
       "Saturday deploy?\nBold move"
     ];
-
-    // Git / build phrases (EN + ES)
-    this.gitQuotesEn = [
-      "BuildOnStellar",
-      "git commit -m \"gg ez\"",
-      "Push successful.\nVictory pushed to main.",
-      "Merge conflict? Nah.\nSkill issue.",
-      "Commit early,\ncommit often.",
-      "Clean rebase.\nClean soul.",
-      "No bugs.\nOnly unexpected features.",
-      "Refactor complete.\nElegance restored.",
-      "Green build.\nGood life.",
-      "Deploy without fear.",
-      "Force push and pray."
+    this.weekendQuotesEs = [
+      "¡Guerrero de finde!",
+      "Sin descanso\npara los dedicados",
+      "¿Deploy el sábado?\nValiente"
     ];
 
-    this.gitQuotesEs = [
-      "BuildOnStellar",
-      "git commit -m \"gg ez\"",
-      "Push exitoso.\nLa victoria llegó a main.",
-      "¿Conflicto de merge? Nah.\nFalta de skill.",
-      "Commitea temprano,\ncommitea seguido.",
-      "Rebase limpio.\nAlma limpia.",
-      "Sin bugs.\nSolo features inesperadas.",
-      "Refactor completo.\nElegancia restaurada.",
-      "Build en verde.\nVida buena.",
-      "Deploy sin miedo.",
-      "Force push y a rezar."
-    ];
+    // Menu phrases by character (EN + ES) — title screen speech bubble only
+    this.menuQuotesByChar = {
+      // SyncStorm — chaotic dev, Friday deploys
+      swordsman: {
+        en: [
+          "git push --force\norigin testnet!",
+          "git commit -m \"GG EZ\"",
+          "Uncaught TypeError:\nyour skill is undefined.",
+          "Deploying on\n@BuildOnStellar on a Friday!",
+          "Panic! at the Soroban VM!",
+          "Resolving merge conflicts\n... by force.",
+          "throw new Error(\n\"Skill_Issue_Detected\");",
+          "Status: 200 OK.\nEnemy: 404 Not Found.",
+          "Overclocking the ZK prover!\n#StellarHacks",
+          "cargo run --release\n--destroy-all",
+          "Memory leak detected\nin your strategy.",
+          "Ctrl+C won't save you\nthis time!",
+          "Brute-forcing the nonce...\nBoom!",
+          "Stack Overflow of bullets!",
+          "Bypassing your firewall\nwith a ZK proof."
+        ],
+        es: [
+          "git push --force\norigin testnet!",
+          "git commit -m \"GG EZ\"",
+          "Uncaught TypeError:\ntu habilidad is undefined.",
+          "¡Desplegando en\n@BuildOnStellar un viernes!",
+          "¡Panic! en la Soroban VM!",
+          "Resolviendo conflictos\nde merge... a la fuerza.",
+          "throw new Error(\n\"Skill_Issue_Detectado\");",
+          "Status: 200 OK.\nEnemigo: 404 Not Found.",
+          "¡Overclockeando el ZK prover!\n#StellarHacks",
+          "cargo run --release\n--destroy-all",
+          "Memory leak detectado\nen tu estrategia.",
+          "¡Ctrl+C no te va\na salvar esta vez!",
+          "Brute-forcing el nonce...\n¡Boom!",
+          "¡Stack Overflow de balas!",
+          "Bypasseando tu firewall\ncon una prueba ZK."
+        ]
+      },
+      // VoidNull — strict sysadmin, rm -rf
+      destroyer: {
+        en: [
+          "sudo rm -rf /enemies/*",
+          "DROP TABLE alien_swarm; --",
+          "NullPointerException:\nTarget eradicated.",
+          "Your ZK proof\nreturned FALSE.",
+          "Garbage collection\nexecuted successfully.",
+          "Access Denied.\nInvalid Soroban signature.",
+          "kill -9 PID_ENEMY",
+          "Formatting the\nStellar Sector...",
+          "WasmVm Trap:\nUnreachableCodeReached. That's you.",
+          "Evaluating:\nenemy.isAlive() == false;",
+          "Clearing the cache\nand your health bar.",
+          "You have been deprecated\nin this version.",
+          "No rollback for this\non-chain transaction.",
+          "Executing end_game()\non your existence.",
+          "Strict Mode: ON.\nZero bugs, zero mercy."
+        ],
+        es: [
+          "sudo rm -rf /enemies/*",
+          "DROP TABLE alien_swarm; --",
+          "NullPointerException:\nTarget erradicado.",
+          "Tu Zero-Knowledge proof\ndevolvió FALSE.",
+          "Garbage collection\nejecutado con éxito.",
+          "Access Denied. Tu firma\nen Soroban es inválida.",
+          "kill -9 PID_ENEMY",
+          "Formateando el\nStellar Sector...",
+          "WasmVm Trap: UnreachableCodeReached.\nEse eres tú.",
+          "Evaluando:\nenemy.isAlive() == false;",
+          "Limpiando el caché\ny tu barra de vida.",
+          "Has sido deprecado\nen esta versión.",
+          "No hay rollback para esta\ntransacción on-chain.",
+          "Ejecutando end_game()\nsobre tu existencia.",
+          "Strict Mode: ON.\nCero bugs, cero piedad."
+        ]
+      },
+      // VibeCoder — zen dev, Vim & async
+      vibecoder: {
+        en: [
+          "Awaiting async\nannihilation...",
+          "My code compiles on the first try.\nYours?",
+          "Flow state achieved.\nLatency on Stellar: 0ms.",
+          "I write smart contracts\nin Vim, obviously.",
+          "while(true)\n{ keepShooting(); }",
+          "Compiling Noir circuits...\nfeeling the groove.",
+          "Your logic is poorly\nstructured, bro.",
+          "Ping: 1ms.\nHeadshot confirmed on-chain.",
+          "Let me refactor\nyour face.",
+          "Complexity O(1).\nInstant death.",
+          "Resolving promises\nand shattering dreams.",
+          "Clean code, clean kills.\n#BuildOnStellar",
+          "I use Arch Linux and compile\non Soroban, in case you wondered.",
+          "Optimizing gas usage...\nEnemy eliminated.",
+          "Listen to the rhythm\nof the blockchain. Pure ZK!"
+        ],
+        es: [
+          "Awaiting async\nannihilation...",
+          "Mi código compila a la primera.\n¿El tuyo?",
+          "Flow state alcanzado.\nLatencia en Stellar: 0ms.",
+          "Yo escribo smart contracts\nen Vim, obviamente.",
+          "while(true)\n{ keepShooting(); }",
+          "Compilando circuitos Noir...\nsintiendo el groove.",
+          "Tu lógica está mal\nestructurada, bro.",
+          "Ping: 1ms.\nHeadshot confirmado on-chain.",
+          "Déjame refactorizarte\nla cara.",
+          "Complejidad O(1).\nMuerte instantánea.",
+          "Resolviendo promesas\ny rompiendo sueños.",
+          "Código limpio, kills limpias.\n#BuildOnStellar",
+          "Uso Arch Linux y compilo\nen Soroban, por si preguntabas.",
+          "Optimizando uso de gas...\nEnemigo eliminado.",
+          "Escucha el ritmo del\nblockchain. ¡Puro ZK!"
+        ]
+      }
+    };
 
     // CLI source-specific quotes
     this.claudeQuotes = [
@@ -1352,7 +1535,8 @@ export default class TitleScene extends Phaser.Scene {
     this.xpConnectedHandler = () => {
       this.updateConnectionBadge();
       this.time.delayedCall(500, () => {
-        this.sayQuote(Phaser.Utils.Array.GetRandom(this.xpConnectedQuotes));
+        const pool = currentLang() === 'es' ? this.xpConnectedQuotesEs : this.xpConnectedQuotesEn;
+        this.sayQuote(Phaser.Utils.Array.GetRandom(pool));
       });
     };
 
@@ -1361,13 +1545,16 @@ export default class TitleScene extends Phaser.Scene {
       this.updateConnectionBadge();
       const justOpenedDocs = this.lastDocsOpenTime && (Date.now() - this.lastDocsOpenTime < 5000);
       if (!justOpenedDocs) {
-        this.sayQuote(Phaser.Utils.Array.GetRandom(this.xpDisconnectedQuotes));
+        const pool = currentLang() === 'es' ? this.xpDisconnectedQuotesEs : this.xpDisconnectedQuotesEn;
+        this.sayQuote(Phaser.Utils.Array.GetRandom(pool));
       }
     };
 
     // Level up event
     this.levelUpHandler = (event) => {
-      this.sayQuote(`LEVEL ${event.detail.level}!\nLET'S GOOO`);
+      const level = event.detail.level;
+      const msg = currentLang() === 'es' ? `¡NIVEL ${level}!\n¡VAMOS!` : `LEVEL ${level}!\nLET'S GOOO`;
+      this.sayQuote(msg);
     };
 
     // Add the listeners
@@ -1428,8 +1615,8 @@ export default class TitleScene extends Phaser.Scene {
       loop: true
     });
 
-    // Initial action after short delay
-    this.time.delayedCall(1500, () => this.doRandomAction());
+    // Initial action after delay so layout is ready (avoids speech bubble at wrong position on reload e.g. with inspector open)
+    this.time.delayedCall(3500, () => this.doRandomAction());
   }
 
   startGitQuotes() {
@@ -1442,10 +1629,11 @@ export default class TitleScene extends Phaser.Scene {
       delay: 6000,
       loop: true,
       callback: () => {
-        // No spamear mientras hay menús abiertos o input de nombre
         if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.nameInputOpen || this.usernameModal) return;
-        const lang = window.VIBE_SETTINGS?.language || 'en';
-        const pool = lang === 'es' ? this.gitQuotesEs : this.gitQuotesEn;
+        const lang = currentLang();
+        const charId = progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
+        const byChar = this.menuQuotesByChar?.[charId] || this.menuQuotesByChar?.vibecoder;
+        const pool = byChar?.[lang] || byChar?.en;
         if (!pool || pool.length === 0) return;
         this.sayQuote(Phaser.Utils.Array.GetRandom(pool));
       }
@@ -1550,7 +1738,8 @@ export default class TitleScene extends Phaser.Scene {
           this.idlePlayer.setFlipX(false);
           // Say warglaive quote
           this.time.delayedCall(300, () => {
-            this.sayQuote(Phaser.Utils.Array.GetRandom(this.warglaiveQuotes));
+            const wargPool = currentLang() === 'es' ? this.warglaiveQuotesEs : this.warglaiveQuotesEn;
+            this.sayQuote(Phaser.Utils.Array.GetRandom(wargPool));
           });
         } else {
           this.nearWarglaive = false;
@@ -1560,46 +1749,74 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   sayQuote(text) {
-    // Clear existing speech
-    if (this.speechTimer) {
-      this.speechTimer.remove();
-    }
+    if (!this.idlePlayer || !this.idlePlayer.scene || !this.speechBubble || !this.speechText) return;
+    if (this.time.now < (this.sceneSpeechAllowedAt ?? 0)) return;
+
+    if (this.speechTimer) this.speechTimer.remove();
 
     const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
+    const maxTextWidth = 200 * uiScale;
+    const paddingX = 16 * uiScale;
+    const paddingY = 12 * uiScale;
+    const maxBubbleW = 280 * uiScale;
+    const maxBubbleH = 110 * uiScale;
 
-    // Align speech bubble with the selected character on the title screen.
-    const bubbleOffsetX = 70 * uiScale;
-    let bubbleX = this.idlePlayer.x + bubbleOffsetX;
+    this.speechText.setWordWrapWidth(maxTextWidth);
+    this.speechText.setText(text);
+    const textW = this.speechText.width;
+    const textH = this.speechText.height;
+    const bubbleWidth = Math.min(maxBubbleW, Math.max(120 * uiScale, textW + paddingX * 2));
+    const bubbleHeight = Math.min(maxBubbleH, Math.max(44 * uiScale, textH + paddingY * 2));
+
+    this._speechBubbleW = bubbleWidth;
+    this._speechBubbleH = bubbleHeight;
+
+    this.redrawSpeechBubbleAtCharacter();
+
+    this.speechBubble.setDepth(5);
+    this.speechText.setDepth(6);
+    this.speechBubble.setVisible(true);
+    this.speechText.setVisible(true);
+    this.speechShowTime = this.time.now;
+
+    this.speechTimer = this.time.delayedCall(3000, () => {
+      this.speechBubble.setVisible(false);
+      this.speechText.setVisible(false);
+      this.speechShowTime = null;
+      this._speechBubbleW = this._speechBubbleH = null;
+    });
+  }
+
+  redrawSpeechBubbleAtCharacter() {
+    if (!this.idlePlayer || !this.speechBubble || !this.speechText || this._speechBubbleW == null || this._speechBubbleH == null) return;
+    const uiScale = getUIScale(this);
+    const w = this.scale.width || 800;
+    const bubbleWidth = this._speechBubbleW;
+    const bubbleHeight = this._speechBubbleH;
+
+    let bubbleX = this.idlePlayer.x + 70 * uiScale;
     const bubbleY = this.idlePlayer.y - 125 * uiScale;
-    const bubbleWidth = 190 * uiScale;
-    const bubbleHeight = 65 * uiScale;
-    // Evitar que se salga por la derecha
     if (bubbleX + bubbleWidth / 2 > w - 20) bubbleX = w - 20 - bubbleWidth / 2;
     if (bubbleX - bubbleWidth / 2 < this.idlePlayer.x) bubbleX = this.idlePlayer.x + bubbleWidth / 2 + 10;
 
-    // Draw speech bubble
     this.speechBubble.clear();
     this.speechBubble.fillStyle(0xffffff, 0.95);
     this.speechBubble.lineStyle(2, 0x00ffff, 1);
-
-    // Bubble shape (más alto/ancho para 2 líneas de texto)
     this.speechBubble.fillRoundedRect(
-      bubbleX - bubbleWidth/2,
-      bubbleY - bubbleHeight/2,
+      bubbleX - bubbleWidth / 2,
+      bubbleY - bubbleHeight / 2,
       bubbleWidth,
       bubbleHeight,
       8
     );
     this.speechBubble.strokeRoundedRect(
-      bubbleX - bubbleWidth/2,
-      bubbleY - bubbleHeight/2,
+      bubbleX - bubbleWidth / 2,
+      bubbleY - bubbleHeight / 2,
       bubbleWidth,
       bubbleHeight,
       8
     );
 
-    // Pointer from bubble bottom toward character head.
     const bubbleLeft = bubbleX - bubbleWidth / 2;
     const bubbleRight = bubbleX + bubbleWidth / 2;
     const bubbleBottom = bubbleY + bubbleHeight / 2;
@@ -1619,21 +1836,7 @@ export default class TitleScene extends Phaser.Scene {
     this.speechBubble.lineBetween(pointerBaseX - 8 * uiScale, bubbleBottom, pointerTipX, pointerTipY);
     this.speechBubble.lineBetween(pointerTipX, pointerTipY, pointerBaseX + 8 * uiScale, bubbleBottom);
 
-    // Set text
     this.speechText.setPosition(bubbleX, bubbleY);
-    this.speechText.setText(text);
-
-    // Mostrar encima del menú pero sin tapar modales
-    this.speechBubble.setDepth(5);
-    this.speechText.setDepth(6);
-    this.speechBubble.setVisible(true);
-    this.speechText.setVisible(true);
-
-    // Hide after delay
-    this.speechTimer = this.time.delayedCall(3000, () => {
-      this.speechBubble.setVisible(false);
-      this.speechText.setVisible(false);
-    });
   }
 
   showThinkingBubble() {
@@ -1694,36 +1897,27 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   getTimeBasedQuote() {
+    const lang = currentLang();
     const hour = new Date().getHours();
     const day = new Date().getDay(); // 0 = Sunday
+    const isEs = lang === 'es';
 
-    // Weekend special (Saturday = 6, Sunday = 0)
     if (day === 0 || day === 6) {
-      return Phaser.Utils.Array.GetRandom(this.weekendQuotes);
+      return Phaser.Utils.Array.GetRandom(isEs ? this.weekendQuotesEs : this.weekendQuotesEn);
     }
-
-    // Late night (12am - 5am)
     if (hour >= 0 && hour < 5) {
-      return Phaser.Utils.Array.GetRandom(this.lateNightQuotes);
+      return Phaser.Utils.Array.GetRandom(isEs ? this.lateNightQuotesEs : this.lateNightQuotesEn);
     }
-
-    // Early morning (5am - 9am)
     if (hour >= 5 && hour < 9) {
-      return Phaser.Utils.Array.GetRandom(this.earlyMorningQuotes);
+      return Phaser.Utils.Array.GetRandom(isEs ? this.earlyMorningQuotesEs : this.earlyMorningQuotesEn);
     }
-
-    // Work hours (9am - 5pm)
     if (hour >= 9 && hour < 17) {
-      return Phaser.Utils.Array.GetRandom(this.workHoursQuotes);
+      return Phaser.Utils.Array.GetRandom(isEs ? this.workHoursQuotesEs : this.workHoursQuotesEn);
     }
-
-    // Evening (5pm - 9pm)
     if (hour >= 17 && hour < 21) {
-      return Phaser.Utils.Array.GetRandom(this.eveningQuotes);
+      return Phaser.Utils.Array.GetRandom(isEs ? this.eveningQuotesEs : this.eveningQuotesEn);
     }
-
-    // Night (9pm - 12am)
-    return Phaser.Utils.Array.GetRandom(this.nightQuotes);
+    return Phaser.Utils.Array.GetRandom(isEs ? this.nightQuotesEs : this.nightQuotesEn);
   }
 
   startTitleDefense() {
@@ -2295,41 +2489,62 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0.5);
     container.add(title);
 
-    // Headers
+    // Headers — clean 3-column layout: #/NAME | SCORE | RANK
     const headerY = overlayTop + 86;
     const fs = (n) => `${Math.round(n * uiScale)}px`;
-    const rightPad = 48;
-    const colPos = overlayLeft + 28;
-    const colIcon = overlayLeft + 86;
-    const colName = overlayLeft + 126;
-    const colWallet = overlayLeft + overlayW - 210;
-    const colRankName = overlayLeft + overlayW - rightPad;
-
-    // Add header texts with table-like alignment (monospace)
+    const pad = 32;
     const tableFont = 'monospace';
-    const posHeader = this.add.text(colPos, headerY, '#', { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
+
+    const colPos = overlayLeft + pad;
+    const colName = overlayLeft + pad + 40;
+    const colScore = overlayLeft + overlayW * 0.55;
+    const colRankName = overlayLeft + overlayW - pad;
+
+    const posHeader = this.add.text(colPos, headerY, '#', { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
     container.add(posHeader);
-    
-    const iconHeader = this.add.text(colIcon, headerY, '[ICON]', { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' }).setOrigin(0.5, 0);
-    container.add(iconHeader);
-    
-    const nameHeader = this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
+
+    const nameHeader = this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
     container.add(nameHeader);
-    
-    const walletHeader = this.add.text(colWallet, headerY, t('leaderboard.short_wallet'), { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
-    container.add(walletHeader);
-    
-    const rankHeader = this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: tableFont, fontSize: fs(12), color: '#00ffff' });
+
+    const scoreHeader = this.add.text(colScore, headerY, 'SCORE', { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
+    container.add(scoreHeader);
+
+    const rankHeader = this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
     rankHeader.setOrigin(1, 0);
     container.add(rankHeader);
-    
-    // Add thin 1px pixel divider line under headers (cyan)
-    const dividerLine = this.add.rectangle(overlayLeft + overlayW / 2, headerY + 20, overlayW - 2 * rightPad, 1, 0x00ffff, 1);
+
+    const dividerLine = this.add.rectangle(overlayLeft + overlayW / 2, headerY + 22, overlayW - pad * 2, 1, 0x00ffff, 0.6);
     container.add(dividerLine);
 
     const walletConnected = stellarWallet.isConnected();
     let top;
     let hasRankData = false;
+
+    const normAddr = (addr) => (addr || '').toLowerCase().trim();
+    let currentAddr = null;
+    let currentDisplayName = '';
+    if (walletConnected) {
+      currentAddr = await stellarWallet.getAddress();
+      const settings = window.VIBE_SETTINGS || {};
+      const nameFromSettings = (settings.playerName && String(settings.playerName).trim()) || '';
+      if (nameFromSettings) {
+        currentDisplayName = nameFromSettings.slice(0, 20);
+      } else {
+        try {
+          const me = await authApi.getMe();
+          if (me && me.username && String(me.username).trim()) {
+            currentDisplayName = String(me.username).trim().slice(0, 20);
+          }
+        } catch (_) {}
+        if (!currentDisplayName) {
+          const cid = progressStore?.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
+          const ch = window.VIBE_CHARACTERS?.[cid];
+          currentDisplayName = ch ? (ch.displayName_en || ch.displayName || ch.name || '').slice(0, 20) : 'Anonymous';
+        }
+        if (!(currentDisplayName && String(currentDisplayName).trim())) currentDisplayName = 'Player';
+        else currentDisplayName = String(currentDisplayName).trim().slice(0, 20);
+      }
+    }
 
     if (walletConnected && gameClient.isContractConfigured()) {
       // Fetch leaderboard with rank data from contract; fallback to local API if empty/unavailable
@@ -2346,37 +2561,61 @@ export default class TitleScene extends Phaser.Scene {
       }
 
       if (onChain.length > 0) {
-        // Map to new format with rank support
-        top = onChain.map((e, i) => ({
-          position: i + 1,
-          name: e.player_name || 'Unknown',
-          wallet: e.player || '',
-          rank: e.rank !== undefined ? e.rank : 0,
-          bestScore: e.score ?? e.bestScore ?? 0,
-          gamesPlayed: e.gamesPlayed ?? 0
-        }));
+        // Contract does not return player_name; resolve names from API (user-submitted name per wallet)
+        let addrToName = {};
+        if (currentAddr && currentDisplayName) addrToName[normAddr(currentAddr)] = currentDisplayName;
+        try {
+          const apiEntries = await LeaderboardManager.fetchOnChain();
+          apiEntries.forEach((entry) => {
+            const a = (entry.address || entry.player || '').toString().trim().toLowerCase();
+            const nom = (entry.name || '').toString().trim();
+            if (a && nom) addrToName[a] = nom;
+          });
+        } catch (_) {}
+        top = onChain.map((e, i) => {
+          const isCurrentUser = currentAddr && e.player && normAddr(e.player) === normAddr(currentAddr);
+          const resolved = e.player_name || addrToName[normAddr(e.player)] || (e.player ? stellarWallet.shortAddress(e.player, 6) : 'Unknown');
+          const name = isCurrentUser ? (currentDisplayName || resolved) : resolved;
+          return {
+            position: i + 1,
+            name,
+            wallet: e.player || '',
+            rank: e.rank !== undefined ? e.rank : 0,
+            bestScore: e.score ?? e.bestScore ?? 0,
+            bestWave: e.wave ?? e.bestWave ?? 0,
+            gamesPlayed: e.gamesPlayed ?? 0
+          };
+        });
         hasRankData = true;
       } else {
         const entries = await LeaderboardManager.fetchOnChain();
-        top = entries.map((e, i) => ({
-          position: i + 1,
-          name: e.name || 'Unknown',
-          wallet: e.address || '',
-          rank: 0,
-          bestScore: e.score ?? 0,
-          gamesPlayed: 0
-        }));
+        top = entries.map((e, i) => {
+          const isCurrentUser = currentAddr && e.address && normAddr(e.address) === normAddr(currentAddr);
+          return {
+            position: i + 1,
+            name: isCurrentUser && currentDisplayName ? currentDisplayName : (e.name || 'Unknown'),
+            wallet: e.address || '',
+            rank: 0,
+            bestScore: e.score ?? 0,
+            bestWave: e.wave ?? 0,
+            gamesPlayed: 0
+          };
+        });
       }
     } else if (walletConnected) {
       const entries = await LeaderboardManager.fetchOnChain();
-      top = entries.map((e, i) => ({
-        position: i + 1,
-        name: e.name || 'Unknown',
-        wallet: e.address || '',
-        rank: 0,
-        bestScore: e.score ?? 0,
-        gamesPlayed: 0
-      }));
+      top = entries.map((e, i) => {
+        const isCurrentUser = currentAddr && e.address && normAddr(e.address) === normAddr(currentAddr);
+        return {
+          position: i + 1,
+          name: isCurrentUser && currentDisplayName ? currentDisplayName : (e.name || 'Unknown'),
+          wallet: e.address || '',
+          rank: 0,
+          bestScore: e.score ?? 0,
+          bestWave: e.wave ?? 0,
+          gamesPlayed: 0
+        };
+      });
     } else {
       const entries = LeaderboardManager.getTop(50);
       top = entries.map((e, i) => ({
@@ -2385,9 +2624,20 @@ export default class TitleScene extends Phaser.Scene {
         wallet: '',
         rank: 0,
         bestScore: e.score ?? 0,
+        bestWave: e.wave ?? 0,
         gamesPlayed: 0
       }));
     }
+
+    // One entry per player: keep best score per wallet
+    const byWallet = new Map();
+    const scoreOf = (e) => Number(e.bestScore ?? e.score ?? 0) || 0;
+    top.forEach((entry) => {
+      const key = normAddr(entry.wallet || entry.address || '');
+      const existing = byWallet.get(key);
+      if (!existing || scoreOf(entry) > scoreOf(existing)) byWallet.set(key, { ...entry });
+    });
+    top = Array.from(byWallet.values());
 
     // Sort by bestScore DESC, then gamesPlayed DESC
     top.sort((a, b) => {
@@ -2398,8 +2648,15 @@ export default class TitleScene extends Phaser.Scene {
     // Re-assign positions after sort
     top.forEach((entry, i) => entry.position = i + 1);
 
+    // Normalize score/wave so rank derivation always has a value (some sources use .score / .wave)
+    top.forEach((entry) => {
+      if (entry.bestScore == null && entry.score != null) entry.bestScore = Number(entry.score) || 0;
+      if (entry.bestWave == null && entry.wave != null) entry.bestWave = Number(entry.wave) || 0;
+    });
+
+    const visibleRows = 7;
     const lineHeight = showAll ? (28 * uiScale) : (36 * uiScale);
-    const maxRows = showAll ? 16 : 10;
+    const maxRows = showAll ? 16 : visibleRows;
     const tableStartY = overlayTop + 120;
 
     const rowObjects = [];
@@ -2410,50 +2667,83 @@ export default class TitleScene extends Phaser.Scene {
       }
     };
 
-    const drawRows = (pageIndex = 0) => {
+    let scrollOffset = 0;
+    const maxScroll = Math.max(0, top.length - maxRows);
+
+    const drawRows = (startIndex = 0) => {
       clearRows();
       const toShow = showAll
-        ? top.slice(pageIndex * maxRows, pageIndex * maxRows + maxRows)
-        : top.slice(0, maxRows);
+        ? top.slice(startIndex * maxRows, startIndex * maxRows + maxRows)
+        : top.slice(startIndex, startIndex + maxRows);
 
       if (toShow.length === 0) return;
 
+      // Unified items: rows + footer buttons share one selector
+      const allItems = [];
+      const rowBgs = [];
+
       toShow.forEach((entry, i) => {
         const y = tableStartY + i * lineHeight;
-        const rankData = getRankById(entry.rank);
+        // Score/wave for display and rank (support both .bestScore/.bestWave and .score/.wave)
+        const score = Number(entry.bestScore ?? entry.score ?? 0) || 0;
+        const wave = Number(entry.bestWave ?? entry.wave ?? 0) || 0;
+        // Derive rank from score when API rank is 0 or missing (Bronze 50+, Silver 500+, etc.)
+        const apiRank = entry.rank != null ? Number(entry.rank) : 0;
+        const displayRank = (apiRank > 0 && apiRank <= 4) ? apiRank : getRankIdFromScore(score, wave >= 3 ? wave : 99);
+        const rankData = getRankById(displayRank);
+        const globalIdx = showAll ? startIndex * maxRows + i : startIndex + i;
 
-        const posColor = (pageIndex === 0 && i === 0) ? '#ffd700' : (pageIndex === 0 && i === 1) ? '#c0c0c0' : (pageIndex === 0 && i === 2) ? '#cd7f32' : '#888888';
-        const posText = this.add.text(colPos, y, String(entry.position), { fontFamily: tableFont, fontSize: fs(12), color: posColor });
+        const rowBg = this.add.rectangle(overlayLeft + overlayW / 2, y + lineHeight / 2 - 2, overlayW - pad * 2, lineHeight, 0x00ffff, 0);
+        rowBg.setInteractive({ useHandCursor: true });
+        container.add(rowBg);
+        rowObjects.push(rowBg);
+        rowBgs.push(rowBg);
+
+        const posColor = globalIdx === 0 ? '#ffd700' : globalIdx === 1 ? '#c0c0c0' : globalIdx === 2 ? '#cd7f32' : '#666666';
+        const posText = this.add.text(colPos, y, String(entry.position), { fontFamily: tableFont, fontSize: fs(13), color: posColor, fontStyle: 'bold' });
         container.add(posText);
         rowObjects.push(posText);
 
-        if (!isUnranked(entry.rank) && hasRankIcon(entry.rank)) {
-          const spriteKey = rankData.sprite;
-          if (this.textures.exists(spriteKey)) {
-            const icon = this.add.image(colIcon, y + 10, spriteKey);
-            icon.setDisplaySize(24, 24);
-            container.add(icon);
-            rowObjects.push(icon);
-          }
-        }
-
-        const nameText = entry.name.slice(0, 14);
-        const nm = this.add.text(colName, y, nameText, { fontFamily: tableFont, fontSize: fs(12), color: '#ffffff' });
+        // Solo nombre de usuario; la wallet solo en Stellar Expert (ENTER). El usuario actual siempre con su nombre (personaje/settings).
+        const isCurrentUserRow = currentAddr && entry.wallet && normAddr(entry.wallet) === normAddr(currentAddr);
+        const displayName = (isCurrentUserRow ? (currentDisplayName || entry.name) : (entry.name || 'Unknown')).slice(0, 20);
+        const nameColor = globalIdx === 0 ? '#ffd700' : '#ffffff';
+        const nm = this.add.text(colName, y, displayName, { fontFamily: tableFont, fontSize: fs(12), color: nameColor });
         container.add(nm);
         rowObjects.push(nm);
 
-        const shortWallet = entry.wallet ? stellarWallet.shortWalletForLeaderboard(entry.wallet) : '';
-        const wl = this.add.text(colWallet, y, shortWallet, { fontFamily: tableFont, fontSize: fs(11), color: '#aaaaaa' });
-        container.add(wl);
-        rowObjects.push(wl);
+        const scoreVal = score > 0 ? String(Math.floor(score)) : '-';
+        const sc = this.add.text(colScore, y, scoreVal, { fontFamily: tableFont, fontSize: fs(12), color: '#00ff88' });
+        container.add(sc);
+        rowObjects.push(sc);
 
-        const rankName = isUnranked(entry.rank) ? t('ranks.unranked') : rankData.name;
-        const rankColor = isUnranked(entry.rank) ? '#888888' : getRankColorCSS(entry.rank);
+        const rankEmoji = getRankEmoji(displayRank);
+        const rankName = isUnranked(displayRank) ? t('ranks.unranked') : rankData.name + (rankEmoji ? ' ' + rankEmoji : '');
+        const rankColor = isUnranked(displayRank) ? '#555555' : getRankColorCSS(displayRank);
         const rk = this.add.text(colRankName, y, rankName, { fontFamily: tableFont, fontSize: fs(11), color: rankColor });
         rk.setOrigin(1, 0);
         container.add(rk);
         rowObjects.push(rk);
+
+        allItems.push({
+          type: 'row',
+          y,
+          entry,
+          bg: rowBg,
+          action: () => {
+            if (entry.wallet) window.open(`https://stellar.expert/explorer/testnet/account/${entry.wallet}`, '_blank');
+          }
+        });
+
+        rowBg.on('pointerover', () => { selIdx = i; updateSel(); });
+        rowBg.on('pointerout', () => { rowBg.setFillStyle(0x00ffff, 0); });
+        rowBg.on('pointerdown', () => allItems[i].action());
       });
+
+      // Store allItems ref so footer can append to it
+      this._lbAllItems = allItems;
+      this._lbRowBgs = rowBgs;
+      this._lbRowObjects = rowObjects;
     };
 
     if (top.length === 0) {
@@ -2492,43 +2782,100 @@ export default class TitleScene extends Phaser.Scene {
         }).setOrigin(0.5));
       }
     } else {
-      drawRows(0);
+      drawRows(showAll ? 0 : scrollOffset);
     }
 
-    // Footer - separate into two zones
-    const footerY = overlayTop + overlayH - 40;
-    
-    const canViewAll = top.length >= 10;
+    // Footer buttons
+    const footerTopY = overlayTop + overlayH - 52;
 
-    const leftFooterText = canViewAll
-      ? this.add.text(overlayLeft + 40, footerY, `[ ${showAll ? 'VIEW TOP 10' : 'VIEW ALL'} ]`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(12),
-        color: '#00ff88'
-      }).setOrigin(0, 0.5).setInteractive({ useHandCursor: true })
-      : null;
+    const canScroll = top.length > visibleRows && !showAll;
+    if (canScroll) {
+      const scrollHint = this.add.text(overlayLeft + overlayW / 2, footerTopY - 28, '[ ↑/↓ SCROLL ]', {
+        fontFamily: 'monospace', fontSize: fs(10), color: '#00aaff'
+      }).setOrigin(0.5, 0.5);
+      container.add(scrollHint);
+    }
 
-    if (leftFooterText) {
-      container.add(leftFooterText);
-      leftFooterText.on('pointerdown', () => {
+    const canViewAll = top.length > visibleRows;
+    if (canViewAll) {
+      const viewAllBtn = this.add.text(overlayLeft + overlayW - 40, footerTopY - 10, `[ ${showAll ? `${visibleRows}` : 'ALL'} ]`, {
+        fontFamily: 'monospace', fontSize: fs(10), color: '#00ff88'
+      }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
+      container.add(viewAllBtn);
+      viewAllBtn.on('pointerdown', () => {
         container.destroy();
         this.showLeaderboard({ showAll: !showAll });
       });
     }
 
-    // Right zone: Press Any Key to Close (cyan/neutral)
-    const closeText = this.add.text(overlayLeft + overlayW - 40, footerY, t('leaderboard.back'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: fs(12),
-      color: '#00ffff'  // Cyan color
-    }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
-    closeText.setWordWrapWidth(Math.max(120, overlayW * 0.55));
+    const viewRanksBtn = this.add.text(cx, footerTopY, `[ ${t('leaderboard.view_ranks')} ]`, {
+      fontFamily: 'monospace', fontSize: fs(12), color: '#ffd700', fontStyle: 'bold'
+    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true });
+    container.add(viewRanksBtn);
+
+    const closeText = this.add.text(cx, footerTopY + 22, '[ ESC TO CLOSE ]', {
+      fontFamily: 'monospace', fontSize: fs(10), color: '#555555'
+    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true });
     container.add(closeText);
+
+    // Add footer items to the unified list
+    const allItems = this._lbAllItems || [];
+    const rowBgs = this._lbRowBgs || [];
+
+    allItems.push({
+      type: 'button', y: footerTopY, target: viewRanksBtn,
+      action: () => this.showRankSystem()
+    });
+    allItems.push({
+      type: 'button', y: footerTopY + 22, target: closeText,
+      action: () => close()
+    });
+
+    viewRanksBtn.on('pointerdown', () => this.showRankSystem());
+    closeText.on('pointerdown', () => close());
+
+    // Single unified selector arrow
+    let selIdx = allItems.length > 0 ? allItems.length - 2 : 0; // default to VIEW RANKS
+    const selArrow = this.add.text(0, 0, '▶', {
+      fontFamily: 'monospace', fontSize: fs(12), color: '#00ffff', fontStyle: 'bold'
+    }).setOrigin(0.5, 0.5);
+    container.add(selArrow);
+
+    let walletHintText = null;
+    const updateSel = () => {
+      if (walletHintText) { try { walletHintText.destroy(); } catch (_) {} walletHintText = null; }
+      rowBgs.forEach((bg) => bg.setFillStyle(0x00ffff, 0));
+      allItems.forEach((item) => { if (item.target) item.target.setAlpha(0.6); });
+
+      if (selIdx < 0 || selIdx >= allItems.length) return;
+      const item = allItems[selIdx];
+
+      if (item.type === 'row') {
+        selArrow.setPosition(colPos - 14, item.y + 6);
+        if (item.bg) item.bg.setFillStyle(0x00ffff, 0.06);
+        if (item.entry?.wallet) {
+          const shortW = item.entry.wallet.length > 16 ? `${item.entry.wallet.slice(0, 8)}...${item.entry.wallet.slice(-6)}` : item.entry.wallet;
+          walletHintText = this.add.text(cx, footerTopY - 16, `${shortW}  [ ENTER → Stellar Expert ]`, {
+            fontFamily: 'monospace', fontSize: fs(9), color: '#00aaff'
+          }).setOrigin(0.5);
+          container.add(walletHintText);
+        }
+      } else {
+        selArrow.setPosition(item.target.x - item.target.width / 2 - 14, item.y);
+        item.target.setAlpha(1);
+      }
+    };
+    updateSel();
+
+    // Mouse hover on footer buttons
+    viewRanksBtn.on('pointerover', () => { selIdx = allItems.length - 2; updateSel(); });
+    closeText.on('pointerover', () => { selIdx = allItems.length - 1; updateSel(); });
+    // Mouse hover on rows already handled in drawRows
 
     let pageIndex = 0;
     const totalPages = top.length > 0 ? Math.ceil(top.length / maxRows) : 1;
     if (showAll && top.length > 0 && totalPages > 1) {
-      const pager = this.add.text(overlayLeft + overlayW / 2, footerY, `PAGE ${pageIndex + 1}/${totalPages}`, {
+      const pager = this.add.text(overlayLeft + overlayW / 2, footerTopY - 14, `PAGE ${pageIndex + 1}/${totalPages}`, {
         fontFamily: 'monospace',
         fontSize: fs(11),
         color: '#666666'
@@ -2555,17 +2902,45 @@ export default class TitleScene extends Phaser.Scene {
 
     const close = () => {
       container.destroy();
-      this.input.keyboard.off('keydown', close);
+      this.input.keyboard.off('keydown', onNavKey);
     };
 
-    closeText.on('pointerdown', close);
+    const onNavKey = (ev) => {
+      const k = ev.key?.toLowerCase?.() || ev.code;
+      if (k === 'escape' || k === 'backspace' || k === 'q') {
+        close();
+      } else if (k === 'arrowup' || k === 'w') {
+        if (canScroll && scrollOffset > 0) {
+          scrollOffset--;
+          drawRows(scrollOffset);
+          allItems.splice(0, visibleRows, ...(this._lbAllItems || []));
+          updateSel();
+        } else {
+          selIdx = selIdx <= 0 ? allItems.length - 1 : selIdx - 1;
+          updateSel();
+        }
+      } else if (k === 'arrowdown' || k === 's') {
+        if (canScroll && scrollOffset < maxScroll) {
+          scrollOffset++;
+          drawRows(scrollOffset);
+          allItems.splice(0, visibleRows, ...(this._lbAllItems || []));
+          updateSel();
+        } else {
+          selIdx = selIdx >= allItems.length - 1 ? 0 : selIdx + 1;
+          updateSel();
+        }
+      } else if (k === 'enter' || k === ' ') {
+        ev.preventDefault?.();
+        if (selIdx >= 0 && selIdx < allItems.length) allItems[selIdx].action();
+      }
+    };
+
     backdrop.on('pointerdown', close);
-    overlay.on('pointerdown', close);
-    this.input.keyboard.once('keydown', close);
+    this.input.keyboard.on('keydown', onNavKey);
   }
 
   /**
-   * Show Rank System information screen
+   * Show Rank System information popup with thresholds
    */
   showRankSystem() {
     const uiScale = getUIScale(this);
@@ -2573,93 +2948,159 @@ export default class TitleScene extends Phaser.Scene {
     const h = this.scale.height || 600;
     const cx = w / 2;
     const cy = h / 2;
+    const fs = (n) => `${Math.round(n * uiScale)}px`;
 
     const container = this.add.container(0, 0);
-    container.setDepth(1001);
+    container.setDepth(2000);
 
-    // Backdrop
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.96);
     backdrop.setInteractive({ useHandCursor: true });
     container.add(backdrop);
 
-    const overlayW = Math.min(660, w - 40);
-    const overlayH = Math.min(560, h - 40);
+    const overlayW = Math.min(680, w - 30);
+    const overlayH = Math.min(460, h - 20);
     const overlayLeft = cx - overlayW / 2;
     const overlayTop = cy - overlayH / 2;
+    const pad = 28;
 
-    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setInteractive({ useHandCursor: true });
+    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x080812, 1);
+    overlay.setStrokeStyle(2, 0xffd700);
     container.add(overlay);
 
     // Title
-    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 36, t('ranks.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${24 * uiScale}px`,
-      color: '#ffd700',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-    container.add(title);
+    container.add(this.add.text(cx, overlayTop + 28, t('ranks.title'), {
+      fontFamily: 'monospace', fontSize: fs(24), color: '#ffd700', fontStyle: 'bold'
+    }).setOrigin(0.5));
 
-    const fs = (n) => `${Math.round(n * uiScale)}px`;
+    // Column headers
+    const headerY = overlayTop + 58;
+    const colIcon = overlayLeft + pad + 22;
+    const colName = overlayLeft + pad + 52;
+    const colReq = overlayLeft + overlayW * 0.56;
+
+    container.add(this.add.text(colName, headerY, 'RANK', { fontFamily: 'monospace', fontSize: fs(10), color: '#555555' }));
+    container.add(this.add.text(colReq, headerY, 'REQUIREMENTS', { fontFamily: 'monospace', fontSize: fs(10), color: '#555555' }));
+
+    const divY = headerY + 16;
+    container.add(this.add.rectangle(cx, divY, overlayW - pad * 2, 1, 0xffd700, 0.3));
+
     const ranks = getAllRanks();
-    const startY = overlayTop + 80;
-    const lineHeight = 70 * uiScale;
+    const startY = divY + 10;
+    const rowH = Math.round((overlayH - 130) / ranks.length);
 
     ranks.forEach((rank, i) => {
-      const y = startY + i * lineHeight;
+      const y = startY + i * rowH;
 
-      // Rank icon (48x48)
-      if (this.textures.exists(rank.sprite)) {
-        const icon = this.add.image(overlayLeft + 60, y + 20, rank.sprite);
-        icon.setDisplaySize(48, 48);
-        container.add(icon);
+      if (i % 2 === 0) {
+        container.add(this.add.rectangle(cx, y + rowH / 2, overlayW - pad * 2, rowH - 2, 0xffffff, 0.02));
       }
 
-      // Rank name
-      const rankName = this.add.text(overlayLeft + 120, y, rank.name, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(16),
-        color: getRankColorCSS(rank.id),
-        fontStyle: 'bold'
-      });
-      container.add(rankName);
+      // Emoji (clean, no number)
+      if (rank.emoji) {
+        container.add(this.add.text(colIcon, y + rowH / 2, rank.emoji, {
+          fontFamily: 'monospace', fontSize: fs(24)
+        }).setOrigin(0.5, 0.5));
+      }
 
-      // Rank description
+      // Name
+      container.add(this.add.text(colName, y + 4, rank.name, {
+        fontFamily: 'monospace', fontSize: fs(16), color: getRankColorCSS(rank.id), fontStyle: 'bold'
+      }));
+
       const descKey = `ranks.${rank.name.toLowerCase()}_desc`;
-      const descText = this.add.text(overlayLeft + 120, y + 22, t(descKey), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(12),
-        color: '#aaaaaa'
-      });
-      container.add(descText);
+      const descMaxW = colReq - colName - 12;
+      container.add(this.add.text(colName, y + 30, t(descKey), {
+        fontFamily: 'monospace', fontSize: fs(10), color: '#999999',
+        maxLines: 2, wordWrap: { width: descMaxW }
+      }));
 
-      // Bonus percentage
-      const bonusText = this.add.text(overlayLeft + overlayW - 30, y + 10, `${getRankBonusPercent(rank.id)}`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(14),
-        color: '#00ff88'
-      }).setOrigin(1, 0);
-      container.add(bonusText);
+      // Requirements — two lines, right column
+      if (rank.minScore > 0) {
+        container.add(this.add.text(colReq, y + 6, `SCORE ≥ ${rank.minScore}`, {
+          fontFamily: 'monospace', fontSize: fs(13), color: '#00ffcc', fontStyle: 'bold'
+        }));
+      }
+      if (rank.minWave > 0) {
+        container.add(this.add.text(colReq, y + 24, `WAVE  ≥ ${rank.minWave}`, {
+          fontFamily: 'monospace', fontSize: fs(13), color: '#00aaff'
+        }));
+      }
+      if (!rank.minScore && !rank.minWave) {
+        container.add(this.add.text(colReq, y + 14, 'Submit a ZK run', {
+          fontFamily: 'monospace', fontSize: fs(11), color: '#444444'
+        }));
+      }
     });
 
-    // Close button
-    const closeText = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 30, t('ranks.back'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: fs(12),
-      color: '#00aaff'
+    // Bonus tooltip — panel to the right explaining what bonus is and how it works
+    const tipW = 190;
+    const tipX = overlayLeft + overlayW + 8;
+    const tipY = overlayTop + 20;
+    if (tipX + tipW < w - 4) {
+      const tPad = 14;
+
+      // Build content first, then measure total height
+      const titleH = 24;
+      const descH = 78;
+      const divH = 12;
+      const rankLineH = 20;
+      const tipH = tPad + titleH + descH + divH + ranks.length * rankLineH + tPad;
+
+      const tipBg = this.add.rectangle(tipX + tipW / 2, tipY + tipH / 2, tipW, tipH, 0x0c0c1a, 0.96);
+      tipBg.setStrokeStyle(1, 0x00ff88, 0.6);
+      container.add(tipBg);
+
+      let tY = tipY + tPad;
+
+      // Title
+      container.add(this.add.text(tipX + tipW / 2, tY, '⚡ BONUS', {
+        fontFamily: 'monospace', fontSize: fs(13), color: '#00ff88', fontStyle: 'bold'
+      }).setOrigin(0.5));
+      tY += titleH;
+
+      // Description
+      container.add(this.add.text(tipX + tPad, tY, 'Higher rank = higher\nchance of getting a\nweapon drop in the\nfirst waves of\nthe game.', {
+        fontFamily: 'monospace', fontSize: fs(8), color: '#aaaaaa', lineSpacing: 4
+      }));
+      tY += descH;
+
+      // Divider
+      container.add(this.add.rectangle(tipX + tipW / 2, tY, tipW - tPad * 2, 1, 0x00ff88, 0.2));
+      tY += divH;
+
+      // Rank lines
+      ranks.forEach(r => {
+        const pct = getRankBonusPercent(r.id);
+        const val = r.bonus > 0 ? `+${pct}` : '  -';
+        container.add(this.add.text(tipX + tPad, tY, r.name, {
+          fontFamily: 'monospace', fontSize: fs(10), color: getRankColorCSS(r.id)
+        }));
+        container.add(this.add.text(tipX + tipW - tPad, tY, val, {
+          fontFamily: 'monospace', fontSize: fs(10), color: r.bonus > 0 ? '#00ff88' : '#333333', fontStyle: 'bold'
+        }).setOrigin(1, 0));
+        tY += rankLineH;
+      });
+    }
+
+    // Close
+    const footerY = overlayTop + overlayH - 24;
+    const closeBtn = this.add.text(cx, footerY, t('ranks.back'), {
+      fontFamily: 'monospace', fontSize: fs(12), color: '#00ffff'
     }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    container.add(closeText);
+    container.add(closeBtn);
 
     const close = () => {
       container.destroy();
-      this.input.keyboard.off('keydown', close);
+      this.input.keyboard.off('keydown', onKey);
+    };
+    const onKey = (ev) => {
+      const k = ev.key?.toLowerCase?.() || ev.code;
+      if (k === 'escape' || k === 'backspace' || k === 'q' || k === 'enter' || k === ' ') close();
     };
 
-    closeText.on('pointerdown', close);
+    closeBtn.on('pointerdown', close);
     backdrop.on('pointerdown', close);
-    overlay.on('pointerdown', close);
-    this.input.keyboard.once('keydown', close);
+    this.input.keyboard.on('keydown', onKey);
   }
 
   /**
@@ -2782,10 +3223,22 @@ export default class TitleScene extends Phaser.Scene {
     if (walletConnected) {
       try {
         const stats = await weaponClient.getPlayerStats(await stellarWallet.getAddress());
-        playerRank = stats.rank !== undefined ? stats.rank : stats.tier;
         playerGamesPlayed = stats.gamesPlayed || 0;
+        const apiRank = stats.rank !== undefined ? stats.rank : stats.tier;
+        // Solo usar datos de ESTA wallet (API/contrato). Cuenta nueva = 0 partidas/0 score = UNRANKED.
+        const scoreFromApi = stats.bestScore != null ? Number(stats.bestScore) : 0;
+        const waveFromApi = stats.bestWave != null ? Number(stats.bestWave) : 0;
+        const hasNeverPlayedRanked = (playerGamesPlayed === 0 && scoreFromApi === 0) || (scoreFromApi === 0 && waveFromApi === 0);
+        if (hasNeverPlayedRanked) {
+          playerRank = 0;
+        } else if (apiRank != null && apiRank > 0) {
+          playerRank = apiRank;
+        } else {
+          playerRank = getRankIdFromScore(scoreFromApi, waveFromApi >= 3 ? waveFromApi : 99);
+        }
       } catch (e) {
         console.warn('[ZKPopup] Failed to get player rank:', e);
+        playerRank = 0;
       }
     }
     if (proverConfigured) {
@@ -2830,28 +3283,17 @@ export default class TitleScene extends Phaser.Scene {
     container.add(rankTitle);
 
     if (!isUnranked(playerRank)) {
-      // Show rank info with proper vertical alignment
+      // Show rank info with emoji + name (clean, no sprite)
       const rankData = getRankById(playerRank);
-      
-      // Rank name - aligned with left column
       const rankNameY = infoSectionTop + 24;
-      const rankNameText = this.add.text(col2Left, rankNameY, rankData.name, {
+      const emojiSuffix = getRankEmoji(playerRank) ? ' ' + getRankEmoji(playerRank) : '';
+      const rankNameText = this.add.text(col2Left, rankNameY, rankData.name + emojiSuffix, {
         fontFamily: 'monospace',
         fontSize: fs(16),
         color: getRankColorCSS(playerRank),
         fontStyle: 'bold'
       }).setOrigin(0, 0);
       container.add(rankNameText);
-      
-      // Rank icon positioned to the far right of the column for clarity
-      if (this.textures.exists(rankData.sprite)) {
-        const iconSize = 46;
-        const maxIconX = col2Right - iconSize / 2;
-        const rankIconX = maxIconX;
-        const rankIcon = this.add.image(rankIconX, rankNameY + iconSize / 2 - 2, rankData.sprite);
-        rankIcon.setDisplaySize(iconSize, iconSize);
-        container.add(rankIcon);
-      }
     } else {
       // Unranked
       const unrankedText = this.add.text(col2Left, infoSectionTop + 24, t('ranks.unranked'), {
@@ -2888,6 +3330,38 @@ export default class TitleScene extends Phaser.Scene {
     }).setOrigin(0, 0);
     container.add(weaponHintText);
     descCursorY += weaponHintText.height + 10;
+
+    // === MINIMUM SCORE WARNING (red pixel-art style alert) ===
+    const warnPadV = 8;
+    const warnPadH = 12;
+    const warnMaxW = descMaxWidth - warnPadH * 2;
+    // Warning title
+    const warnTitle = this.add.text(gridPaddingLeft + warnPadH, descCursorY + warnPadV, t('zk_popup.min_score_warning'), {
+      fontFamily: 'monospace',
+      fontSize: fs(13),
+      color: '#ff0000',
+      fontStyle: 'bold'
+    }).setOrigin(0, 0);
+    // Warning detail
+    const warnDetail = this.add.text(gridPaddingLeft + warnPadH, descCursorY + warnPadV + 22, t('zk_popup.min_score_detail'), {
+      fontFamily: 'monospace',
+      fontSize: fs(9),
+      color: '#ff4444',
+      wordWrap: { width: warnMaxW }
+    }).setOrigin(0, 0);
+    const warnBoxH = warnPadV * 2 + 22 + warnDetail.height + 4;
+    // Red border box behind text
+    const warnBorder = this.add.rectangle(
+      gridPaddingLeft + descMaxWidth / 2,
+      descCursorY + warnBoxH / 2,
+      descMaxWidth, warnBoxH,
+      0x330000, 0.6
+    );
+    warnBorder.setStrokeStyle(2, 0xff0000, 1);
+    container.add(warnBorder);
+    container.add(warnTitle);
+    container.add(warnDetail);
+    descCursorY += warnBoxH + 10;
 
     // === STATUS CHECKS (horizontal) ===
     const statusItems = [
@@ -3414,118 +3888,109 @@ export default class TitleScene extends Phaser.Scene {
 
   showNameInput(isFirstTime = false, callback = null) {
     this.nameInputOpen = true;
-    // Pre-fill: from backend username if logged in, else from local settings
     let currentName = (window.VIBE_SETTINGS && window.VIBE_SETTINGS.playerName) ? window.VIBE_SETTINGS.playerName : '';
     const maxLength = 20;
 
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
-    const boxW = 500;
-    const boxH = 280;
+    const w = this.scale.width || 800;
+    const h = this.scale.height || 600;
+    const cx = w / 2;
+    const cy = h / 2;
 
-    // Create overlay: fill rect + Graphics border (avoids Phaser Rectangle stroke clipping at corners)
-    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x000000, 0.95);
-    overlay.setDepth(1000).setInteractive({ useHandCursor: false });
-    const borderG = this.add.graphics();
-    borderG.lineStyle(2, 0x00ffff);
-    borderG.strokeRect(cx - boxW / 2, cy - boxH / 2, boxW, boxH);
-    borderG.setDepth(1000);
+    const container = this.add.container(0, 0);
+    container.setDepth(3000);
 
-    // All positions relative to center for correct layout on any resolution
-    const top = cy - boxH / 2;
+    // Full-screen backdrop blocks everything behind
+    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 0.92);
+    backdrop.setInteractive({ useHandCursor: false });
+    container.add(backdrop);
+
+    // Modal box
+    const boxW = Math.min(460, w - 40);
+    const boxH = 240;
+    const boxTop = cy - boxH / 2;
+
+    const box = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a18, 1);
+    box.setStrokeStyle(2, 0x00ffff);
+    container.add(box);
 
     // Title
-    const title = this.add.text(cx, top + 50, isFirstTime ? t('name_input.enter_name') : t('name_input.change_name'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '24px',
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1001);
+    const titleStr = isFirstTime ? t('name_input.enter_name') : t('name_input.change_name');
+    const title = this.add.text(cx, boxTop + 32, titleStr, {
+      fontFamily: 'monospace', fontSize: '22px', color: '#00ffff', fontStyle: 'bold'
+    }).setOrigin(0.5);
+    container.add(title);
 
-    // Subtitle for first time
-    const subtitle = isFirstTime ? this.add.text(cx, top + 85, t('name_input.welcome'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '14px',
-      color: '#888888'
-    }).setOrigin(0.5).setDepth(1001) : null;
+    // Subtitle (first time only)
+    if (isFirstTime) {
+      const subtitle = this.add.text(cx, boxTop + 60, t('name_input.welcome'), {
+        fontFamily: 'monospace', fontSize: '12px', color: '#666666'
+      }).setOrigin(0.5);
+      container.add(subtitle);
+    }
 
-    // Input display box
-    const inputBox = this.add.rectangle(cx, top + 150, 400, 50, 0x111122, 1);
-    inputBox.setStrokeStyle(2, 0x00ffff).setDepth(1001);
+    // Input field
+    const inputY = boxTop + (isFirstTime ? 100 : 90);
+    const inputW = boxW - 60;
+    const inputBg = this.add.rectangle(cx, inputY, inputW, 44, 0x111128, 1);
+    inputBg.setStrokeStyle(2, 0x00ffff);
+    container.add(inputBg);
 
-    // Name text (inside input area)
-    const nameText = this.add.text(cx, top + 150, '_', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
-      color: '#ffffff'
-    }).setOrigin(0.5).setDepth(1002);
+    const nameText = this.add.text(cx, inputY, '_', {
+      fontFamily: 'monospace', fontSize: '24px', color: '#ffffff'
+    }).setOrigin(0.5);
+    container.add(nameText);
+
+    // Counter
+    const counterText = this.add.text(cx + inputW / 2 - 4, inputY + 24, `0/${maxLength}`, {
+      fontFamily: 'monospace', fontSize: '10px', color: '#444444'
+    }).setOrigin(1, 0);
+    container.add(counterText);
 
     // Cursor blink
     let cursorVisible = true;
     const cursorBlink = this.time.addEvent({
       delay: 500,
-      callback: () => {
-        cursorVisible = !cursorVisible;
-        updateNameDisplay();
-      },
+      callback: () => { cursorVisible = !cursorVisible; updateNameDisplay(); },
       loop: true
     });
 
-    // Character counter: inside overlay, bottom-right of input box (relative to center)
-    const counterText = this.add.text(cx + 195, top + 175, `0/${maxLength}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
-      color: '#666666'
-    }).setOrigin(1, 0).setDepth(1002);
-
     // Help text
-    const helpText = this.add.text(cx, top + 220, t('prompt.name_help'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '14px',
-      color: '#ffffff'
-    }).setOrigin(0.5).setDepth(1001);
+    const helpY = inputY + 40;
+    const helpText = this.add.text(cx, helpY, t('prompt.name_help'), {
+      fontFamily: 'monospace', fontSize: '11px', color: '#888888'
+    }).setOrigin(0.5);
+    container.add(helpText);
 
-    const skipText = !isFirstTime ? this.add.text(cx, top + 250, t('prompt.esc_cancel'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '13px',
-      color: '#ffffff'
-    }).setOrigin(0.5).setDepth(1001) : null;
+    if (!isFirstTime) {
+      const escText = this.add.text(cx, helpY + 18, t('prompt.esc_cancel'), {
+        fontFamily: 'monospace', fontSize: '10px', color: '#555555'
+      }).setOrigin(0.5);
+      container.add(escText);
+    }
 
     const updateNameDisplay = () => {
       const cursor = cursorVisible ? '_' : ' ';
       nameText.setText(currentName + cursor);
       counterText.setText(`${currentName.length}/${maxLength}`);
-      counterText.setColor(currentName.length >= maxLength ? '#ff6666' : '#666666');
+      counterText.setColor(currentName.length >= maxLength ? '#ff6666' : '#444444');
     };
 
-    // Keyboard input handler
     const keyHandler = (event) => {
       const key = event.key;
-
-      // Handle backspace
       if (key === 'Backspace') {
         currentName = currentName.slice(0, -1);
         updateNameDisplay();
         return;
       }
-
-      // Handle enter - confirm
       if (key === 'Enter') {
-        if (currentName.trim().length > 0) {
-          confirmName();
-        }
+        if (currentName.trim().length > 0) confirmName();
         return;
       }
-
-      // Handle escape - cancel (only if not first time)
       if (key === 'Escape' && !isFirstTime) {
         closeInput();
         return;
       }
-
-      // Add character if valid and under limit
       if (key.length === 1 && currentName.length < maxLength) {
-        // Allow alphanumeric, spaces, and some special chars
         if (/^[a-zA-Z0-9 _\-.]$/.test(key)) {
           currentName += key;
           updateNameDisplay();
@@ -3536,7 +4001,6 @@ export default class TitleScene extends Phaser.Scene {
     const confirmName = () => {
       const name = currentName.trim();
       window.VIBE_SETTINGS.setPlayerName(name);
-      // If user is logged in (Stellar wallet), update username in backend so it persists and shows everywhere
       if (authApi.getStoredToken()) {
         authApi.updateMeUsername(name.slice(0, 64)).then(() => {
           if (this.updateWalletButton) this.updateWalletButton();
@@ -3544,33 +4008,19 @@ export default class TitleScene extends Phaser.Scene {
       }
       closeInput();
       if (callback) callback(name);
-
-      // Show welcome message
-      if (isFirstTime && this.idlePlayer) {
-        this.sayQuote(`Welcome,\n${name}!`);
-      }
+      if (isFirstTime && this.idlePlayer) this.sayQuote(`Welcome,\n${name}!`);
     };
 
     const closeInput = () => {
       window.removeEventListener('keydown', keyHandler);
       cursorBlink.destroy();
-      overlay.destroy();
-      borderG.destroy();
-      title.destroy();
-      if (subtitle) subtitle.destroy();
-      inputBox.destroy();
-      nameText.destroy();
-      counterText.destroy();
-      helpText.destroy();
-      if (skipText) skipText.destroy();
+      container.destroy();
       this.nameInputOpen = false;
     };
 
-    // Add keyboard listener
     window.addEventListener('keydown', keyHandler);
-
     updateNameDisplay();
-    // When opened from Settings, pre-fill with backend username if logged in
+
     if (!isFirstTime && authApi.getStoredToken()) {
       authApi.getMe().then(me => {
         if (me && me.username) {
@@ -3596,39 +4046,43 @@ export default class TitleScene extends Phaser.Scene {
     const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
     backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
 
-    // Recuadro centrado (como Settings)
-    const boxW = 600;
-    const boxH = 540;
+    const boxW = Math.min(800, w - 32);
+    const boxH = Math.min(720, h - 32);
     const overlayLeft = cx - boxW / 2;
     const overlayTop = cy - boxH / 2;
     const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
     overlay.setStrokeStyle(2, 0x00ffff);
     overlay.setDepth(1001).setInteractive({ useHandCursor: false });
 
-    // Título dentro del recuadro
-    const titleY = overlayTop + 40;
+    const padding = 32;
+    const titleY = overlayTop + 44;
     const title = this.add.text(cx, titleY, t('upgrades.title'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${28 * uiScale}px`,
+      fontSize: `${22 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
+    }).setOrigin(0.5, 0).setDepth(1002);
 
-    // Currency dentro del recuadro
-    const currencyY = overlayTop + 72;
-    const currencyText = this.add.text(cx, currencyY, `${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`, {
+    const currencyText = this.add.text(overlayLeft + boxW - padding, titleY + 2, `${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${16 * uiScale}px`,
+      fontSize: `${13 * uiScale}px`,
       color: '#ffd700'
-    }).setOrigin(0.5).setDepth(1002);
+    }).setOrigin(1, 0).setDepth(1002);
 
-    // Upgrade list dentro del recuadro (márgenes claros)
     const upgradeKeys = Object.keys(window.VIBE_UPGRADES.upgrades);
     const upgradeTexts = [];
-    const listX = overlayLeft + 36;
-    const startY = overlayTop + 110;
-    const spacing = 40 * uiScale;
+    const listX = overlayLeft + padding;
+    const listMaxWidth = boxW - padding * 2 - 16;
+    const startY = overlayTop + 125;
+    const spacing = 54 * uiScale;
     const namePadLen = 14;
+    const BAR_LENGTH = 28;
+    const instructionsY = overlayTop + boxH - 42;
+
+    const buildLevelBar = (level, maxLevel) => {
+      const filled = maxLevel <= 0 ? 0 : Math.round((level / maxLevel) * BAR_LENGTH);
+      return '█'.repeat(filled) + '░'.repeat(BAR_LENGTH - filled);
+    };
 
     upgradeKeys.forEach((key, index) => {
       const upgrade = window.VIBE_UPGRADES.upgrades[key];
@@ -3636,7 +4090,7 @@ export default class TitleScene extends Phaser.Scene {
       const cost = window.VIBE_UPGRADES.getCost(key);
       const maxed = level >= upgrade.maxLevel;
 
-      const levelBar = '█'.repeat(level) + '░'.repeat(upgrade.maxLevel - level);
+      const levelBar = buildLevelBar(level, upgrade.maxLevel);
       const costStr = maxed ? t('upgrades.maxed') : `${cost} ${t('upgrades.bits')}`;
       const canAfford = window.VIBE_UPGRADES.currency >= cost && !maxed;
       const name = t('upgrade_names.' + key);
@@ -3646,10 +4100,11 @@ export default class TitleScene extends Phaser.Scene {
       const text = this.add.text(listX, startY + index * spacing,
         `${paddedName} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`, {
         fontFamily: '"Consolas", "Monaco", monospace',
-        fontSize: `${12 * uiScale}px`,
+        fontSize: `${11 * uiScale}px`,
         color: index === 0 ? '#00ffff' : '#888888',
         align: 'left',
-        lineSpacing: 2
+        lineSpacing: 3,
+        wordWrap: { width: listMaxWidth }
       }).setOrigin(0, 0.5).setDepth(1002);
 
       if (!canAfford && !maxed) {
@@ -3659,21 +4114,19 @@ export default class TitleScene extends Phaser.Scene {
       upgradeTexts.push({ text, key, canAfford, maxed });
     });
 
-    // Selector (dentro del recuadro)
-    const selector = this.add.text(listX - 20, startY, '>', {
+    const selector = this.add.text(listX - 16, startY, '>', {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${18 * uiScale}px`,
+      fontSize: `${16 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
 
-    // Instructions dentro del recuadro (footer)
-    const footerTop = overlayTop + boxH - 52;
-    const instructions = this.add.text(cx, footerTop, t('prompt.up_down_purchase'), {
+    const instructions = this.add.text(cx, instructionsY, t('prompt.up_down_purchase'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#666666'
-    }).setOrigin(0.5).setDepth(1002);
+      fontSize: `${10 * uiScale}px`,
+      color: '#666666',
+      wordWrap: { width: boxW - padding * 2 }
+    }).setOrigin(0.5, 0.5).setDepth(1002);
 
     // Update visuals function
     const updateVisuals = () => {
@@ -3685,7 +4138,7 @@ export default class TitleScene extends Phaser.Scene {
         item.canAfford = window.VIBE_UPGRADES.currency >= cost && !maxed;
         item.maxed = maxed;
 
-        const levelBar = '█'.repeat(level) + '░'.repeat(upgrade.maxLevel - level);
+        const levelBar = buildLevelBar(level, upgrade.maxLevel);
         const costStr = maxed ? t('upgrades.maxed') : `${cost} ${t('upgrades.bits')}`;
         const name = t('upgrade_names.' + item.key);
         const desc = t('upgrade_descs.' + item.key);
@@ -3764,7 +4217,8 @@ export default class TitleScene extends Phaser.Scene {
   showWeapons() {
     this.weaponMenuOpen = true;
     this.weaponSelectedIndex = 0;
-    this.weaponTab = 'legendary';
+    this.weaponTab = 'web3';
+    this.weaponScrollOffset = 0;
 
     const uiScale = getUIScale(this);
     const w = this.scale.width || 800;
@@ -3772,10 +4226,20 @@ export default class TitleScene extends Phaser.Scene {
     const cx = w / 2;
     const cy = h / 2;
 
-    const overlayW = Math.min(750, w - 40);
-    const overlayH = Math.min(550, h - 40);
+    const overlayW = Math.min(820, w - 48);
+    const overlayH = Math.min(620, h - 48);
     const overlayLeft = cx - overlayW / 2;
     const overlayTop = cy - overlayH / 2;
+    const headerTitleY = overlayTop + 28;
+    const tabRowY = overlayTop + 78;
+    const contentTop = overlayTop + 108;
+    const contentHeight = overlayH - 108 - 96;
+    const footerY = overlayTop + overlayH - 64;
+    const instructionsY = overlayTop + overlayH - 22;
+    const iconColCenter = overlayLeft + 54;
+    const textColLeft = overlayLeft + 92;
+    const dropColCenter = overlayLeft + overlayW - 58;
+    const textColWidth = dropColCenter - textColLeft - 24;
 
     const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
     backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
@@ -3784,24 +4248,27 @@ export default class TitleScene extends Phaser.Scene {
     overlay.setStrokeStyle(2, 0x00ffff);
     overlay.setDepth(1001);
 
-    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 36, t('weapons.gallery'), {
+    const title = this.add.text(overlayLeft + overlayW / 2, headerTitleY, t('weapons.gallery'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${24 * uiScale}px`,
+      fontSize: `${22 * uiScale}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1002);
 
     const tabs = ['LEGENDARY', 'MELEE', 'RANGED', 'WEB3'];
     const tabTexts = [];
-    const tabStartX = overlayLeft + overlayW * 0.12;
-    const tabSpacing = overlayW * 0.22;
+    const tabSpacing = (overlayW - 80) / 4;
+    const tabFirstCenter = overlayLeft + 40 + tabSpacing / 2;
 
+    const defaultTabIndex = 3;
     tabs.forEach((tab, index) => {
-      const tabText = this.add.text(tabStartX + index * tabSpacing, overlayTop + 68, tab === 'WEB3' ? 'WEB3' : t('weapons.' + tab), {
+      const label = tab === 'WEB3' ? t('weapons.ZK_BUFF') : t('weapons.' + tab);
+      const tabX = tabFirstCenter + index * tabSpacing;
+      const tabText = this.add.text(tabX, tabRowY, label, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${13 * uiScale}px`,
-        color: index === 0 ? '#ffd700' : '#666666',
-        fontStyle: index === 0 ? 'bold' : 'normal'
+        fontSize: `${11 * uiScale}px`,
+        color: index === defaultTabIndex ? '#ffd700' : '#666666',
+        fontStyle: index === defaultTabIndex ? 'bold' : 'normal'
       }).setOrigin(0.5).setDepth(1002);
       tabText.setInteractive({ useHandCursor: true });
       tabTexts.push(tabText);
@@ -3841,70 +4308,79 @@ export default class TitleScene extends Phaser.Scene {
       blizzard: { name: 'BLIZZARD', desc: 'Evolved FREEZE + SPREAD. Area slow.', color: '#aaddff', rare: true }
     };
 
-    const colLeft = overlayLeft + 24;
-    const colName = overlayLeft + 100;
-    const colRight = overlayLeft + overlayW - 70;
-
     const contentDepth = 1002;
     const renderLegendary = () => {
       clearContent();
       if (!legendaries || !legendaries.weapons) return;
-      const startY = overlayTop + 98;
-      const spacing = 76;
+      const rowHeight = 88;
+      const startY = contentTop;
       const legendaryKeys = Object.keys(legendaries.weapons);
+      const total = legendaryKeys.length;
+      const maxVisible = Math.max(1, Math.floor(contentHeight / rowHeight));
+      const scrollOffset = Math.min(this.weaponScrollOffset, Math.max(0, total - maxVisible));
+      this.weaponScrollOffset = scrollOffset;
+      this.weaponTotalRows = total;
+      this.weaponMaxVisible = maxVisible;
 
-      legendaryKeys.forEach((key, index) => {
+      const from = scrollOffset;
+      const to = Math.min(scrollOffset + maxVisible, total);
+      for (let idx = from; idx < to; idx++) {
+        const key = legendaryKeys[idx];
         const weapon = legendaries.weapons[key];
         const unlocked = legendaries.hasUnlocked(key);
         const equipped = legendaries.equipped === key;
+        const rowTop = startY + (idx - from) * rowHeight;
+        const boxY = rowTop + rowHeight / 2;
 
-        const boxX = colLeft + 36;
-        const boxY = startY + index * spacing;
-        const box = this.add.rectangle(boxX, boxY, 52, 52, unlocked ? 0x222222 : 0x111111);
+        const box = this.add.rectangle(iconColCenter, boxY, 56, 56, unlocked ? 0x1a1a22 : 0x121218);
         box.setStrokeStyle(2, unlocked ? 0xffd700 : 0x333333).setDepth(contentDepth);
         contentElements.push(box);
 
-        if (unlocked && this.textures.exists(`legendary-${key}`)) {
-          const sprite = this.add.sprite(boxX, boxY, `legendary-${key}`);
+        if (this.textures.exists(`legendary-${key}`)) {
+          const sprite = this.add.sprite(iconColCenter, boxY, `legendary-${key}`);
           sprite.setScale(1.0).setDepth(contentDepth);
+          if (!unlocked) {
+            sprite.setAlpha(0.5);
+            sprite.setTint(0x666666);
+          }
           contentElements.push(sprite);
         } else {
-          const lock = this.add.text(boxX, boxY, '?', {
+          const lock = this.add.text(iconColCenter, boxY, '🔒', {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '24px',
-            color: '#333333'
+            fontSize: '20px',
+            color: '#555555'
           }).setOrigin(0.5).setDepth(contentDepth);
           contentElements.push(lock);
         }
 
-        const nameColor = equipped ? '#ffd700' : (unlocked ? '#ffffff' : '#444444');
-        const name = this.add.text(colName, boxY - 18, unlocked ? weapon.name : '???', {
+        const nameColor = equipped ? '#ffd700' : (unlocked ? '#ffffff' : '#888888');
+        const name = this.add.text(textColLeft, rowTop + 10, weapon.name || '???', {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '14px',
           color: nameColor,
           fontStyle: equipped ? 'bold' : 'normal',
-          wordWrap: { width: colRight - colName - 90 }
+          wordWrap: { width: textColWidth }
         }).setDepth(contentDepth);
         contentElements.push(name);
 
-        const desc = this.add.text(colName, boxY, unlocked ? weapon.desc : t('weapons.locked'), {
+        const desc = this.add.text(textColLeft, rowTop + 30, unlocked ? weapon.desc : t('weapons.locked'), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '10px',
-          color: unlocked ? '#888888' : '#444444',
-          wordWrap: { width: colRight - colName - 90 }
+          fontSize: '11px',
+          color: unlocked ? '#aaaaaa' : '#666666',
+          wordWrap: { width: textColWidth }
         }).setDepth(contentDepth);
         contentElements.push(desc);
 
         if (unlocked) {
-          const stats = this.add.text(colName, boxY + 16, `DMG: ${weapon.damage} | RADIUS: ${weapon.radius} | COUNT: ${weapon.orbitalCount}`, {
+          const stats = this.add.text(textColLeft, rowTop + 50, `DMG: ${weapon.damage} | RADIUS: ${weapon.radius} | COUNT: ${weapon.orbitalCount}`, {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '9px',
+            fontSize: '10px',
             color: '#666666',
-            wordWrap: { width: colRight - colName - 90 }
+            wordWrap: { width: textColWidth }
           }).setDepth(contentDepth);
           contentElements.push(stats);
 
-          const equipBtn = this.add.text(colRight, boxY, equipped ? t('weapons.equipped') : t('weapons.equip'), {
+          const equipBtn = this.add.text(dropColCenter, boxY, equipped ? t('weapons.equipped') : t('weapons.equip'), {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '11px',
             color: equipped ? '#ffd700' : '#00ffff',
@@ -3921,16 +4397,24 @@ export default class TitleScene extends Phaser.Scene {
           });
           contentElements.push(equipBtn);
         } else {
-          const dropRate = this.add.text(colRight, boxY, `${(weapon.dropRate * 100).toFixed(2)}${t('weapons.drop')}`, {
+          const dropRate = this.add.text(dropColCenter, boxY, `${(weapon.dropRate * 100).toFixed(2)}${t('weapons.drop')}`, {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '10px',
+            fontSize: '11px',
             color: '#ff6666'
           }).setOrigin(0.5).setDepth(contentDepth);
           contentElements.push(dropRate);
         }
-      });
+      }
 
-      const info = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 42, t('weapons.legendary_info'), {
+      if (total > maxVisible) {
+        const scrollHint = this.add.text(overlayLeft + overlayW - 60, footerY, t('weapons.scroll_more'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${10 * uiScale}px`,
+          color: '#888888'
+        }).setOrigin(0.5).setDepth(contentDepth);
+        contentElements.push(scrollHint);
+      }
+      const info = this.add.text(overlayLeft + overlayW / 2, footerY, t('weapons.legendary_info'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${11 * uiScale}px`,
         color: '#ffd700'
@@ -3941,50 +4425,67 @@ export default class TitleScene extends Phaser.Scene {
     const renderMelee = () => {
       clearContent();
       if (!melee) return;
-      const startY = overlayTop + 98;
-      const spacing = 64;
+      const rowHeight = 88;
+      const startY = contentTop;
       const meleeKeys = Object.keys(melee);
+      const total = meleeKeys.length;
+      const maxVisible = Math.max(1, Math.floor(contentHeight / rowHeight));
+      const scrollOffset = Math.min(this.weaponScrollOffset, Math.max(0, total - maxVisible));
+      this.weaponScrollOffset = scrollOffset;
+      this.weaponTotalRows = total;
+      this.weaponMaxVisible = maxVisible;
 
-      meleeKeys.forEach((key, index) => {
+      const from = scrollOffset;
+      const to = Math.min(scrollOffset + maxVisible, total);
+      for (let idx = from; idx < to; idx++) {
+        const key = meleeKeys[idx];
         const weapon = melee[key];
-        const boxX = colLeft + 36;
-        const boxY = startY + index * spacing;
+        const rowTop = startY + (idx - from) * rowHeight;
+        const boxY = rowTop + rowHeight / 2;
 
-        const box = this.add.rectangle(boxX, boxY, 52, 52, 0x222222);
+        const box = this.add.rectangle(iconColCenter, boxY, 56, 56, 0x1a1a22);
         box.setStrokeStyle(2, weapon.color).setDepth(contentDepth);
         contentElements.push(box);
 
         if (this.textures.exists(`melee-${key}`)) {
-          const sprite = this.add.sprite(boxX, boxY, `melee-${key}`);
+          const sprite = this.add.sprite(iconColCenter, boxY, `melee-${key}`);
           sprite.setScale(1.0).setDepth(contentDepth);
           contentElements.push(sprite);
         }
 
-        const name = this.add.text(colName, boxY - 14, weapon.name, {
+        const name = this.add.text(textColLeft, rowTop + 14, weapon.name, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '14px',
           color: '#ffffff',
-          wordWrap: { width: colRight - colName - 100 }
+          wordWrap: { width: textColWidth }
         }).setDepth(contentDepth);
         contentElements.push(name);
 
-        const stats = this.add.text(colName, boxY + 4, `DMG: ${weapon.damage} | RATE: ${weapon.attackRate} | RANGE: ${weapon.range}`, {
+        const stats = this.add.text(textColLeft, rowTop + 36, `DMG: ${weapon.damage} | RATE: ${weapon.attackRate} | RANGE: ${weapon.range}`, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '10px',
+          fontSize: '11px',
           color: '#888888',
-          wordWrap: { width: colRight - colName - 100 }
+          wordWrap: { width: textColWidth }
         }).setDepth(contentDepth);
         contentElements.push(stats);
 
-        const typeText = this.add.text(colRight, boxY, weapon.type.toUpperCase(), {
+        const typeText = this.add.text(dropColCenter, boxY, weapon.type.toUpperCase(), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '11px',
           color: Phaser.Display.Color.IntegerToColor(weapon.color).rgba
         }).setOrigin(0.5).setDepth(contentDepth);
         contentElements.push(typeText);
-      });
+      }
 
-      const info = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 42, t('weapons.melee_info'), {
+      if (total > maxVisible) {
+        const scrollHint = this.add.text(overlayLeft + overlayW - 60, footerY, t('weapons.scroll_more'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${10 * uiScale}px`,
+          color: '#888888'
+        }).setOrigin(0.5).setDepth(contentDepth);
+        contentElements.push(scrollHint);
+      }
+      const info = this.add.text(overlayLeft + overlayW / 2, footerY, t('weapons.melee_info'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${11 * uiScale}px`,
         color: '#00ffff'
@@ -3992,78 +4493,101 @@ export default class TitleScene extends Phaser.Scene {
       contentElements.push(info);
     };
 
+    // Ranged: single ordered list with icon, name, desc, drop. Scroll when many.
+    const RANGED_ORDER = [
+      'basic', 'spread', 'pierce', 'rapid', 'orbital', 'homing', 'bounce', 'aoe', 'freeze',
+      'laserbeam', 'plasmaorb', 'chainlightning', 'bullethell', 'ringoffire', 'seekingmissile', 'chaosbounce', 'deathaura', 'icelance', 'blizzard', 'swarm',
+      'rmrf', 'sudo', 'forkbomb'
+    ];
+    const DROP_LABELS = {
+      basic: 'drop_starter',
+      spread: 'drop_common', pierce: 'drop_common', rapid: 'drop_common', homing: 'drop_common', bounce: 'drop_common',
+      orbital: 'drop_uncommon', aoe: 'drop_uncommon', freeze: 'drop_uncommon',
+      laserbeam: 'drop_evolved', plasmaorb: 'drop_evolved', chainlightning: 'drop_evolved', bullethell: 'drop_evolved', ringoffire: 'drop_evolved',
+      seekingmissile: 'drop_evolved', chaosbounce: 'drop_evolved', deathaura: 'drop_evolved', icelance: 'drop_evolved', blizzard: 'drop_evolved', swarm: 'drop_evolved',
+      rmrf: 'drop_boss', sudo: 'drop_boss', forkbomb: 'drop_boss'
+    };
+    const evolvedWeaponsSwarm = { ...evolvedWeapons, swarm: { name: 'SWARM', desc: 'Evolved HOMING + RAPID. Swarm of seekers.', color: '#88ff88', rare: true } };
+
     const renderRanged = () => {
       clearContent();
-
-      const baseTitle = this.add.text(overlayLeft + 24, overlayTop + 98, 'BASE WEAPONS', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${13 * uiScale}px`,
-        color: '#00ffff',
-        fontStyle: 'bold'
-      }).setDepth(contentDepth);
-      contentElements.push(baseTitle);
-
-      let y = overlayTop + 122;
-      const rangedKeys = Object.keys(rangedWeapons);
-      rangedKeys.forEach((key, index) => {
-        const weapon = rangedWeapons[key];
-        const col = index % 2;
-        const row = Math.floor(index / 2);
-        const x = overlayLeft + 24 + col * (overlayW / 2 - 20);
-        const itemY = y + row * 32;
-
-        const text = this.add.text(x, itemY, weapon.name, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${11 * uiScale}px`,
-          color: weapon.color,
-          wordWrap: { width: 200 }
-        }).setDepth(contentDepth);
-        contentElements.push(text);
-
-        const desc = this.add.text(x, itemY + 14, weapon.desc.substring(0, 35), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '9px',
-          color: '#666666',
-          wordWrap: { width: 200 }
-        }).setDepth(contentDepth);
-        contentElements.push(desc);
+      const rowHeight = 56;
+      const startY = contentTop;
+      const maxVisible = Math.max(1, Math.floor(contentHeight / rowHeight));
+      const list = [];
+      RANGED_ORDER.forEach(key => {
+        const fromBase = rangedWeapons[key];
+        const fromEvolved = evolvedWeaponsSwarm[key];
+        const rareNames = { rmrf: 'RM-RF', sudo: 'SUDO', forkbomb: 'FORK BOMB' };
+        if (fromBase) {
+          list.push({ key, name: fromBase.name, desc: fromBase.desc, color: fromBase.color, dropKey: DROP_LABELS[key] || 'drop_common', textureKey: `weapon-${key}` });
+        } else if (fromEvolved) {
+          list.push({ key, name: fromEvolved.name, desc: fromEvolved.desc, color: fromEvolved.color, dropKey: 'drop_evolved', textureKey: `weapon-${key}` });
+        } else if (rareNames[key]) {
+          const color = key === 'rmrf' ? '#ff3300' : key === 'sudo' ? '#ffd700' : '#ff00ff';
+          const desc = key === 'rmrf' ? 'Clears all enemies.' : key === 'sudo' ? 'God mode damage.' : 'Multi-projectile burst.';
+          list.push({ key, name: rareNames[key], desc, color, dropKey: 'drop_boss', textureKey: `weapon-${key}` });
+        }
       });
 
-      const evolvedTitle = this.add.text(overlayLeft + 24, overlayTop + 298, 'EVOLVED (Combine 2!)', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${12 * uiScale}px`,
-        color: '#ff00ff',
-        fontStyle: 'bold'
-      }).setDepth(contentDepth);
-      contentElements.push(evolvedTitle);
+      const total = list.length;
+      const scrollOffset = Math.min(this.weaponScrollOffset, Math.max(0, total - maxVisible));
+      this.weaponScrollOffset = scrollOffset;
+      this.weaponTotalRows = total;
+      this.weaponMaxVisible = maxVisible;
 
-      y = overlayTop + 320;
-      const evolvedKeys = Object.keys(evolvedWeapons);
-      evolvedKeys.forEach((key, index) => {
-        const weapon = evolvedWeapons[key];
-        const col = index % 2;
-        const row = Math.floor(index / 2);
-        const x = overlayLeft + 24 + col * (overlayW / 2 - 20);
-        const itemY = y + row * 28;
+      const from = scrollOffset;
+      const to = Math.min(scrollOffset + maxVisible, total);
+      const iconSize = 44;
 
-        const text = this.add.text(x, itemY, weapon.name, {
+      for (let idx = from; idx < to; idx++) {
+        const item = list[idx];
+        const rowTop = startY + (idx - from) * rowHeight;
+        const rowY = rowTop + rowHeight / 2;
+
+        const box = this.add.rectangle(iconColCenter, rowY, 48, 44, 0x1a1a22);
+        box.setStrokeStyle(2, 0x333344).setDepth(contentDepth);
+        contentElements.push(box);
+        if (this.textures.exists(item.textureKey)) {
+          const sprite = this.add.sprite(iconColCenter, rowY, item.textureKey);
+          sprite.setDisplaySize(40, 36).setDepth(contentDepth);
+          contentElements.push(sprite);
+        }
+
+        const nameText = this.add.text(textColLeft, rowTop + 6, item.name, {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${12 * uiScale}px`,
+          color: item.color,
+          fontStyle: 'bold',
+          wordWrap: { width: textColWidth }
+        }).setDepth(contentDepth);
+        contentElements.push(nameText);
+
+        const descText = this.add.text(textColLeft, rowTop + 24, item.desc, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '10px',
-          color: weapon.color,
-          wordWrap: { width: 180 }
+          color: '#888888',
+          wordWrap: { width: textColWidth }
         }).setDepth(contentDepth);
-        contentElements.push(text);
+        contentElements.push(descText);
 
-        const desc = this.add.text(x, itemY + 12, weapon.desc.substring(0, 28), {
+        const dropText = this.add.text(dropColCenter, rowY, t('weapons.' + item.dropKey), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: '9px',
-          color: '#555555',
-          wordWrap: { width: 180 }
-        }).setDepth(contentDepth);
-        contentElements.push(desc);
-      });
+          color: '#00aaaa'
+        }).setOrigin(0.5).setDepth(contentDepth);
+        contentElements.push(dropText);
+      }
 
-      const info = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 42, t('weapons.ranged_info'), {
+      if (total > maxVisible) {
+        const scrollHint = this.add.text(overlayLeft + overlayW - 60, footerY, t('weapons.scroll_more'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${10 * uiScale}px`,
+          color: '#888888'
+        }).setOrigin(0.5).setDepth(contentDepth);
+        contentElements.push(scrollHint);
+      }
+      const info = this.add.text(overlayLeft + overlayW / 2, footerY, t('weapons.ranged_info'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${11 * uiScale}px`,
         color: '#00ffff'
@@ -4073,82 +4597,88 @@ export default class TitleScene extends Phaser.Scene {
 
     const renderWeb3 = async () => {
       clearContent();
+      this.weaponTotalRows = 0;
+      this.weaponMaxVisible = 1;
 
-      const web3Title = this.add.text(overlayLeft + 24, overlayTop + 98, 'WEB3 UNLOCKS', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${13 * uiScale}px`,
-        color: '#00ff88',
-        fontStyle: 'bold'
-      }).setDepth(contentDepth);
-      contentElements.push(web3Title);
-
-      // Get wallet address
+      const zkStartY = contentTop;
       const addr = await stellarWallet.getAddress();
-      
+      if (!backdrop.active || !overlay.scene) return;
+
       if (!addr) {
-        const connectText = this.add.text(overlayLeft + overlayW / 2, overlayTop + 200, 'Connect wallet to view Web3 weapons', {
+        const connectText = this.add.text(overlayLeft + overlayW / 2, zkStartY + 60, t('weapons.zk_connect'), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: `${14 * uiScale}px`,
           color: '#888888'
         }).setOrigin(0.5).setDepth(contentDepth);
         contentElements.push(connectText);
+        const infoText = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 44, t('weapons.zk_info'), {
+          fontFamily: '"Segoe UI", system-ui, sans-serif',
+          fontSize: `${11 * uiScale}px`,
+          color: '#666666',
+          wordWrap: { width: overlayW - 56 }
+        }).setOrigin(0.5, 0.5).setDepth(contentDepth);
+        contentElements.push(infoText);
         return;
       }
 
-      // Load player stats
       let playerStats = { gamesPlayed: 0, bestScore: 0, tier: 1, rank: 0, canStartMatch: false };
       let unlockedWeapons = [1];
       
       try {
         playerStats = await weaponClient.getPlayerStats(addr);
         unlockedWeapons = await weaponClient.getUnlockedWeapons(addr);
+        if (!Array.isArray(unlockedWeapons)) unlockedWeapons = [1];
       } catch (e) {
         console.warn('[TitleScene] Failed to load Web3 weapon data:', e);
       }
+      try {
+        const apiEntries = await LeaderboardManager.fetchOnChain();
+        const normAddr = (a) => (a || '').toLowerCase().trim();
+        const myEntry = apiEntries.find((e) => e.address && normAddr(e.address) === normAddr(addr));
+        if (myEntry && (myEntry.gamesPlayed ?? 0) > (playerStats.gamesPlayed ?? 0)) {
+          playerStats.gamesPlayed = myEntry.gamesPlayed;
+        }
+      } catch (_) {}
+      if (!backdrop.active || !overlay.scene) return;
 
-      // Use rank from playerStats if available, otherwise derive from tier
-      const playerRank = playerStats.rank !== undefined ? playerStats.rank : playerStats.tier;
+      const displayScore = (playerStats.bestScore != null && playerStats.bestScore > 0) ? playerStats.bestScore : (progressStore.highScore ?? 0);
+      const localGames = LeaderboardManager.getLocalGamesPlayed(addr) ?? 0;
+      const displayGames = Math.max(0, playerStats.gamesPlayed ?? 0, localGames);
+      if (displayScore >= 10 && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
+
+      const displayWave = (playerStats.bestWave != null && playerStats.bestWave > 0) ? playerStats.bestWave : (progressStore.highWave ?? 0);
+      const apiRank = playerStats.rank !== undefined ? playerStats.rank : playerStats.tier;
+      const playerRank = (apiRank != null && apiRank > 0) ? apiRank : getRankIdFromScore(displayScore, displayWave);
       const rankData = getRankById(playerRank);
 
-      // Show player rank section
-      const rankSectionY = overlayTop + 110;
+      const rankSectionY = zkStartY + 56;
       
       if (!isUnranked(playerRank)) {
-        // Show rank icon (64x64) for ranked players
-        if (this.textures.exists(rankData.sprite)) {
-          const rankIcon = this.add.image(overlayLeft + 50, rankSectionY, rankData.sprite);
-          rankIcon.setDisplaySize(64, 64);
-          rankIcon.setDepth(contentDepth);
-          contentElements.push(rankIcon);
-        }
-
-        // Rank name
-        const rankNameText = this.add.text(overlayLeft + 100, rankSectionY - 15, rankData.name, {
+        const emojiSuffix = getRankEmoji(playerRank) ? ' ' + getRankEmoji(playerRank) : '';
+        const rankNameText = this.add.text(overlayLeft + 24, rankSectionY - 12, rankData.name + emojiSuffix, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: `${18 * uiScale}px`,
           color: getRankColorCSS(playerRank),
           fontStyle: 'bold'
-        }).setDepth(contentDepth);
+        }).setOrigin(0, 0.5).setDepth(contentDepth);
         contentElements.push(rankNameText);
 
-        // Round 1 Bonus
-        const bonusText = this.add.text(overlayLeft + 100, rankSectionY + 12, `${t('ranks.bonus_label')}: ${getRankBonusPercent(playerRank)}`, {
+        const bonusText = this.add.text(overlayLeft + 24, rankSectionY + 12, `${t('ranks.bonus_label')}: ${getRankBonusPercent(playerRank)}`, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: `${12 * uiScale}px`,
           color: '#00ff88'
-        }).setDepth(contentDepth);
+        }).setOrigin(0, 0.5).setDepth(contentDepth);
         contentElements.push(bonusText);
       } else {
-        // Unranked display
-        const unrankedText = this.add.text(overlayLeft + 24, rankSectionY - 10, t('ranks.unranked'), {
+        const unrankedText = this.add.text(overlayLeft + 24, rankSectionY - 8, t('ranks.unranked'), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${16 * uiScale}px`,
+          fontSize: `${15 * uiScale}px`,
           color: '#888888',
           fontStyle: 'bold'
         }).setDepth(contentDepth);
         contentElements.push(unrankedText);
 
-        const unrankedDesc = this.add.text(overlayLeft + 24, rankSectionY + 15, t('ranks.unranked_desc'), {
+        const unrankedDesc = this.add.text(overlayLeft + 24, rankSectionY + 12, t('ranks.unranked_desc'), {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: `${11 * uiScale}px`,
           color: '#666666'
@@ -4156,46 +4686,50 @@ export default class TitleScene extends Phaser.Scene {
         contentElements.push(unrankedDesc);
       }
 
-      // Show stats
-      const statsY = overlayTop + 160;
-      const statsText = this.add.text(overlayLeft + 24, statsY, `${t('ranks.best_score')}: ${playerStats.bestScore} | ${t('ranks.games_played')}: ${playerStats.gamesPlayed}`, {
+      const statsY = rankSectionY + 58;
+      const statsText = this.add.text(overlayLeft + overlayW / 2, statsY, `${t('ranks.best_score')}: ${displayScore} | ${t('ranks.games_played')}: ${displayGames}`, {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${11 * uiScale}px`,
-        color: '#aaaaaa'
-      }).setDepth(contentDepth);
+        fontSize: `${13 * uiScale}px`,
+        color: '#cccccc'
+      }).setOrigin(0.5, 0.5).setDepth(contentDepth);
       contentElements.push(statsText);
 
-      // Weapon list
       const weaponIds = [1, 2, 3, 4, 5];
-      const startY = overlayTop + 190;
-      const spacing = 65;
+      const startY = statsY + 36;
+      const spacing = 68;
+      const iconCenterX = overlayLeft + 50;
 
       for (let i = 0; i < weaponIds.length; i++) {
         const weaponId = weaponIds[i];
         const weapon = getWeaponById(weaponId);
+        if (!weapon) continue;
         const isUnlocked = unlockedWeapons.includes(weaponId);
         const tier = getTierById(weapon.tier);
         
         const y = startY + i * spacing;
         
-        // Weapon box
         const boxColor = isUnlocked ? 0x00ff88 : 0x222222;
         const boxStroke = isUnlocked ? 0x00ff88 : 0x444444;
-        const box = this.add.rectangle(overlayLeft + 50, y, 40, 40, boxColor);
+        const box = this.add.rectangle(iconCenterX, y, 40, 40, boxColor);
         box.setStrokeStyle(2, boxStroke).setDepth(contentDepth);
         contentElements.push(box);
 
-        // Weapon ID
-        const idText = this.add.text(overlayLeft + 50, y, weaponId.toString(), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '16px',
-          color: isUnlocked ? '#000000' : '#666666',
-          fontStyle: 'bold'
-        }).setOrigin(0.5).setDepth(contentDepth);
-        contentElements.push(idText);
+        const textureKey = `weapon-${weapon.type}`;
+        if (this.textures.exists(textureKey)) {
+          const sprite = this.add.sprite(iconCenterX, y, textureKey);
+          sprite.setDisplaySize(32, 32).setDepth(contentDepth);
+          contentElements.push(sprite);
+        } else {
+          const idText = this.add.text(iconCenterX, y, weaponId.toString(), {
+            fontFamily: '"Segoe UI", system-ui, sans-serif',
+            fontSize: '14px',
+            color: isUnlocked ? '#000000' : '#666666',
+            fontStyle: 'bold'
+          }).setOrigin(0.5).setDepth(contentDepth);
+          contentElements.push(idText);
+        }
 
-        // Weapon name
-        const nameColor = isUnlocked ? '#00ff88' : '#666666';
+        const nameColor = isUnlocked ? '#00ff88' : '#cccccc';
         const nameText = this.add.text(overlayLeft + 100, y - 10, weapon.name, {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
           fontSize: `${13 * uiScale}px`,
@@ -4228,7 +4762,7 @@ export default class TitleScene extends Phaser.Scene {
             color: '#ff6666'
           }).setOrigin(0.5).setDepth(contentDepth);
           contentElements.push(lockText);
-        } else if (playerStats.bestScore < tier.threshold) {
+        } else if (displayScore < tier.threshold) {
           const lockText = this.add.text(overlayLeft + overlayW - 80, y, 'Score too low', {
             fontFamily: '"Segoe UI", system-ui, sans-serif',
             fontSize: '10px',
@@ -4260,12 +4794,14 @@ export default class TitleScene extends Phaser.Scene {
         }
       }
 
-      // Info text
-      const infoText = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 30, 'Web3 weapons are permanently unlocked to your wallet', {
+      // Info text — lower so it doesn't overlap Diamond / tier list
+      const web3InfoY = overlayTop + overlayH - 44;
+      const infoText = this.add.text(overlayLeft + overlayW / 2, web3InfoY, t('weapons.zk_info'), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${10 * uiScale}px`,
-        color: '#666666'
-      }).setOrigin(0.5).setDepth(contentDepth);
+        fontSize: `${11 * uiScale}px`,
+        color: '#666666',
+        wordWrap: { width: overlayW - 56 }
+      }).setOrigin(0.5, 0.5).setDepth(contentDepth);
       contentElements.push(infoText);
     };
 
@@ -4275,6 +4811,7 @@ export default class TitleScene extends Phaser.Scene {
     };
 
     const switchTab = (tabIndex) => {
+      this.weaponScrollOffset = 0;
       tabTexts.forEach((t, i) => {
         t.setColor(i === tabIndex ? '#ffd700' : '#666666');
         t.setFontStyle(i === tabIndex ? 'bold' : 'normal');
@@ -4303,15 +4840,15 @@ export default class TitleScene extends Phaser.Scene {
       });
     });
 
-    const instructions = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 22, t('weapons.tab_instructions'), {
+    const instructions = this.add.text(overlayLeft + overlayW / 2, instructionsY, t('weapons.tab_instructions'), {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: `${10 * uiScale}px`,
-      color: '#666666'
+      color: '#aaaaaa'
     }).setOrigin(0.5).setDepth(1002);
 
-    renderLegendary();
+    switchTab(defaultTabIndex);
 
-    let currentTab = 0;
+    let currentTab = defaultTabIndex;
 
     const tabLeft = () => {
       currentTab--;
@@ -4332,6 +4869,25 @@ export default class TitleScene extends Phaser.Scene {
       if (k === 'escape') close();
       else if (k === 'arrowleft' || k === 'left' || k === 'a') tabLeft();
       else if (k === 'arrowright' || k === 'right' || k === 'd') tabRight();
+      else if (k === 'arrowdown' || k === 'down' || k === 's') {
+        const total = this.weaponTotalRows || 0;
+        const maxVis = this.weaponMaxVisible || 1;
+        if (total > maxVis && this.weaponScrollOffset < total - maxVis) {
+          this.weaponScrollOffset++;
+          if (this.weaponTab === 'legendary') renderLegendary();
+          else if (this.weaponTab === 'melee') renderMelee();
+          else if (this.weaponTab === 'ranged') renderRanged();
+          Audio.playXPGain();
+        }
+      } else if (k === 'arrowup' || k === 'up' || k === 'w') {
+        if (this.weaponScrollOffset > 0) {
+          this.weaponScrollOffset--;
+          if (this.weaponTab === 'legendary') renderLegendary();
+          else if (this.weaponTab === 'melee') renderMelee();
+          else if (this.weaponTab === 'ranged') renderRanged();
+          Audio.playXPGain();
+        }
+      }
     };
 
     const close = () => {
@@ -4510,12 +5066,10 @@ export default class TitleScene extends Phaser.Scene {
     arrowLeft.on('pointerdown', () => { cycle(-1); });
     arrowRight.on('pointerdown', () => { cycle(1); });
 
-    // Variable de estado para controlar la vista actual
-    let currentView = "menu"; // Valores posibles: "menu", "history"
+    let currentView = "menu"; // "menu" | "history"
+    let loreCloseCallback = null; // ref so ESC/arrows in lore view can close or cycle
     
-    // Función para mostrar la historia del personaje
     const showCharacterLore = () => {
-      // Si ya estamos en la vista de historia, no hacer nada
       if (currentView === "history") return;
       
       // Cambiar el estado a history
@@ -4558,15 +5112,14 @@ export default class TitleScene extends Phaser.Scene {
       const characterX = (cx - loreBoxW/2) + characterWidth/2 + gridPadding;
       const characterY = cy - loreBoxH/2 + gridPadding + 104; // Align with top of text block (lowered)
       
-      // Animate the character sprite to its designated position in left column
-      this.tweens.add({
+      const loreTween = this.tweens.add({
         targets: animatedSprite,
         x: characterX,
         y: characterY,
         duration: 800,
         ease: 'Power2',
         onComplete: () => {
-          // Optionally change animation to facing left if side-walking animation exists
+          if (!animatedSprite || !animatedSprite.scene || !animatedSprite.active) return;
           const walkSideKey = char.animPrefix + '-walk-side';
           if (this.anims.exists(walkSideKey)) {
             animatedSprite.play(walkSideKey);
@@ -4665,8 +5218,55 @@ export default class TitleScene extends Phaser.Scene {
       loreBox.setDisplaySize(loreBoxW, effectiveLoreBoxH);
       loreBox.y = loreBoxTop + effectiveLoreBoxH / 2;
       
-      // Botón de cerrar (localized)
-      const closeButton = this.add.text(cx, loreBoxTop + effectiveLoreBoxH - 22, t('prompt.esc_close').replace('[', '').replace(']', '').trim() || (lang === 'es' ? 'Cerrar' : 'Close'), {
+      const loreBoxLeft = cx - loreBoxW / 2;
+      const loreBoxRight = cx + loreBoxW / 2;
+      const arrowLoreY = cy;
+
+      const arrowLeftLore = this.add.text(loreBoxLeft + 40, arrowLoreY, '◀', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${36 * uiScale}px`,
+        color: '#00ffff'
+      }).setOrigin(0.5).setDepth(1009).setInteractive({ useHandCursor: true });
+      const arrowRightLore = this.add.text(loreBoxRight - 40, arrowLoreY, '▶', {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: `${36 * uiScale}px`,
+        color: '#00ffff'
+      }).setOrigin(0.5).setDepth(1009).setInteractive({ useHandCursor: true });
+
+      const closeLore = () => {
+        loreCloseCallback = null;
+        currentView = "menu";
+        if (loreTween && loreTween.isPlaying) loreTween.remove();
+        loreBackdrop.destroy();
+        loreBox.destroy();
+        loreTitle.destroy();
+        originLabel.destroy();
+        originText.destroy();
+        historyLabel.destroy();
+        historyText.destroy();
+        missionLabel.destroy();
+        missionText.destroy();
+        arrowLeftLore.destroy();
+        arrowRightLore.destroy();
+        closeButton.destroy();
+        if (animatedSprite && animatedSprite.scene) animatedSprite.destroy();
+      };
+
+      const cycleInLore = (dir) => {
+        closeLore();
+        selectedIndex = (selectedIndex + dir + CHAR_IDS.length) % CHAR_IDS.length;
+        selectCharacter(CHAR_IDS[selectedIndex]).then(() => {
+          updatePreview();
+          if (window.VIBE_SETTINGS?.sfxEnabled) Audio.playLevelUp();
+          showCharacterLore();
+        });
+      };
+
+      arrowLeftLore.on('pointerdown', () => cycleInLore(-1));
+      arrowRightLore.on('pointerdown', () => cycleInLore(1));
+
+      // Botón de cerrar (localized) — ESC para salir
+      const closeButton = this.add.text(cx, loreBoxTop + effectiveLoreBoxH - 22, (t('prompt.esc_close') || 'ESC TO CLOSE').replace(/\[|\]/g, '').trim(), {
         fontFamily: '"Segoe UI", system-ui, sans-serif',
         fontSize: `${18 * uiScale}px`,
         color: '#00ffff',
@@ -4677,27 +5277,17 @@ export default class TitleScene extends Phaser.Scene {
           top: 10,
           bottom: 10
         }
-      }).setOrigin(0.5).setDepth(1008).setInteractive({ useHandCursor: true });
-      
-      const closeLore = () => {
-        // Restaurar el estado a menu
-        currentView = "menu";
-        
-        loreBackdrop.destroy();
-        loreBox.destroy();
-        loreTitle.destroy();
-        originLabel.destroy();
-        originText.destroy();
-        historyLabel.destroy();
-        historyText.destroy();
-        missionLabel.destroy();
-        missionText.destroy();
-        closeButton.destroy();
-        animatedSprite.destroy(); // Destroy the animated character sprite
-      };
+      }).setOrigin(0.5).setDepth(1009).setInteractive({ useHandCursor: true });
       
       closeButton.on('pointerdown', closeLore);
-      loreBackdrop.on('pointerdown', closeLore);
+      loreBackdrop.on('pointerdown', (ptr) => {
+        const px = ptr.x;
+        const py = ptr.y;
+        const loreBoxTopY = loreBoxTop;
+        const loreBoxBottomY = loreBoxTop + effectiveLoreBoxH;
+        if (px < loreBoxLeft || px > loreBoxRight || py < loreBoxTopY || py > loreBoxBottomY) closeLore();
+      });
+      loreCloseCallback = closeLore;
     };
     
     loreButton.on('pointerdown', showCharacterLore);
@@ -4710,6 +5300,11 @@ export default class TitleScene extends Phaser.Scene {
 
     const onCharKeyDown = (event) => {
       const k = event.key?.toLowerCase?.() || event.key;
+      if (currentView === 'history') {
+        if (k === 'escape') { loreCloseCallback?.(); return; }
+        if (k === 'arrowleft' || k === 'left' || k === 'a') { loreCloseCallback?.(); cycle(-1); showCharacterLore(); return; }
+        if (k === 'arrowright' || k === 'right' || k === 'd') { loreCloseCallback?.(); cycle(1); showCharacterLore(); return; }
+      }
       if (k === 'escape') close();
       else if (k === 'arrowleft' || k === 'left' || k === 'a') { cycle(-1); }
       else if (k === 'arrowright' || k === 'right' || k === 'd') { cycle(1); }

@@ -392,6 +392,65 @@ export function playMagnet() {
   osc.stop(audioContext.currentTime + 0.5);
 }
 
+// One-shot music/SFX (MP3) — same base path as music
+const DEATH_SONG_URL = '/assets/audio/death-song.mp3';
+const GAME_OVER_MUSIC_URL = '/assets/audio/game-over-music.mp3';
+const START_GAME_CHARACTER_URL = '/assets/audio/start-game-character.mp3';
+const LEVEL_UP_SONG_URL = '/assets/audio/level-up.mp3';
+// -3 dB ≈ 0.708
+const QUIETER_VOLUME = 0.7;
+
+/** Play death song when player dies (slightly quieter). */
+export function playDeathSong() {
+  if (!window.VIBE_SETTINGS?.sfxEnabled) return;
+  try {
+    const a = new Audio(DEATH_SONG_URL);
+    a.volume = QUIETER_VOLUME;
+    a.play().catch(() => {});
+  } catch (e) {
+    console.warn('Death song failed:', e);
+  }
+}
+
+/** Stop gameplay music and play game-over track once (no loop). Used when player dies. */
+export function playGameOverMusic() {
+  stopGameplayMusic();
+  if (!window.VIBE_SETTINGS?.musicEnabled) return;
+  try {
+    const a = new Audio(GAME_OVER_MUSIC_URL);
+    a.volume = getGameplayMusicVolume();
+    a.loop = false;
+    a.play().catch(() => {});
+    console.log('🎵 Game over music (one-shot) started');
+  } catch (e) {
+    console.warn('Game over music failed:', e);
+  }
+}
+
+/** Play when character appears at game start. */
+export function playStartGameCharacter() {
+  if (!window.VIBE_SETTINGS?.sfxEnabled) return;
+  try {
+    const a = new Audio(START_GAME_CHARACTER_URL);
+    a.volume = 1;
+    a.play().catch(() => {});
+  } catch (e) {
+    console.warn('Start game character sound failed:', e);
+  }
+}
+
+/** Play level-up song (slightly quieter than normal). */
+export function playLevelUpSong() {
+  if (!window.VIBE_SETTINGS?.sfxEnabled) return;
+  try {
+    const a = new Audio(LEVEL_UP_SONG_URL);
+    a.volume = QUIETER_VOLUME;
+    a.play().catch(() => {});
+  } catch (e) {
+    console.warn('Level up song failed:', e);
+  }
+}
+
 // === MUSIC ===
 // Use relative URLs so it works both locally (/) and on GitHub Pages (/Cosmic-Coder-/)
 const MENU_MUSIC_URL = '/assets/audio/arcade-by-lucjo.mp3';

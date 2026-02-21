@@ -37,11 +37,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Optional: add repo secrets VITE_SHADOW_ASCENSION_CONTRACT_ID and VITE_ZK_PROVER_URL for on-chain + ZK in production
+      # Optional: add repo secrets VITE_COSMIC_CODER_CONTRACT_ID and VITE_ZK_PROVER_URL for on-chain + ZK in production
       - name: Build
         run: npm run build
         env:
-          VITE_SHADOW_ASCENSION_CONTRACT_ID: ${{ secrets.VITE_SHADOW_ASCENSION_CONTRACT_ID }}
+          VITE_COSMIC_CODER_CONTRACT_ID: ${{ secrets.VITE_COSMIC_CODER_CONTRACT_ID }}
           VITE_ZK_PROVER_URL: ${{ secrets.VITE_ZK_PROVER_URL }}
 
       - name: Setup Pages

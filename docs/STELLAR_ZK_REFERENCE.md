@@ -39,7 +39,7 @@ Protocol versions: https://developers.stellar.org/docs/networks/software-version
 
 ## Example Repositories
 
-- [Soroban Examples](https://github.com/stellar/soroban-examples) — groth16_verifier, privacy-pools
+- [Soroban Examples](https://github.com/stellar/soroban-examples) — zk_verifier, privacy-pools
 - [Soroban SDK BN254](https://docs.rs/soroban-sdk/latest/soroban_sdk/crypto/bn254/)
 
 ## Integration Checklist

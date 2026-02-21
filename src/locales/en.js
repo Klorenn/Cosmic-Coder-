@@ -72,6 +72,7 @@ export default {
     diamond_desc: 'Top-tier combatant. High early spawn probability.',
     bonus_label: 'Round 1 Bonus',
     best_score: 'Best Score',
+    ranked_best_score: 'Best Score (Ranked)',
     games_played: 'Games Played',
     back: '[ CLICK OR ESC TO CLOSE ]'
   },
@@ -82,7 +83,7 @@ export default {
     zk_enabled: 'ZK PROOF: ENABLED',
     zk_disabled: 'ZK PROOF: DISABLED',
     description: 'Cosmic Coder validates your run with Zero-Knowledge Proofs.\nNo score details are revealed on-chain—only eligibility is confirmed.',
-    zk_weapon_hint: 'ZK WEAPON: In Ranked (ZK) runs, returning players get a guaranteed early Plasma Rifle drop. First-time players won\'t get it. It\'s a small head-start, not a score boost.',
+    zk_weapon_hint: 'ZK WEAPONS: Shotgun unlocks at 10+ score (for testing). When unlocked, it can appear as your starting weapon in Ranked (ZK) runs and is shown next to your character only if you have unlocked it. Other ZK weapons unlock at higher score tiers (Silver/Gold/Diamond).',
     sep10_ok: 'SEP-10: OK',
     sep10_fail: 'SEP-10: NOT CONFIGURED',
     prover_ok: 'ZK PROVER: READY',
@@ -98,7 +99,9 @@ export default {
     play_casual: '[ PLAY CASUAL ]',
     close: '[ CLOSE ]',
     wallet_required: 'Wallet required for Ranked mode.',
-    rank_title: 'CURRENT RANK'
+    rank_title: 'CURRENT RANK',
+    min_score_warning: '⚠ MIN SCORE: 5 PER WAVE ⚠',
+    min_score_detail: 'You need at least 5 score per wave to submit a valid ZK proof. Below that threshold your run will NOT be recorded on-chain.'
   },
   game_over_screen: {
     title: 'GAME OVER',
@@ -214,6 +217,10 @@ export default {
     LEGENDARY: 'LEGENDARY',
     MELEE: 'MELEE',
     RANGED: 'RANGED',
+    ZK_BUFF: 'ZK BUFF WEAPONS',
+    zk_title: 'ZK Buff Weapons',
+    zk_connect: 'Connect wallet to view ZK buff weapons',
+    zk_info: 'ZK weapons are permanently unlocked to your wallet (proof-based).',
     locked: 'Locked - Find in game (0.01% drop)',
     equipped: '[EQUIPPED]',
     equip: '[EQUIP]',
@@ -221,7 +228,14 @@ export default {
     legendary_info: 'Legendary weapons persist forever once unlocked!',
     melee_info: 'Melee weapons: 15% drop chance from enemies.',
     ranged_info: 'Ranged weapons drop from enemies during gameplay.',
-    tab_instructions: '[ ←/→: Switch tab | ESC: Close ]'
+    tab_instructions: '[ ←/→: Switch tab | ↑/↓: Scroll | ESC: Close ]',
+    scroll_more: '↑/↓ Scroll',
+    drop_starter: 'Starter',
+    drop_common: 'Common drop',
+    drop_uncommon: 'Uncommon drop',
+    drop_evolved: 'Evolved (combine 2)',
+    drop_boss: 'Boss drop',
+    drop_melee: 'Melee pool'
   },
   // Arena HUD
   pause: {
@@ -377,5 +391,58 @@ export default {
     memory_leak_prime: 'MEMORY LEAK PRIME',
     kernel_panic: 'KERNEL PANIC',
     deadlock: 'DEADLOCK'
+  },
+  barks: {
+    vibecoder: [
+      'Awaiting async annihilation...',
+      'My code compiles first try. Yours?',
+      'Flow state reached. Stellar: 0ms.',
+      'I write smart contracts in Vim, obviously.',
+      'while(true) { keepShooting(); }',
+      'Compiling Noir circuits... feeling the groove.',
+      'Your logic is poorly structured, bro.',
+      'Ping: 1ms. Headshot confirmed on-chain.',
+      'Let me refactor your face.',
+      'O(1) complexity. Instant death.',
+      'Resolving promises and breaking dreams.',
+      'Clean code, clean kills. #BuildOnStellar',
+      'I use Arch Linux and compile on Soroban, btw.',
+      'Optimizing gas usage... Enemy eliminated.',
+      'Feel the rhythm of the blockchain. Pure ZK!'
+    ],
+    destroyer: [
+      'sudo rm -rf /enemies/*',
+      'DROP TABLE alien_swarm; --',
+      'NullPointerException: Target eradicated.',
+      'Your Zero-Knowledge proof returned FALSE.',
+      'Garbage collection executed successfully.',
+      'Access Denied. Your Soroban signature is invalid.',
+      'kill -9 PID_ENEMY',
+      'Formatting the Stellar Sector...',
+      'WasmVm Trap: UnreachableCodeReached. That\'s you.',
+      'Evaluating: enemy.isAlive() == false;',
+      'Clearing the cache and your health bar.',
+      'You\'ve been deprecated in this version.',
+      'No rollback for this on-chain transaction.',
+      'Executing end_game() on your existence.',
+      'Strict Mode: ON. Zero bugs, zero mercy.'
+    ],
+    swordsman: [
+      'git push --force origin testnet!',
+      'git commit -m "GG EZ"',
+      'Uncaught TypeError: your skill is undefined.',
+      'Deploying to @BuildOnStellar on a Friday!',
+      'Panic! at the Soroban VM!',
+      'Resolving merge conflicts... by force.',
+      'throw new Error("Skill_Issue_Detected");',
+      'Status: 200 OK. Enemy: 404 Not Found.',
+      'Overclocking the ZK prover! #StellarHacks',
+      'cargo run --release --destroy-all',
+      'Memory leak detected in your strategy.',
+      'Ctrl+C won\'t save you this time!',
+      'Brute-forcing the nonce... Boom!',
+      'Stack overflow of bullets!',
+      'Bypassing your firewall with a ZK proof.'
+    ]
   }
 };

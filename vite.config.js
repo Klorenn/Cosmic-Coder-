@@ -35,7 +35,13 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     assetsDir: 'assets',
-    copyPublicDir: true
+    copyPublicDir: true,
+    rollupOptions: {
+      input: {
+        main: fileURLToPath(new URL('./index.html', import.meta.url)),
+        docs: fileURLToPath(new URL('./docs/index.html', import.meta.url))
+      }
+    }
   },
   optimizeDeps: {
     include: ['@stellar/freighter-api'],
