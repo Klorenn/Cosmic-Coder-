@@ -5018,7 +5018,7 @@ export default class ArenaScene extends Phaser.Scene {
       this.time.delayedCall(2000, () => {
         stellarWallet.getAddress().then(async (addr) => {
         if (!addr) { clear(); resolve(null); return; }
-        const sign = (xdr) => stellarWallet.signTransaction(xdr);
+        const sign = (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase);
         try {
           if (runZkProof) {
             this.zkProofSubmitted = true;
@@ -5119,10 +5119,15 @@ export default class ArenaScene extends Phaser.Scene {
           console.error('ZK ERROR MESSAGE:', e?.message);
           console.warn('[Cosmic Coder] Submit failed:', e?.message || e);
           
-          // Check if contract is missing or ZK backend has issues
-          if (this.zkContractMissing || e?.message?.includes('not found') || e?.message?.includes('404')) {
+          // Check for wrong network (txBadAuth / Freighter on Mainnet)
+          const msg = e?.message || '';
+          if (msg.includes('Freighter is on') || msg.includes('txBadAuth') || msg.includes('Stellar Testnet')) {
+            try { zkStatusText.setText('Switch Freighter to Testnet, then try again. Using local leaderboard.').setAlpha(1); } catch (_) {}
+          } else if (this.zkContractMissing || msg.includes('not found') || msg.includes('404')) {
             try { zkStatusText.setText('ZK Contract not deployed. Using local leaderboard.').setAlpha(1); } catch (_) {}
-          } else if (e?.message?.includes('BigInt') || e?.message?.includes('verification key')) {
+          } else if (msg.includes('Cannot satisfy constraint')) {
+            try { zkStatusText.setText('ZK circuit constraint failed (score >= wave*5?). Using local leaderboard.').setAlpha(1); } catch (_) {}
+          } else if (msg.includes('BigInt') || msg.includes('verification key')) {
             try { zkStatusText.setText('ZK Backend Issue. Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else {
             try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}

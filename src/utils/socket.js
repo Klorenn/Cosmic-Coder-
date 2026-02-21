@@ -1,8 +1,4 @@
-// WebSocket connection to Vibe Coder XP Server
-// Port 3001 is used by the Electron built-in server
-// Port 3333 was the old standalone server port
-
-const WS_URL = 'ws://localhost:3001';
+// WebSocket connection to XP Server (optional). In deploy mode use config URL only — never localhost.
 
 let socket = null;
 let reconnectTimer = null;
@@ -15,9 +11,18 @@ function isLocalhost() {
   return /^localhost$|^127\.0\.0\.1$/i.test(window.location.hostname);
 }
 
+function getXPWebSocketUrl() {
+  if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_XP_WS_URL) {
+    const url = String(window.__VITE_CONFIG__.VITE_XP_WS_URL).trim();
+    if (url && (url.startsWith('ws://') || url.startsWith('wss://'))) return url;
+  }
+  if (!isLocalhost()) return null;
+  return 'ws://localhost:3001';
+}
+
 export function connectToXPServer() {
-  // Never connect when not on localhost (e.g. GitHub Pages) — avoids "WebSocket connection failed"
-  if (!isLocalhost()) return;
+  const wsUrl = getXPWebSocketUrl();
+  if (!wsUrl) return;
 
   // Guard against concurrent connection attempts
   if (connecting) return;
@@ -33,7 +38,7 @@ export function connectToXPServer() {
   connecting = true;
 
   try {
-    socket = new WebSocket(WS_URL);
+    socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {
       connected = true;

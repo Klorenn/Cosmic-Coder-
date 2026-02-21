@@ -20,7 +20,8 @@ const CONFIG_KEYS = [
   'VITE_ZK_PROVER_URL',
   'VITE_PROGRESS_API_URL',
   'VITE_LEADERBOARD_URL',
-  'VITE_API_URL'
+  'VITE_API_URL',
+  'VITE_XP_WS_URL'
 ];
 
 let base = {};

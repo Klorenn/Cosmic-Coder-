@@ -109,6 +109,24 @@ export function shortWalletForLeaderboard(address) {
 }
 
 /**
+ * Get current network from Freighter (to detect Mainnet vs Testnet).
+ * @returns {Promise<{ network: string, networkPassphrase: string }|null>}
+ */
+export async function getFreighterNetwork() {
+  try {
+    const res = await Freighter.getNetwork();
+    if (res?.error) return null;
+    if (res?.networkPassphrase) return { network: res.network || '', networkPassphrase: res.networkPassphrase };
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Stellar Testnet passphrase (contracts are on Testnet). */
+export const STELLAR_TESTNET_PASSPHRASE = TESTNET_PASSPHRASE;
+
+/**
  * Sign a transaction XDR (for Soroban / Game Hub).
  * @param {string} xdr - base64 transaction XDR
  * @param {string} [networkPassphrase] - default testnet

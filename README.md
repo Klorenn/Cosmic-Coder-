@@ -96,6 +96,15 @@ If the ZK submission fails (prover offline, contract not deployed, etc.), the ga
 
 So: **Stellar** provides the chain and the Game Hub session lifecycle; **ZK** ensures that entries are provably valid without revealing full gameplay trace.
 
+### Backend URLs (Render)
+
+| URL | Purpose | Config key |
+|-----|---------|------------|
+| **https://cosmic-coder.onrender.com** | API: leaderboard, auth, progress. Used by the frontend for ranking and login. | `VITE_API_URL` / `VITE_LEADERBOARD_URL` |
+| **https://cosmic-coder-zk-prover.onrender.com** | ZK prover: generates Groth16 proofs from run data. Frontend sends score/wave/nonce and gets back a proof, then submits it to the contract with Freighter. | `VITE_ZK_PROVER_URL` |
+
+**Important:** `start_match` and all contract calls (start_match, submit_zk, submit_result) are **signed by the user in Freighter** and sent **directly to Stellar Testnet RPC**. They do **not** go through these URLs. If you get **txBadAuth**, the contract is rejecting the signature — set Freighter to **Stellar Testnet** (not Mainnet) and use the same account that is connected.
+
 ### Contracts on Stellar Testnet
 
 | Contract | Role | Stellar Expert |

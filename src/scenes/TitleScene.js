@@ -3557,7 +3557,7 @@ export default class TitleScene extends Phaser.Scene {
         try {
           this.setStartupLoadingText('Signing ranked session...');
           const addr = await stellarWallet.getAddress();
-          await gameClient.startMatch(addr, (xdr) => stellarWallet.signTransaction(xdr));
+          await gameClient.startMatch(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase));
         } catch (e) {
           console.warn('On-chain start_match failed:', e);
           this.sayQuote(t('game.start_match_failed'));

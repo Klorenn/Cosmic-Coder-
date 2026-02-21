@@ -8,6 +8,7 @@
 import { StrKey } from '@stellar/stellar-sdk';
 import { NoirService } from '../services/NoirService.js';
 import { getAssetPath } from '../utils/assetBase.js';
+import { getFreighterNetwork } from '../utils/stellarWallet.js';
 
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
@@ -77,6 +78,23 @@ async function waitForTx(server, hash, tries = 12, delayMs = 1000) {
  * Build, prepare, sign and send a contract invocation.
  */
 async function invoke(contractId, method, args, publicKey, signTransaction) {
+  // Fail fast with a clear message if Freighter is on Mainnet (avoids txBadAuth)
+  if (typeof window !== 'undefined') {
+    try {
+      const net = await getFreighterNetwork();
+      if (net && net.networkPassphrase && net.networkPassphrase !== TESTNET_PASSPHRASE) {
+        const name = (net.network || 'other').toUpperCase();
+        throw new Error(
+          `[Cosmic Coder] Freighter is on "${name}". This app uses **Stellar Testnet**. ` +
+          'In Freighter, click the network name and switch to "Testnet", then try again.'
+        );
+      }
+    } catch (e) {
+      if (e?.message?.includes('Freighter is on')) throw e;
+      // getFreighterNetwork can fail if extension not ready; continue
+    }
+  }
+
   const {
     Contract,
     TransactionBuilder,
@@ -110,7 +128,8 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
   }
 
   const prepared = await server.prepareTransaction(built);
-  const signedXdr = await signTransaction(prepared.toXDR());
+  // Always pass network so Freighter signs for Testnet (avoids txBadAuth when user has Mainnet selected)
+  const signedXdr = await signTransaction(prepared.toXDR(), TESTNET_PASSPHRASE);
   const tx = TransactionBuilder.fromXDR(signedXdr, TESTNET_PASSPHRASE);
   const result = await server.sendTransaction(tx);
   if (result.status === 'PENDING' && result.hash) {
@@ -126,8 +145,11 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
     );
   }
   if (result.status === 'ERROR') {
-    // Some RPC responses return hash but omit errorResultXdr.
-    // Query tx status by hash to recover the concrete failure reason.
+    const errSwitch = result.errorResult?.result?._switch ?? result.errorResult?._attributes?.result?._switch;
+    const isBadAuth = errSwitch?.name === 'txBadAuth' || String(safeJson(result)).includes('txBadAuth');
+    const authHint = isBadAuth
+      ? '\n\n[Cosmic Coder] txBadAuth: Make sure Freighter is set to **Stellar Testnet** (not Mainnet) and the connected account is the one signing.'
+      : '';
     if (result.hash) {
       const txInfo = await waitForTx(server, result.hash, 20, 1000);
       if (txInfo) {
@@ -137,7 +159,8 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
           `tx_status=${txInfo.status || 'unknown'}\n` +
           `tx_result=${txInfo.resultXdr || 'n/a'}\n` +
           `tx_result_meta=${txInfo.resultMetaXdr || 'n/a'}\n` +
-          `tx_envelope=${txInfo.envelopeXdr || 'n/a'}`
+          `tx_envelope=${txInfo.envelopeXdr || 'n/a'}` +
+          authHint
         );
       }
     }
@@ -155,7 +178,8 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
       `${decoded}` +
       ` hash=${result.hash || 'n/a'}` +
       ` errorResultXdr=${result.errorResultXdr || 'n/a'}\n` +
-      `rpc_result=${safeJson(result)}`
+      `rpc_result=${safeJson(result)}` +
+      authHint
     );
   }
   return result;
@@ -454,16 +478,37 @@ function validateNoirSubmitPayload(payload) {
   }
 }
 
+/** Clamp to u32 range for Noir (0 .. 2^32-1). */
+function toU32Safe(v) {
+  const n = BigInt(v ?? 0);
+  if (n <= 0n) return '0';
+  const max = (1n << 32n) - 1n;
+  return (n > max ? max : n).toString(10);
+}
+
+/** Clamp to u64 range for Noir. */
+function toU64Safe(v) {
+  const n = BigInt(v ?? 0);
+  if (n < 0n) return '0';
+  const max = (1n << 64n) - 1n;
+  return (n > max ? max : n).toString(10);
+}
+
+/** Circuit expects u1 (0 or 1 only); any other value causes "Cannot satisfy constraint". */
+function toU1Safe(v) {
+  return (v && Number(v) !== 0) ? '1' : '0';
+}
+
 function noirInputsFromPayload(payload) {
   const { runHashHiDec, runHashLoDec } = computeSafeNoirHashInputs(payload);
   return {
     run_hash_hi: runHashHiDec,
     run_hash_lo: runHashLoDec,
-    score: BigInt(payload.score || 0).toString(10),
-    wave: BigInt(payload.wave || 0).toString(10),
-    nonce: BigInt(payload.nonce || 0).toString(10),
-    season_id: BigInt(payload.season_id != null ? payload.season_id : 1).toString(10),
-    used_zk_weapon: BigInt(payload.used_zk_weapon || 0).toString(10)
+    score: toU32Safe(payload.score),
+    wave: toU32Safe(payload.wave),
+    nonce: toU64Safe(payload.nonce),
+    season_id: toU32Safe(payload.season_id != null ? payload.season_id : 1),
+    used_zk_weapon: toU1Safe(payload.used_zk_weapon)
   };
 }
 
