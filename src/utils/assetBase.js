@@ -5,17 +5,17 @@
  * Prefer Vite's BASE_URL when built so deploy always matches the build base.
  */
 export function getAssetBase() {
-  // 1) Built app: use same base as Vite so assets and config never 404 on deploy
+  // 1) Runtime: if we're on a subpath (e.g. GitHub Pages /repo-name/), use it so assets never 404
+  if (typeof window !== 'undefined' && window.location && window.location.pathname) {
+    const path = window.location.pathname;
+    const dir = path.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '/';
+    if (dir !== '/' && dir !== '') return dir;
+  }
+  // 2) Built app (local or root deploy): use Vite BASE_URL
   if (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.BASE_URL) {
     const b = String(import.meta.env.BASE_URL || '');
     const trimmed = b.endsWith('/') ? b.slice(0, -1) : b;
     if (trimmed && trimmed !== '.' && trimmed !== '') return trimmed;
-  }
-  // 2) Runtime (e.g. GitHub Pages): derive from pathname
-  if (typeof window !== 'undefined' && window.location && window.location.pathname) {
-    const path = window.location.pathname;
-    const dir = path.replace(/\/index\.html$/i, '').replace(/\/$/, '') || '/';
-    return dir === '/' ? '' : dir;
   }
   return '';
 }

@@ -1,6 +1,12 @@
 // Procedural Audio System for Vibe Coder
-// Generates retro-style sound effects using Web Audio API
-import { getAssetPath } from './assetBase.js';
+// Music/songs are inside the bundle (src/assets/audio) so deploy always has correct URLs
+import arcadeByLucjoUrl from '../assets/audio/arcade-by-lucjo.mp3';
+import deathSongUrl from '../assets/audio/death-song.mp3';
+import gameOverMusicUrl from '../assets/audio/game-over-music.mp3';
+import startGameCharacterUrl from '../assets/audio/start-game-character.mp3';
+import levelUpUrl from '../assets/audio/level-up.mp3';
+import galaxyGuppyUrl from '../assets/audio/Galaxy_Guppy_KLICKAUD.mp3';
+import kubbiEmberUrl from '../assets/audio/Kubbi-Ember.mp3';
 
 let audioContext = null;
 let masterGain = null;
@@ -399,7 +405,7 @@ const QUIETER_VOLUME = 0.7;
 export function playDeathSong() {
   if (!window.VIBE_SETTINGS?.sfxEnabled) return;
   try {
-    const a = new Audio(getAssetPath('assets/audio/death-song.mp3'));
+    const a = new Audio(deathSongUrl);
     a.volume = QUIETER_VOLUME;
     a.play().catch(() => {});
   } catch (e) {
@@ -412,7 +418,7 @@ export function playGameOverMusic() {
   stopGameplayMusic();
   if (!window.VIBE_SETTINGS?.musicEnabled) return;
   try {
-    const a = new Audio(getAssetPath('assets/audio/game-over-music.mp3'));
+    const a = new Audio(gameOverMusicUrl);
     a.volume = getGameplayMusicVolume();
     a.loop = false;
     a.play().catch(() => {});
@@ -426,7 +432,7 @@ export function playGameOverMusic() {
 export function playStartGameCharacter() {
   if (!window.VIBE_SETTINGS?.sfxEnabled) return;
   try {
-    const a = new Audio(getAssetPath('assets/audio/start-game-character.mp3'));
+    const a = new Audio(startGameCharacterUrl);
     a.volume = 1;
     a.play().catch(() => {});
   } catch (e) {
@@ -438,7 +444,7 @@ export function playStartGameCharacter() {
 export function playLevelUpSong() {
   if (!window.VIBE_SETTINGS?.sfxEnabled) return;
   try {
-    const a = new Audio(getAssetPath('assets/audio/level-up.mp3'));
+    const a = new Audio(levelUpUrl);
     a.volume = QUIETER_VOLUME;
     a.play().catch(() => {});
   } catch (e) {
@@ -447,13 +453,10 @@ export function playLevelUpSong() {
 }
 
 function getMenuMusicUrl() {
-  return getAssetPath('assets/audio/arcade-by-lucjo.mp3');
+  return arcadeByLucjoUrl;
 }
 function getGameplayPlaylist() {
-  return [
-    getAssetPath('assets/audio/Galaxy_Guppy_KLICKAUD.mp3'),
-    getAssetPath('assets/audio/Kubbi-Ember.mp3')
-  ];
+  return [galaxyGuppyUrl, kubbiEmberUrl];
 }
 
 export function setMusicMode(mode) {

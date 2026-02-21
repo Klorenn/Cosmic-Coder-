@@ -1,11 +1,13 @@
 import { keccak_256 } from '@noble/hashes/sha3';
+import { getAssetPath } from '../utils/assetBase.js';
 
 export class NoirService {
   async generateProof(circuitName, inputs) {
     const { Noir } = await import('@noir-lang/noir_js');
     const { UltraHonkBackend } = await import('@aztec/bb.js');
 
-    const circuitRes = await fetch(`/circuits/${circuitName}.json`);
+    const circuitUrl = getAssetPath(`circuits/${circuitName}.json`);
+    const circuitRes = await fetch(circuitUrl);
     if (!circuitRes.ok) throw new Error(`Cannot load circuit: ${circuitName}.json`);
     const circuit = await circuitRes.json();
 
@@ -24,7 +26,8 @@ export class NoirService {
   }
 
   async loadVk(circuitName) {
-    const res = await fetch(`/circuits/${circuitName}_vk.json`);
+    const vkUrl = getAssetPath(`circuits/${circuitName}_vk.json`);
+    const res = await fetch(vkUrl);
     if (!res.ok) throw new Error(`Cannot load VK: ${circuitName}_vk.json`);
     const txt = await res.text();
     return new TextEncoder().encode(txt);

@@ -7,6 +7,7 @@
 
 import { StrKey } from '@stellar/stellar-sdk';
 import { NoirService } from '../services/NoirService.js';
+import { getAssetPath } from '../utils/assetBase.js';
 
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
@@ -23,28 +24,15 @@ export function getContractId() {
   );
 }
 
-/** Base URL for ZK prover backend (option B: backend generates proof). */
+/** Base URL for ZK prover backend. Only from config (deployed page) or env — no localhost fallback to avoid errors on deploy. */
 export function getZkProverUrl() {
-  const envUrl =
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || '';
   const runtimeUrl =
     (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_ZK_PROVER_URL) || '';
-
-  // In local development, allow using a local prover, but don't force it.
-  // If a remote prover is configured (runtimeUrl), use it by default to avoid
-  // ERR_CONNECTION_REFUSED when localhost:3333 isn't running.
-  if (
-    typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  ) {
-    // Prefer runtime config.json even in dev; it avoids stale `.env` values
-    // like `http://localhost:3333` when that prover isn't running.
-    if (runtimeUrl) return runtimeUrl;
-    if (envUrl) return envUrl;
-    return 'http://localhost:3333';
-  }
-
-  return runtimeUrl || envUrl || 'https://cosmic-coder-zk-prover.onrender.com';
+  const envUrl =
+    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) || '';
+  if (runtimeUrl) return runtimeUrl;
+  if (envUrl) return envUrl;
+  return 'https://cosmic-coder-zk-prover.onrender.com';
 }
 
 /**
@@ -590,7 +578,7 @@ const toBigInt = (str) => {
 /**
  * TRUSTLESS LOCAL PROVER (like xray-games)
  * Generate ZK proof locally in browser without server dependency.
- * Requires snarkjs loaded and circuit artifacts in /circuits/build/
+ * Requires snarkjs loaded and circuit artifacts in public/circuits/build/
  * 
  * @param {{ run_hash_hi: string, run_hash_lo: string, score: number, wave: number, nonce: number, season_id?: number, used_zk_weapon?: number }} payload
  * @returns {Promise<{ proof: object, vk: object, pub_signals: string[] }>}
@@ -599,10 +587,10 @@ export async function generateLocalProof(payload) {
   // Dynamically import snarkjs for browser
   const snarkjs = await import('snarkjs');
   
-  // Circuit artifacts paths (served from /circuits/build/)
-  const wasmPath = '/circuits/build/GameRun_js/GameRun.wasm';
-  const zkeyPath = '/circuits/build/GameRun_final.zkey';
-  const vkeyPath = '/circuits/build/GameRun_vkey.json';
+  // Circuit artifacts paths (use asset base for GitHub Pages deploy)
+  const wasmPath = getAssetPath('circuits/build/GameRun_js/GameRun.wasm');
+  const zkeyPath = getAssetPath('circuits/build/GameRun_final.zkey');
+  const vkeyPath = getAssetPath('circuits/build/GameRun_vkey.json');
   
   // Build circuit input
   const input = {
