@@ -21,6 +21,17 @@ import { WEAPON_TYPE_CONFIG, getWeaponById } from '../config/weapons.js';
 import { validateGameRules, computeGameHash, generateRunSeed } from '../zk/gameProof.js';
 import * as BALANCE from '../config/balance.js';
 
+/** localStorage key: set to '1' once user has signed a ZK proof at least once. Weapon drops only allowed after that. */
+const STORAGE_HAS_SIGNED_ZK_ONCE = 'cosmicCoderHasSignedZkOnce';
+
+function hasSignedZkOnce() {
+  try {
+    return localStorage.getItem(STORAGE_HAS_SIGNED_ZK_ONCE) === '1';
+  } catch (_) {
+    return false;
+  }
+}
+
 export default class ArenaScene extends Phaser.Scene {
   constructor() {
     super({ key: 'ArenaScene' });
@@ -1038,9 +1049,20 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   createPlayer() {
-    // Use selected character (VibeCoder, Destroyer, Swordsman) — store for game over so death anim matches
+    // Use selected character (VibeCoder, VoidNull/destroyer, SyncStorm/swordsman) — store for game over so death anim matches
     const charId = progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
     this.playingCharacterId = charId;
+    // Store death keys now so game over always uses this character's animation (no fallback drift)
+    if (charId === 'destroyer') {
+      this.gameOverDeathSpriteKey = 'destroyer-death';
+      this.gameOverDeathAnimKey = 'destroyer-death';
+    } else if (charId === 'swordsman') {
+      this.gameOverDeathSpriteKey = 'swordsman-death';
+      this.gameOverDeathAnimKey = 'swordsman-death';
+    } else {
+      this.gameOverDeathSpriteKey = 'vibecoder-death';
+      this.gameOverDeathAnimKey = 'vibecoder-death';
+    }
     const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS.vibecoder;
     this.playerAnimPrefix = char.animPrefix;
 
@@ -3253,6 +3275,9 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   spawnWeaponDrop(x, y, forceRare = false) {
+    if (!this.weaponDrops) return;
+    // Weapon drops only after the player has signed a ZK proof at least once
+    if (!hasSignedZkOnce()) return;
     let weaponType;
     let textureKey;
     let isMelee = false;
@@ -3285,6 +3310,7 @@ export default class ArenaScene extends Phaser.Scene {
         isMelee = true;
       }
     }
+    if (!this.textures.exists(textureKey)) textureKey = 'weapon-spread';
 
     const drop = this.weaponDrops.create(x, y, textureKey);
     drop.weaponType = weaponType;
@@ -4322,10 +4348,10 @@ export default class ArenaScene extends Phaser.Scene {
         // Normal enemy death sound
         Audio.playEnemyDeath();
 
-        // Chance to drop weapon (10% base, higher for stronger enemies)
-        const dropChance = enemy.enemyType === 'bug' ? 0.08 :
-                           enemy.enemyType === 'glitch' ? 0.15 : 0.25;
-        if (Math.random() < dropChance) {
+        // Chance to drop weapon: base by type, fallback if enemyType missing; tuned so drops are noticeable
+        const type = enemy.enemyType || 'bug';
+        const dropChance = type === 'bug' ? 0.18 : type === 'glitch' ? 0.28 : 0.38;
+        if (Math.random() < dropChance && this.spawnWeaponDrop) {
           this.spawnWeaponDrop(enemy.x, enemy.y);
         }
 
@@ -4820,13 +4846,15 @@ export default class ArenaScene extends Phaser.Scene {
     gameOverContainer.add(rankLabelRef);
 
     // --- Phase 1: Death animation (standing → fall → lying on ground), freeze on last frame ---
-    const characterId = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
-    let deathSpriteKey = null;
-    let deathAnimKey = null;
-    if (characterId === 'destroyer') { deathSpriteKey = 'destroyer-death'; deathAnimKey = 'destroyer-death'; }
-    else if (characterId === 'swordsman') { deathSpriteKey = 'swordsman-death'; deathAnimKey = 'swordsman-death'; }
-    else if (characterId === 'vibecoder') { deathSpriteKey = 'vibecoder-death'; deathAnimKey = 'vibecoder-death'; }
-    else { deathSpriteKey = 'vibecoder-death'; deathAnimKey = 'vibecoder-death'; }
+    // Use keys stored at createPlayer() so we always show the character you actually played (VoidNull vs SyncStorm etc)
+    let deathSpriteKey = this.gameOverDeathSpriteKey ?? null;
+    let deathAnimKey = this.gameOverDeathAnimKey ?? null;
+    if (!deathSpriteKey || !deathAnimKey) {
+      const characterId = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
+      if (characterId === 'destroyer') { deathSpriteKey = 'destroyer-death'; deathAnimKey = 'destroyer-death'; }
+      else if (characterId === 'swordsman') { deathSpriteKey = 'swordsman-death'; deathAnimKey = 'swordsman-death'; }
+      else { deathSpriteKey = 'vibecoder-death'; deathAnimKey = 'vibecoder-death'; }
+    }
 
     let animDurationMs = 1200;
     const hasDeathTexture = deathSpriteKey && this.textures.exists(deathSpriteKey);
@@ -5124,6 +5152,8 @@ export default class ArenaScene extends Phaser.Scene {
               console.log('[ZK Submit V2] Stellar Expert:', `https://stellar.expert/explorer/testnet/tx/${finalTxHash}`);
             }
             try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
+            // Mark that user has signed ZK at least once — enables weapon drops from then on
+            try { localStorage.setItem(STORAGE_HAS_SIGNED_ZK_ONCE, '1'); } catch (_) {}
             // Refresh leaderboard now that the ZK proof is on-chain
             try { if (this._refreshGameOverLeaderboard) this._refreshGameOverLeaderboard(); } catch (_) {}
             clear();
@@ -5151,6 +5181,8 @@ export default class ArenaScene extends Phaser.Scene {
             try { zkStatusText.setText('Switch Freighter to Testnet, then try again. Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else if (this.zkContractMissing || msg.includes('not found') || msg.includes('404')) {
             try { zkStatusText.setText('ZK Contract not deployed. Using local leaderboard.').setAlpha(1); } catch (_) {}
+          } else if (msg.includes('txBadSeq') || msg.includes('Sequence number expired')) {
+            try { zkStatusText.setText('Sequence expired. Try submitting again (or refresh). Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else if (msg.includes('Cannot satisfy constraint')) {
             try { zkStatusText.setText('ZK circuit constraint failed (score >= wave*5?). Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else if (msg.includes('BigInt') || msg.includes('verification key')) {
@@ -5354,6 +5386,10 @@ export default class ArenaScene extends Phaser.Scene {
         errorTitle = '⚠️ ZK Contract Not Deployed';
         buttonText = '🔄 Retry When Contract is Deployed';
         errorMessage = 'The ZK smart contract is not currently deployed on testnet. Your score was saved locally.';
+      } else if (errorMessage.includes('txBadSeq') || errorMessage.includes('Sequence number expired')) {
+        errorTitle = '⚠️ Sequence Expired';
+        buttonText = '🔄 Try Again';
+        errorMessage = 'The transaction sequence expired (e.g. another tx was sent). Your score was saved locally. Click to retry submission.';
       } else if (errorMessage.includes('BigInt') || errorMessage.includes('verification key')) {
         errorTitle = '⚠️ ZK Backend Issue';
         buttonText = '🔄 Retry When Backend is Fixed';

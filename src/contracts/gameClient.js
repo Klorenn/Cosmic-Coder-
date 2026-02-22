@@ -111,11 +111,11 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
     ScInt,
   } = await import('@stellar/stellar-sdk');
   const server = await getServer();
-  const source = await server.getAccount(publicKey);
-  // Stellar SDK Account requires sequence as string (Horizon/RPC may return number)
-  const account = new Account(publicKey, String(source.sequence ?? '0'));
   const contract = new Contract(contractId);
   const op = contract.call(method, ...args);
+  // Fetch account immediately before build to use freshest sequence (reduces txBadSeq when signing is slow)
+  const source = await server.getAccount(publicKey);
+  const account = new Account(publicKey, String(source.sequence ?? '0'));
   const built = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: TESTNET_PASSPHRASE,
@@ -154,8 +154,12 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
   if (result.status === 'ERROR') {
     const errSwitch = result.errorResult?.result?._switch ?? result.errorResult?._attributes?.result?._switch;
     const isBadAuth = errSwitch?.name === 'txBadAuth' || String(safeJson(result)).includes('txBadAuth');
+    const isBadSeq = errSwitch?.name === 'txBadSeq' || String(safeJson(result)).includes('txBadSeq');
     const authHint = isBadAuth
       ? '\n\n[Cosmic Coder] txBadAuth: Make sure Freighter is set to **Stellar Testnet** (not Mainnet) and the connected account is the one signing.'
+      : '';
+    const seqHint = isBadSeq
+      ? '\n\n[Cosmic Coder] txBadSeq: Sequence number expired (e.g. another tx was sent). Please try submitting again.'
       : '';
     if (result.hash) {
       const txInfo = await waitForTx(server, result.hash, 20, 1000);
@@ -167,7 +171,8 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
           `tx_result=${txInfo.resultXdr || 'n/a'}\n` +
           `tx_result_meta=${txInfo.resultMetaXdr || 'n/a'}\n` +
           `tx_envelope=${txInfo.envelopeXdr || 'n/a'}` +
-          authHint
+          authHint +
+          seqHint
         );
       }
     }
@@ -186,7 +191,8 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
       ` hash=${result.hash || 'n/a'}` +
       ` errorResultXdr=${result.errorResultXdr || 'n/a'}\n` +
       `rpc_result=${safeJson(result)}` +
-      authHint
+      authHint +
+      seqHint
     );
   }
   return result;
