@@ -113,54 +113,46 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
   const server = await getServer();
   const contract = new Contract(contractId);
   const op = contract.call(method, ...args);
-  // Fetch account immediately before build to use freshest sequence (reduces txBadSeq when signing is slow)
-  const source = await server.getAccount(publicKey);
-  const account = new Account(publicKey, String(source.sequence ?? '0'));
-  const built = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: TESTNET_PASSPHRASE,
-  })
-    .addOperation(op)
-    .setTimeout(TX_VALIDITY_SECONDS)
-    .build();
 
-  // Surface detailed host/contract errors early (before signing/sending).
-  const sim = await server.simulateTransaction(built);
-  if (sim?.error) {
-    throw new Error(
-      `[simulate:${method}] ${sim.error}\n` +
-      `result=${safeJson(sim.result)}\n` +
-      `events=${safeJson(sim.events)}`
-    );
-  }
-
-  const prepared = await server.prepareTransaction(built);
-  // Always pass network so Freighter signs for Testnet (avoids txBadAuth when user has Mainnet selected)
-  const signedXdr = await signTransaction(prepared.toXDR(), TESTNET_PASSPHRASE);
-  const tx = TransactionBuilder.fromXDR(signedXdr, TESTNET_PASSPHRASE);
-  const result = await server.sendTransaction(tx);
-  if (result.status === 'PENDING' && result.hash) {
-    const txInfo = await waitForTx(server, result.hash, 20, 1000);
-    const finalStatus = String(txInfo?.status || '').toUpperCase();
-    if (finalStatus === 'SUCCESS') {
-      return txInfo;
+  const buildSignSend = async () => {
+    const source = await server.getAccount(publicKey);
+    const account = new Account(publicKey, String(source.sequence ?? '0'));
+    const built = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: TESTNET_PASSPHRASE,
+    })
+      .addOperation(op)
+      .setTimeout(TX_VALIDITY_SECONDS)
+      .build();
+    const sim = await server.simulateTransaction(built);
+    if (sim?.error) {
+      throw new Error(
+        `[simulate:${method}] ${sim.error}\n` +
+        `result=${safeJson(sim.result)}\n` +
+        `events=${safeJson(sim.events)}`
+      );
     }
-    throw new Error(
-      `[send:${method}] status=PENDING->${finalStatus || 'UNKNOWN'} hash=${result.hash}\n` +
-      `rpc_result=${safeJson(result)}\n` +
-      `tx_info=${safeJson(txInfo)}`
-    );
-  }
-  if (result.status === 'ERROR') {
-    const errSwitch = result.errorResult?.result?._switch ?? result.errorResult?._attributes?.result?._switch;
-    const isBadAuth = errSwitch?.name === 'txBadAuth' || String(safeJson(result)).includes('txBadAuth');
-    const isBadSeq = errSwitch?.name === 'txBadSeq' || String(safeJson(result)).includes('txBadSeq');
-    const authHint = isBadAuth
-      ? '\n\n[Cosmic Coder] txBadAuth: Make sure Freighter is set to **Stellar Testnet** (not Mainnet) and the connected account is the one signing.'
-      : '';
-    const seqHint = isBadSeq
-      ? '\n\n[Cosmic Coder] txBadSeq: Sequence number expired (e.g. another tx was sent). Please try submitting again.'
-      : '';
+    const prepared = await server.prepareTransaction(built);
+    const signedXdr = await signTransaction(prepared.toXDR(), TESTNET_PASSPHRASE);
+    const tx = TransactionBuilder.fromXDR(signedXdr, TESTNET_PASSPHRASE);
+    return server.sendTransaction(tx);
+  };
+
+  const throwError = async (result, authHint, seqHint) => {
+    let decoded = '';
+    if (result.errorResultXdr) {
+      try {
+        const tr = xdr.TransactionResult.fromXDR(result.errorResultXdr, 'base64');
+        decoded = ` txResult=${tr.result().switch().name}`;
+      } catch (_) {}
+    }
+    const baseMsg =
+      `[send:${method}] status=ERROR` +
+      decoded +
+      ` hash=${result.hash || 'n/a'}\n` +
+      `rpc_result=${safeJson(result)}` +
+      authHint +
+      seqHint;
     if (result.hash) {
       const txInfo = await waitForTx(server, result.hash, 20, 1000);
       if (txInfo) {
@@ -176,26 +168,46 @@ async function invoke(contractId, method, args, publicKey, signTransaction) {
         );
       }
     }
-    let decoded = '';
-    if (result.errorResultXdr) {
-      try {
-        const tr = xdr.TransactionResult.fromXDR(result.errorResultXdr, 'base64');
-        decoded = ` txResult=${tr.result().switch().name}`;
-      } catch (_) {
-        decoded = '';
-      }
+    throw new Error(baseMsg);
+  };
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const result = await buildSignSend();
+
+    if (result.status === 'PENDING' && result.hash) {
+      const txInfo = await waitForTx(server, result.hash, 20, 1000);
+      const finalStatus = String(txInfo?.status || '').toUpperCase();
+      if (finalStatus === 'SUCCESS') return txInfo;
+      throw new Error(
+        `[send:${method}] status=PENDING->${finalStatus || 'UNKNOWN'} hash=${result.hash}\n` +
+        `rpc_result=${safeJson(result)}\n` +
+        `tx_info=${safeJson(txInfo)}`
+      );
     }
-    throw new Error(
-      `[send:${method}] status=ERROR` +
-      `${decoded}` +
-      ` hash=${result.hash || 'n/a'}` +
-      ` errorResultXdr=${result.errorResultXdr || 'n/a'}\n` +
-      `rpc_result=${safeJson(result)}` +
-      authHint +
-      seqHint
-    );
+
+    if (result.status === 'ERROR') {
+      const errSwitch = result.errorResult?.result?._switch ?? result.errorResult?._attributes?.result?._switch;
+      const isBadAuth = errSwitch?.name === 'txBadAuth' || String(safeJson(result)).includes('txBadAuth');
+      const isBadSeq = errSwitch?.name === 'txBadSeq' || String(safeJson(result)).includes('txBadSeq');
+      const authHint = isBadAuth
+        ? '\n\n[Cosmic Coder] txBadAuth: Make sure Freighter is set to **Stellar Testnet** (not Mainnet) and the connected account is the one signing.'
+        : '';
+      const seqHint = isBadSeq
+        ? '\n\n[Cosmic Coder] txBadSeq: Sequence number expired (e.g. another tx was sent). Please try submitting again.'
+        : '';
+      if (isBadSeq && attempt === 0) {
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[Cosmic Coder] txBadSeq on first attempt; retrying once with fresh sequence (you may need to sign again in Freighter).');
+        }
+        continue;
+      }
+      await throwError(result, authHint, seqHint);
+    }
+
+    return result;
   }
-  return result;
+
+  throw new Error(`[send:${method}] unexpected: no result after retry`);
 }
 
 /**

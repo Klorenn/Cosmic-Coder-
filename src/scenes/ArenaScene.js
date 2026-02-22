@@ -14,6 +14,7 @@ import LeaderboardManager from '../systems/LeaderboardManager.js';
 import { getRankById, getRankName, getRankBonus, isUnranked } from '../systems/RankManager.js';
 import { t, getBarks } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
+import * as authApi from '../utils/authApi.js';
 import { progressStore, saveProgressToWallet, persistIfWalletConnected } from '../utils/walletProgressService.js';
 import * as gameClient from '../contracts/gameClient.js';
 import * as weaponClient from '../contracts/weaponClient.js';
@@ -4527,30 +4528,36 @@ export default class ArenaScene extends Phaser.Scene {
     const runWave = this.waveNumber;
     const runDate = Date.now();
     LeaderboardManager.addEntry(localName, runWave, runScore);
-    stellarWallet.getAddress().then((addr) => {
-      if (addr) {
-        // Persist ranked-history locally so returning players always get the ZK starter drop
-        // even if on-chain queries/API are temporarily unavailable.
-        try {
-          if (this.gameMode === 'zk_ranked') {
-            const raw = localStorage.getItem('cosmicCoderRankedHistory');
-            const map = raw ? JSON.parse(raw) : {};
-            map[addr] = true;
-            localStorage.setItem('cosmicCoderRankedHistory', JSON.stringify(map));
-          }
-        } catch (_) {}
+    stellarWallet.getAddress().then(async (addr) => {
+      if (!addr) return;
+      // Prefer backend username (e.g. Kl0ren) over character name for leaderboard submission
+      let nameToSubmit = localName;
+      try {
+        const me = await authApi.getMe();
+        if (me && me.username && String(me.username).trim()) {
+          nameToSubmit = String(me.username).trim().slice(0, 20);
+        }
+      } catch (_) {}
+      // Persist ranked-history locally so returning players always get the ZK starter drop
+      try {
+        if (this.gameMode === 'zk_ranked') {
+          const raw = localStorage.getItem('cosmicCoderRankedHistory');
+          const map = raw ? JSON.parse(raw) : {};
+          map[addr] = true;
+          localStorage.setItem('cosmicCoderRankedHistory', JSON.stringify(map));
+        }
+      } catch (_) {}
 
-        try {
-          const entries = LeaderboardManager.load();
-          const idx = entries.findIndex((e) => e && e.score === runScore && e.wave === runWave && (runDate - (e.date || 0)) < 5000);
-          if (idx >= 0) {
-            entries[idx].name = localName.slice(0, 20);
-            LeaderboardManager.save(entries);
-          }
-        } catch (_) {}
-        LeaderboardManager.submitOnChain(addr, runWave, runScore, localName).catch(() => {});
-        LeaderboardManager.incrementLocalGamesPlayed(addr);
-      }
+      try {
+        const entries = LeaderboardManager.load();
+        const idx = entries.findIndex((e) => e && e.score === runScore && e.wave === runWave && (runDate - (e.date || 0)) < 5000);
+        if (idx >= 0) {
+          entries[idx].name = nameToSubmit.slice(0, 20);
+          LeaderboardManager.save(entries);
+        }
+      } catch (_) {}
+      LeaderboardManager.submitOnChain(addr, runWave, runScore, nameToSubmit).catch(() => {});
+      LeaderboardManager.incrementLocalGamesPlayed(addr);
     }).catch(() => {});
 
     // Award currency (BITS) based on performance (balance.js: más difícil conseguir)
@@ -4654,6 +4661,13 @@ export default class ArenaScene extends Phaser.Scene {
       let addr = null;
       try { addr = await stellarWallet.getAddress(); } catch (_) {}
       const currentPlayerName = playerNameFromSettings();
+      let currentUserDisplayName = currentPlayerName;
+      try {
+        const me = await authApi.getMe();
+        if (me && me.username && String(me.username).trim()) {
+          currentUserDisplayName = String(me.username).trim().slice(0, 18);
+        }
+      } catch (_) {}
 
       let entries = [];
       let source = 'none';
@@ -4704,7 +4718,7 @@ export default class ArenaScene extends Phaser.Scene {
         }
       }
 
-      // 2) API leaderboard (same as menu fallback)
+      // 2) API leaderboard (backend/Supabase — same source for everyone; no local/Anonymous list)
       if (entries.length === 0) {
         try {
           const apiList = await LeaderboardManager.fetchOnChain();
@@ -4720,30 +4734,8 @@ export default class ArenaScene extends Phaser.Scene {
         } catch (_) {}
       }
 
-      // 3) Local — only real plays (score > 0), one entry per player (best score per name)
-      if (entries.length === 0) {
-        const rawLocal = LeaderboardManager.getTop(15).filter((e) => (Number(e.score ?? 0) || 0) > 0);
-        const byName = new Map();
-        rawLocal.forEach((e) => {
-          const nameKey = (e.name || '').trim().toLowerCase() || 'anonymous';
-          const score = Number(e.score ?? 0) || 0;
-          const existing = byName.get(nameKey);
-          if (!existing || score > (Number(existing.score ?? 0) || 0)) byName.set(nameKey, { ...e, name: (e.name || '').trim() || 'Anonymous' });
-        });
-        const local = Array.from(byName.values());
-        if (local.length > 0) {
-          entries = local.map((e) => ({
-            player: e.name,
-            score: e.score ?? 0,
-            wave: e.wave ?? 0,
-            displayName: (e.name || 'Anonymous').slice(0, 18)
-          }));
-          source = 'local';
-        }
-      }
-
-      // Only show entries that really played (score > 0); dedupe by wallet for on-chain/API
-      if (source !== 'local' && entries.length > 0) {
+      // Only on-chain/API leaderboard — no local fallback so we never show Anonymous
+      if (entries.length > 0) {
         const byPlayer = new Map();
         const normAddr = (a) => (a || '').toLowerCase().trim();
         entries.forEach((e) => {
@@ -4761,9 +4753,11 @@ export default class ArenaScene extends Phaser.Scene {
       const currentAddr = normalizeAddr(addr || '');
       const isYouEntry = (e) => {
         if (currentAddr && typeof e.player === 'string' && e.player.length > 30) return normalizeAddr(e.player) === currentAddr;
-        if (source === 'local') return (e.player || '').trim() === currentPlayerName.trim();
         return currentAddr && normalizeAddr(e.player) === currentAddr;
       };
+      entries.forEach((e) => {
+        if (isYouEntry(e)) e.displayName = currentUserDisplayName || e.displayName;
+      });
       let myRank = null;
       const idx = entries.findIndex(isYouEntry);
       if (idx >= 0) myRank = idx + 1;
@@ -4773,7 +4767,7 @@ export default class ArenaScene extends Phaser.Scene {
       try { leaderboardLoading?.destroy(); } catch (_) {}
 
       if (entries.length === 0) {
-        const msg = 'Play to rank!';
+        const msg = 'Connect wallet and play to appear on the leaderboard.';
         const noRank = this.add.text(leaderboardLeftX + 12, leaderboardTopY + 40, msg, {
           fontFamily: 'monospace', fontSize: rankFontSize, color: '#555555',
           wordWrap: { width: leaderboardWidth - 24 }
@@ -4784,7 +4778,7 @@ export default class ArenaScene extends Phaser.Scene {
       }
 
       const rankStartY = leaderboardTopY + 44;
-      const sourceLabel = source === 'ranked' ? 'ON-CHAIN' : source === 'casual' ? 'CASUAL' : source === 'api' ? 'SCORE' : 'LOCAL';
+      const sourceLabel = source === 'ranked' ? 'ON-CHAIN' : source === 'casual' ? 'CASUAL' : 'SCORE';
       const srcText = this.add.text(leaderboardLeftX + leaderboardWidth - 12, leaderboardTopY + 14, sourceLabel, {
         fontFamily: 'monospace', fontSize: `${Math.round(10 * uiScale)}px`, color: '#555577'
       }).setOrigin(1, 0);
@@ -5176,7 +5170,10 @@ export default class ArenaScene extends Phaser.Scene {
           const msg = e?.message || '';
           const isChunk404 = msg.includes('Failed to fetch dynamically imported module') || msg.includes('dynamically imported module');
           if (isChunk404) {
-            try { zkStatusText.setText('New version deployed. Please refresh the page (Ctrl+Shift+R or Cmd+Shift+R).').setAlpha(1); } catch (_) {}
+            console.warn('[Cosmic Coder] ZK chunk 404 (stale cache). Hard refresh. Prover URL:', gameClient.getZkProverUrl());
+            try {
+              zkStatusText.setText('Hard refresh to load ZK (Ctrl+Shift+R). Prover: cosmic-coder-zk-prover.onrender.com').setAlpha(1);
+            } catch (_) {}
           } else if (msg.includes('Freighter is on') || msg.includes('txBadAuth') || msg.includes('Stellar Testnet')) {
             try { zkStatusText.setText('Switch Freighter to Testnet, then try again. Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else if (this.zkContractMissing || msg.includes('not found') || msg.includes('404')) {

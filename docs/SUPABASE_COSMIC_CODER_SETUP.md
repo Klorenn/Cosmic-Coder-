@@ -86,3 +86,31 @@ Si en algún momento quieres usar **DATABASE_URL** en lugar del cliente Supabase
 - Contraseña: la que te dio Supabase al crear el proyecto.
 
 **Importante:** no pongas la contraseña en el código ni la subas a Git. Solo en variables de entorno (p. ej. en Render como **Secret**). Para Cosmic Coder, con **SUPABASE_URL + SUPABASE_ANON_KEY** basta; no hace falta `DATABASE_URL` si ya usas el cliente Supabase.
+
+---
+
+## 5. (Recomendado) Leaderboard en Supabase
+
+Para que el ranking esté siempre activo y visible para todos (incluso sin login), el backend que sirve `GET/POST /leaderboard` (p. ej. cosmic-coder.onrender.com o cosmic-coder-zk-prover) debería persistir las entradas en Supabase. Ejemplo de tabla:
+
+```sql
+CREATE TABLE IF NOT EXISTS public.cosmic_coder_leaderboard (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  address      VARCHAR(56) NOT NULL,
+  name         VARCHAR(64) NULL,
+  score        BIGINT NOT NULL DEFAULT 0,
+  wave         INT NOT NULL DEFAULT 0,
+  games_played INT NOT NULL DEFAULT 0,
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS cosmic_coder_leaderboard_score_idx
+  ON public.cosmic_coder_leaderboard (score DESC);
+
+ALTER TABLE public.cosmic_coder_leaderboard ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public read for leaderboard"
+  ON public.cosmic_coder_leaderboard FOR SELECT USING (true);
+```
+
+El backend debe: en `POST /leaderboard` hacer upsert por `address` (actualizar name, score, wave, games_played); en `GET /leaderboard` devolver las entradas ordenadas por score. Así el frontend solo muestra este ranking y no existe un leaderboard local con "Anonymous".

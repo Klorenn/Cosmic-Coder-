@@ -1,7 +1,8 @@
 /**
- * LeaderboardManager - Local + on-chain (wallet identity).
- * With wallet: submit and fetch from API (Stellar address = identity).
- * Without: local-only fallback.
+ * LeaderboardManager - Single on-chain/API leaderboard (no local/Anonymous list).
+ * Submit and fetch from backend API (Stellar address = identity). Everyone can view
+ * the same leaderboard without logging in. Backend should persist to Supabase so
+ * results are always active (see docs/SUPABASE_COSMIC_CODER_SETUP.md).
  */
 const STORAGE_KEY = 'cosmicCoderLeaderboard';
 const LOCAL_GAMES_KEY = 'cosmicCoderGamesPlayed';
