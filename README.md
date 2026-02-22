@@ -134,24 +134,6 @@ So: **Stellar** provides the chain and the Game Hub session lifecycle; **ZK** en
 
 **Local setup for full ZK flow:** Set `VITE_COSMIC_CODER_CONTRACT_ID` and `VITE_ZK_PROVER_URL` (e.g. to your prover backend), run the prover, then connect wallet and play. See [docs/DEPLOY_ZK_STEPS.md](docs/DEPLOY_ZK_STEPS.md) and [docs/HACKATHON_DO_THIS.md](docs/HACKATHON_DO_THIS.md).
 
----
-
-## AI Coding Tool Integration
-
-Connect the game to your IDE or AI coding tools for live XP:
-
-| Tool | Hook | Bonus XP |
-|------|------|----------|
-| Claude Code | `hooks/claude-code-hook.sh` | +15 |
-| Codex | `hooks/codex-hook.sh` | +12 |
-| Gemini | `hooks/gemini-hook.sh` | +12 |
-| Cursor | `hooks/cursor-hook.sh` | +10 |
-| Generic | `hooks/vibe-coder-hook.sh` | +8 |
-
-See [Setup Guide](./SETUP.md) for configuration.
-
----
-
 ## Project Structure
 
 ```
