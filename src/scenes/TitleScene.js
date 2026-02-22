@@ -3355,8 +3355,7 @@ export default class TitleScene extends Phaser.Scene {
     // === DESCRIPTION AREA ===
     const descTop = infoSectionTop + 92;
     const descMaxWidth = panelW - padding * 2;
-    
-    // Description text - single block
+
     let descCursorY = descTop;
     const descFullText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.description').replace(/\n/g, ' '), {
       fontFamily: 'monospace',
@@ -3367,7 +3366,6 @@ export default class TitleScene extends Phaser.Scene {
     container.add(descFullText);
     descCursorY += descFullText.height + 10;
 
-    // === ZK WEAPON HINT ===
     const weaponHintText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.zk_weapon_hint'), {
       fontFamily: 'monospace',
       fontSize: fs(11),

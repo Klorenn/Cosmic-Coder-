@@ -335,6 +335,7 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   spawnSpecificWeaponDropNearPlayer(weaponType, dx = 48, dy = 0) {
+    if (!hasSignedZkOnce()) return;
     if (!this.player || !this.weaponDrops) return;
     const x = this.player.x + dx;
     const y = this.player.y + dy;
@@ -376,8 +377,8 @@ export default class ArenaScene extends Phaser.Scene {
       repeat: -1
     });
 
-    // ZK pickup prompt (shown when player is close; pickup requires pressing E)
-    const prompt = this.add.text(x, y - 44, '🔫 ZK WEAPON\nPRESS E', {
+    // ZK pickup prompt (only shown when proof verified; pickup requires pressing E)
+    const prompt = this.add.text(x, y - 44, t('zk_popup.zk_weapon_pickup_prompt'), {
       fontFamily: 'monospace',
       fontSize: '12px',
       color: '#00ffff',
@@ -486,11 +487,13 @@ export default class ArenaScene extends Phaser.Scene {
         const displayScore = (stats.bestScore != null && stats.bestScore > 0) ? stats.bestScore : (progressStore.highScore ?? 0);
         if (displayScore >= 10 && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
 
-        // Spawn best unlocked ZK weapon as drop next to player (press E to pick up)
+        // Spawn best unlocked ZK weapon as drop only if account has completed ZK proof (hash on-chain)
         const weaponType = this.getZkWeaponTypeFromUnlocked(unlockedWeapons);
-        if (weaponType && weaponType !== 'basic') {
-          console.log('[ZK Startup] Dropping ZK weapon (unlocked):', weaponType);
+        if (weaponType && weaponType !== 'basic' && hasSignedZkOnce()) {
+          console.log('[ZK Startup] Dropping ZK weapon (proof verified):', weaponType);
           this.spawnSpecificWeaponDropNearPlayer(weaponType, 52, 0);
+        } else if (weaponType && weaponType !== 'basic' && !hasSignedZkOnce()) {
+          console.log('[ZK Startup] ZK weapon not dropped — complete a ZK proof first');
         } else {
           console.log('[ZK Startup] No ZK weapon unlocked beyond starter');
         }
@@ -719,10 +722,10 @@ export default class ArenaScene extends Phaser.Scene {
     if (!this.isContinuedGame && this.gameMode === 'zk_ranked') {
       this.startZkRankedStartup();
     } else {
-      // Casual: spawn ZK weapon drop next to player if Shotgun unlocked (score >= 10)
+      // Casual: spawn ZK weapon drop only if Shotgun unlocked (score >= 10) AND account completed ZK proof
       if (!this.isContinuedGame && this.gameMode === 'casual') {
         const score = progressStore.highScore ?? 0;
-        if (score >= 10 && this.textures.exists('weapon-spread')) {
+        if (score >= 10 && this.textures.exists('weapon-spread') && hasSignedZkOnce()) {
           this.spawnSpecificWeaponDropNearPlayer('spread', 52, 0);
         }
       }
@@ -6281,7 +6284,7 @@ export default class ArenaScene extends Phaser.Scene {
         }
       }
 
-      if (nearestZkDrop && nearestDist <= 70 && Phaser.Input.Keyboard.JustDown(this.zkPickupKey)) {
+      if (nearestZkDrop && nearestDist <= 70 && hasSignedZkOnce() && Phaser.Input.Keyboard.JustDown(this.zkPickupKey)) {
         nearestZkDrop.zkForcePickup = true;
         this.pickupWeapon(this.player, nearestZkDrop);
       }
