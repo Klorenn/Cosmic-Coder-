@@ -1,16 +1,18 @@
 import Phaser from 'phaser';
 import { getAssetPath, getAssetBase } from '../utils/assetBase.js';
 
-/** Resolve base path for background assets (uses shared getAssetBase for GitHub Pages). */
+/** Resolve base path for background assets (uses shared getAssetBase for GitHub Pages). Always absolute so loader resolves from origin. */
 function getBackgroundBase() {
   const base = getAssetBase();
-  return (base ? base + '/' : '') + 'assets/backgrounds/blue';
+  const path = 'assets/backgrounds/blue';
+  return base ? base + '/' + path : '/' + path;
 }
 
 /** Base path for arena (gameplay) space backgrounds. */
 function getArenaBackgroundBase() {
   const base = getAssetBase();
-  return (base ? base + '/' : '') + 'assets/backgrounds/arena';
+  const path = 'assets/backgrounds/arena';
+  return base ? base + '/' + path : '/' + path;
 }
 
 export default class BootScene extends Phaser.Scene {
@@ -252,14 +254,14 @@ export default class BootScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      console.warn('[BootScene] Skipping robot-enabling animation — texture missing');
+      console.debug('[BootScene] Skipping robot-enabling animation — texture missing');
     }
   
     // Destroyer - player-destroyer
     if (this.textures.exists('player-destroyer') && this.textures.exists('destroyer-hurt')) {
       this.registerCharacterAnimations('player-destroyer', 'destroyer-hurt');
     } else {
-      console.warn('[BootScene] Skipping player-destroyer animations — textures missing');
+      console.debug('[BootScene] Skipping player-destroyer animations — textures missing');
     }
 
     // VoidNull/Destroyer death animation (game over): 4 frames (512×128)
@@ -282,7 +284,7 @@ export default class BootScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      console.warn('[BootScene] Skipping destroyer-enabling animation — texture missing');
+      console.debug('[BootScene] Skipping destroyer-enabling animation — texture missing');
     }
 
     // SyncStorm/Swordsman death animation (game over): 4 frames (512×128)
@@ -305,14 +307,14 @@ export default class BootScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      console.warn('[BootScene] Skipping swordsman-enabling animation — texture missing');
+      console.debug('[BootScene] Skipping swordsman-enabling animation — texture missing');
     }
 
     // Swordsman - player-swordsman
     if (this.textures.exists('player-swordsman') && this.textures.exists('swordsman-hurt')) {
       this.registerCharacterAnimations('player-swordsman', 'swordsman-hurt');
     } else {
-      console.warn('[BootScene] Skipping player-swordsman animations — textures missing');
+      console.debug('[BootScene] Skipping player-swordsman animations — textures missing');
     }
 
     // Bug enemy (werewolf sprite) - Run has 9 frames

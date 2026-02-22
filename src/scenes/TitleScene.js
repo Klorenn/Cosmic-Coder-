@@ -878,9 +878,10 @@ export default class TitleScene extends Phaser.Scene {
 
   updateZkBadge(status) {
     if (!this.zkBadge || !this.zkBadge.scene) return;
+    this.zkBadge.setVisible(true);
     if (!status.configured) {
-      // Hide ZK badge when not configured
-      this.zkBadge.setVisible(false);
+      this.zkBadge.setText('ZK: OFF');
+      this.zkBadge.setColor('#888888');
     } else if (status.proverHealthy) {
       this.zkBadge.setVisible(true);
       this.zkBadge.setText('ZK: READY');

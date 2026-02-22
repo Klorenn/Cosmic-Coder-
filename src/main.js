@@ -108,7 +108,10 @@ function getStatusOverlay() {
 
 function setOverlayText(text) {
   const el = getStatusOverlay();
-  if (el) el.textContent = String(text || '');
+  if (!el) return;
+  const s = String(text || '').trim();
+  el.textContent = s;
+  el.style.display = s ? 'block' : 'none';
 }
 
 // Meta-progression upgrades (persistent across runs)
@@ -540,11 +543,7 @@ function startGame() {
     // Agregar listeners para manejar errores de renderizado
     game.events.on('ready', () => {
       console.log('✅ Juego listo y renderizando');
-      setOverlayText('Running');
-      // Hide status overlay after a short delay (guard: time may not be ready on texturesReady path)
-      if (game.time && typeof game.time.delayedCall === 'function') {
-        game.time.delayedCall(2500, () => setOverlayText(''));
-      }
+      setOverlayText('');
     });
     
     game.events.on('resize', (gameSize) => {
