@@ -54,19 +54,35 @@ export function clearStoredToken() {
   } catch (_) {}
 }
 
+/** Timeout for auth fetch (challenge/token) to avoid infinite loading. */
+const AUTH_FETCH_TIMEOUT_MS = 15000;
+
+function fetchWithTimeout(url, options = {}, timeoutMs = AUTH_FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), timeoutMs);
+  return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(id));
+}
+
 /**
  * 1. Request challenge from backend (SEP-10 GET challenge).
  * @param {string} account - Stellar public key (G...)
+ * @param {number} [timeoutMs] - Request timeout (default 15s)
  * @returns {Promise<{ transaction: string, network_passphrase: string }>}
  */
-export async function getChallenge(account) {
+export async function getChallenge(account, timeoutMs = AUTH_FETCH_TIMEOUT_MS) {
   const base = getApiBase();
   const standardUrl = `${base}/auth?account=${encodeURIComponent(account)}`;
-  let res = await fetch(standardUrl, { method: 'GET', credentials: 'omit' });
+  let res;
+  try {
+    res = await fetchWithTimeout(standardUrl, { method: 'GET', credentials: 'omit' }, timeoutMs);
+  } catch (e) {
+    if (e?.name === 'AbortError') throw new Error('El servidor no respondió a tiempo. Intenta de nuevo.');
+    throw e;
+  }
   // Backward-compat fallback for older backends
   if (res.status === 404 || res.status === 405) {
     const legacyUrl = `${base}/auth/challenge?account=${encodeURIComponent(account)}`;
-    res = await fetch(legacyUrl, { method: 'GET', credentials: 'omit' });
+    res = await fetchWithTimeout(legacyUrl, { method: 'GET', credentials: 'omit' }, timeoutMs);
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -79,26 +95,29 @@ export async function getChallenge(account) {
 /**
  * 2. Submit signed challenge to backend (SEP-10 POST token).
  * @param {string} signedTransactionXdr - Base64 signed challenge from Freighter
+ * @param {number} [timeoutMs] - Request timeout (default 15s)
  * @returns {Promise<{ token: string, public_key: string }>}
  */
-export async function postToken(signedTransactionXdr) {
+export async function postToken(signedTransactionXdr, timeoutMs = AUTH_FETCH_TIMEOUT_MS) {
   const base = getApiBase();
   const standardUrl = `${base}/auth`;
-  let res = await fetch(standardUrl, {
+  const postOpts = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ transaction: signedTransactionXdr }),
     credentials: 'omit'
-  });
+  };
+  let res;
+  try {
+    res = await fetchWithTimeout(standardUrl, postOpts, timeoutMs);
+  } catch (e) {
+    if (e?.name === 'AbortError') throw new Error('El servidor no respondió a tiempo. Intenta de nuevo.');
+    throw e;
+  }
   // Backward-compat fallback for older backends
   if (res.status === 404 || res.status === 405) {
     const legacyUrl = `${base}/auth/token`;
-    res = await fetch(legacyUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ transaction: signedTransactionXdr }),
-      credentials: 'omit'
-    });
+    res = await fetchWithTimeout(legacyUrl, postOpts, timeoutMs);
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -158,6 +177,7 @@ export async function updateMeUsername(username) {
 
 /**
  * Full SEP-10 login: get challenge → sign with signTransaction → post token → store JWT.
+ * All steps are time-bounded so the UI never hangs indefinitely.
  * @param {string} publicKey - From Freighter (getAddress)
  * @param {function(string, string): Promise<string>} signTransaction - (xdr, networkPassphrase) => signedXdr
  * @param {object} [options] - Optional settings
@@ -165,14 +185,14 @@ export async function updateMeUsername(username) {
  * @returns {Promise<{ token: string, public_key: string }>}
  */
 export async function loginWithSep10(publicKey, signTransaction, options = {}) {
-  const timeoutMs = options.timeoutMs || 60000;
+  const signTimeoutMs = options.timeoutMs || 60000;
+
   const { transaction, network_passphrase } = await getChallenge(publicKey);
 
-  // Wrap signTransaction with timeout to prevent UI from getting stuck
   const signWithTimeout = Promise.race([
     signTransaction(transaction, network_passphrase),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Signing timeout - please try again')), timeoutMs)
+      setTimeout(() => reject(new Error('Firma cancelada o Freighter no respondió. Intenta de nuevo.')), signTimeoutMs)
     )
   ]);
 

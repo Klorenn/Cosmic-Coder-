@@ -557,14 +557,22 @@ export default class TitleScene extends Phaser.Scene {
         this.hideUsernameModal();
       } else {
         this.walletBtn.setText('...');
-        const addr = await stellarWallet.connect();
+        let addr = null;
+        let connectErrorMsg = null;
+        try {
+          addr = await stellarWallet.connect({ timeoutMs: 20000 });
+        } catch (e) {
+          addr = null;
+          connectErrorMsg = e?.message || null;
+        }
         if (addr) {
           await loadProgressForWallet(addr);
           this.updateContinueMenuOption();
-          // SEP-10: authenticate with backend (challenge → sign with Freighter → token). Session is server-verified.
+          // SEP-10: only mark as connected after user SIGNS (not just after opening Freighter).
           this.walletBtn.setText(t('auth.sign_prompt'));
           try {
-            await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase), { timeoutMs: 60000 });
+            await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase, addr), { timeoutMs: 60000 });
+            stellarWallet.confirmConnection(addr);
             const me = await authApi.getMe();
             if (me && (me.username == null || me.username === '')) {
               this.showUsernameModal();
@@ -575,12 +583,17 @@ export default class TitleScene extends Phaser.Scene {
             if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
           }
         }
-        // Always update UI state after connection attempt (success or failure)
         this.updateWalletButton();
         this.updateConnectionBadge();
         if (!addr && this.sayQuote) {
-          const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
-          this.sayQuote(t(isMobile ? 'footer.wallet_error_mobile' : 'footer.wallet_error'));
+          if (connectErrorMsg === 'FREIGHTER_TIMEOUT') {
+            this.sayQuote(t('auth.connect_timeout'));
+          } else if (connectErrorMsg) {
+            this.sayQuote(connectErrorMsg);
+          } else {
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+            this.sayQuote(t(isMobile ? 'footer.wallet_error_mobile' : 'footer.wallet_error'));
+          }
         }
       }
     });

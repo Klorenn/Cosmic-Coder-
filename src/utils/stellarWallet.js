@@ -32,24 +32,44 @@ export async function isFreighterAvailable() {
   }
 }
 
+/** Default timeout for connect (ms) – avoids infinite hang if extension is slow. */
+const CONNECT_TIMEOUT_MS = 20000;
+
 /**
  * Connect wallet: asks Freighter for access and returns the address.
- * @returns {Promise<string|null>} address or null if user denied / not installed
+ * Does NOT persist: call confirmConnection(addr) only after the user has signed (e.g. SEP-10 login).
+ * @param {object} [options]
+ * @param {number} [options.timeoutMs=20000] - Max wait for Freighter; after this, returns null.
+ * @returns {Promise<string|null>} address or null if user denied / closed popup / not installed / timeout
  */
-export async function connect() {
+export async function connect(options = {}) {
+  const timeoutMs = options.timeoutMs ?? CONNECT_TIMEOUT_MS;
   try {
-    const res = await Freighter.requestAccess();
+    const accessPromise = Freighter.requestAccess();
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('FREIGHTER_TIMEOUT')), timeoutMs)
+    );
+    const res = await Promise.race([accessPromise, timeoutPromise]);
     const address = res?.address || res?.publicKey;
     if (res?.error || !address) return null;
-    cachedAddress = address;
-    try {
-      localStorage.setItem(STORAGE_KEY, address);
-    } catch (_) {}
+    // Do NOT set cachedAddress here – only after user has signed (confirmConnection).
     return address;
   } catch (e) {
     console.warn('Freighter requestAccess failed:', e);
     return null;
   }
+}
+
+/**
+ * Mark wallet as connected and persist address. Call this only after the user has signed
+ * (e.g. after SEP-10 login succeeds). Until then, connect() only returns an address.
+ */
+export function confirmConnection(address) {
+  if (!address) return;
+  cachedAddress = address;
+  try {
+    localStorage.setItem(STORAGE_KEY, address);
+  } catch (_) {}
 }
 
 /**
@@ -130,10 +150,11 @@ export const STELLAR_TESTNET_PASSPHRASE = TESTNET_PASSPHRASE;
  * Sign a transaction XDR (for Soroban / Game Hub).
  * @param {string} xdr - base64 transaction XDR
  * @param {string} [networkPassphrase] - default testnet
+ * @param {string} [address] - optional; use this address to sign (e.g. from connect() before confirmConnection)
  * @returns {Promise<string>} signed XDR base64
  */
-export async function signTransaction(xdr, networkPassphrase = TESTNET_PASSPHRASE) {
-  const addr = await getAddress();
+export async function signTransaction(xdr, networkPassphrase = TESTNET_PASSPHRASE, address) {
+  const addr = address || (await getAddress());
   if (!addr) throw new Error('Wallet not connected');
   const result = await Freighter.signTransaction(xdr, {
     networkPassphrase,

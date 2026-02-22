@@ -132,6 +132,7 @@ export default {
     username_placeholder: 'Username',
     save_username: 'Save',
     sign_prompt: 'Sign in Freighter...',
+    connect_timeout: 'Freighter did not respond in time. Open the extension and try again.',
     session_failed: 'Wallet connected, but session verification with the server failed.'
   },
   footer: {
