@@ -83,7 +83,7 @@ export default {
     mode_casual: 'MODE: CASUAL',
     zk_enabled: 'ZK PROOF: ENABLED',
     zk_disabled: 'ZK PROOF: DISABLED',
-    description: 'Cosmic Coder validates your run with Zero-Knowledge Proofs.\nNo score details are revealed on-chain—only eligibility is confirmed.',
+    description: 'Cosmic Coder validates your run with Zero-Knowledge Proofs.\nScore is shown; wave is not revealed on-chain—only eligibility is confirmed.',
     zk_weapon_hint: 'ZK WEAPONS: Shotgun unlocks at 10+ score (for testing). When unlocked, it can appear as your starting weapon in Ranked (ZK) runs and is shown next to your character only if you have unlocked it. Other ZK weapons unlock at higher score tiers (Silver/Gold/Diamond).',
     sep10_ok: 'SEP-10: OK',
     sep10_fail: 'SEP-10: NOT CONFIGURED',

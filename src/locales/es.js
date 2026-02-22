@@ -82,7 +82,7 @@ export default {
     mode_casual: 'MODO: CASUAL',
     zk_enabled: 'ZK PROOF: ACTIVADO',
     zk_disabled: 'ZK PROOF: DESACTIVADO',
-    description: 'Cosmic Coder valida tu partida con Zero-Knowledge Proofs.\nNo se revelan detalles de puntuación on-chain; solo se confirma elegibilidad.',
+    description: 'Cosmic Coder valida tu partida con Zero-Knowledge Proofs.\nSe muestran los puntos; la wave no se revela on-chain; solo se confirma elegibilidad.',
     zk_weapon_hint: 'ARMAS ZK: La Shotgun se desbloquea con 10+ puntos (para pruebas). Cuando está desbloqueada, puede aparecer como arma inicial en partidas Ranked (ZK) y se muestra al lado de tu personaje solo si la desbloqueaste. Otras armas ZK se desbloquean en rangos superiores (Silver/Gold/Diamond).',
     sep10_ok: 'SEP-10: OK',
     sep10_fail: 'SEP-10: NO CONFIGURADO',

@@ -5184,6 +5184,8 @@ export default class ArenaScene extends Phaser.Scene {
             try { zkStatusText.setText('ZK circuit constraint failed (score >= wave*5?). Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else if (msg.includes('BigInt') || msg.includes('verification key')) {
             try { zkStatusText.setText('ZK Backend Issue. Using local leaderboard.').setAlpha(1); } catch (_) {}
+          } else if (score < 5) {
+            try { zkStatusText.setText('Partida guardada localmente (puntuación < 5 para ranking).').setAlpha(1); } catch (_) {}
           } else {
             try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
           }
@@ -5213,7 +5215,7 @@ export default class ArenaScene extends Phaser.Scene {
       // Show ZK Proof UI based on submission result
       let zkUi = null;
       if (status && (status.status === 'zk' || status.status === 'zk_failed')) {
-        zkUi = this.showZkProofResultUI(status, cx, cy, gameOverContainer, statsStartY);
+        zkUi = this.showZkProofResultUI(status, cx, cy, gameOverContainer, statsStartY, score);
         if (zkUi?.menuY != null) {
           returnMenuBtn.setY(zkUi.menuY);
         } else if (zkUi?.buttonY) {
@@ -5308,9 +5310,10 @@ export default class ArenaScene extends Phaser.Scene {
     });
   }
 
-  showZkProofResultUI(result, cx, cy, gameOverContainer, statsStartY) {
+  showZkProofResultUI(result, cx, cy, gameOverContainer, statsStartY, runScore = null) {
     const uiScale = this.uiScale || 1;
     const h = this.scale.height;
+    const lowScore = runScore != null && runScore < 5;
 
     if (result.status === 'zk' && result.txHash) {
       const buttonY = Math.min(cy + 360, h - 70);
@@ -5378,8 +5381,13 @@ export default class ArenaScene extends Phaser.Scene {
       let errorMessage = result.error || 'Unknown error';
       let buttonText = '⚠️ ZK Proof Failed - Click to Retry';
       let errorTitle = '❌ ZK Proof Submission Failed';
+      let hideRetry = false;
 
-      if (result.contractMissing || errorMessage.includes('not found') || errorMessage.includes('404')) {
+      if (lowScore) {
+        errorTitle = 'Partida no registrada en el ranking';
+        errorMessage = 'Tu puntuación fue demasiado baja para el ranking on-chain (mínimo 5 puntos). Tu partida se guardó localmente. ¡Sigue jugando para mejorar!';
+        hideRetry = true;
+      } else if (result.contractMissing || errorMessage.includes('not found') || errorMessage.includes('404')) {
         errorTitle = '⚠️ ZK Contract Not Deployed';
         buttonText = '🔄 Retry When Contract is Deployed';
         errorMessage = 'The ZK smart contract is not currently deployed on testnet. Your score was saved locally.';
@@ -5393,53 +5401,63 @@ export default class ArenaScene extends Phaser.Scene {
         errorMessage = 'The ZK backend has a technical issue with Stellar addresses. Your score was saved locally.';
       }
 
+      const labelColor = lowScore ? '#00aaff' : '#ff4444';
+      const msgColor = lowScore ? '#88aacc' : '#cc6666';
+      const boxStroke = lowScore ? 0x0088aa : 0xff6600;
+      const btnColor = lowScore ? '#00aaff' : '#ff6600';
+
       const errorLabel = this.add.text(cx, baseY, errorTitle, {
         fontFamily: 'monospace',
         fontSize: `${Math.round(13 * uiScale)}px`,
-        color: '#ff4444',
+        color: labelColor,
         fontStyle: 'bold'
       }).setOrigin(0.5).setAlpha(0);
 
       const errorMsg = this.add.text(cx, baseY + 28, errorMessage, {
         fontFamily: 'monospace',
         fontSize: `${Math.round(10 * uiScale)}px`,
-        color: '#cc6666',
+        color: msgColor,
         align: 'center',
         wordWrap: { width: 420 }
       }).setOrigin(0.5, 0).setAlpha(0);
 
-      const errorBtnY = baseY + 28 + 44;
-      const errorBg = this.add.rectangle(cx, errorBtnY, 420, 44, 0x1a0a0a, 0.92);
-      errorBg.setStrokeStyle(2, 0xff6600, 0.85);
-      errorBg.setOrigin(0.5).setAlpha(0);
-
-      const errorBtn = this.add.text(cx, errorBtnY, buttonText, {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(12 * uiScale)}px`,
-        color: '#ff6600',
-        fontStyle: 'bold'
-      }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
-
       gameOverContainer.add(errorLabel);
       gameOverContainer.add(errorMsg);
-      gameOverContainer.add(errorBg);
-      gameOverContainer.add(errorBtn);
 
-      this.tweens.add({ targets: [errorLabel, errorMsg, errorBg, errorBtn], alpha: 1, duration: 600, delay: 300, ease: 'Power2' });
+      let errorBtnY = baseY + 28 + 44;
+      if (!hideRetry) {
+        const errorBg = this.add.rectangle(cx, errorBtnY, 420, 44, 0x1a0a0a, 0.92);
+        errorBg.setStrokeStyle(2, boxStroke, 0.85);
+        errorBg.setOrigin(0.5).setAlpha(0);
 
-      errorBtn.on('pointerover', () => {
-        errorBtn.setColor('#ffaa00');
-        errorBg.setStrokeStyle(2, 0xffaa00, 1);
-      });
-      errorBtn.on('pointerout', () => {
-        errorBtn.setColor('#ff6600');
-        errorBg.setStrokeStyle(2, 0xff6600, 0.85);
-      });
-      errorBtn.on('pointerdown', () => {
-        window.location.reload();
-      });
+        const errorBtn = this.add.text(cx, errorBtnY, buttonText, {
+          fontFamily: 'monospace',
+          fontSize: `${Math.round(12 * uiScale)}px`,
+          color: btnColor,
+          fontStyle: 'bold'
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
 
-      const menuY = Math.max(errorBtnY + 52, h - 44);
+        gameOverContainer.add(errorBg);
+        gameOverContainer.add(errorBtn);
+
+        this.tweens.add({ targets: [errorLabel, errorMsg, errorBg, errorBtn], alpha: 1, duration: 600, delay: 300, ease: 'Power2' });
+
+        errorBtn.on('pointerover', () => {
+          errorBtn.setColor('#ffaa00');
+          errorBg.setStrokeStyle(2, 0xffaa00, 1);
+        });
+        errorBtn.on('pointerout', () => {
+          errorBtn.setColor(btnColor);
+          errorBg.setStrokeStyle(2, boxStroke, 0.85);
+        });
+        errorBtn.on('pointerdown', () => {
+          window.location.reload();
+        });
+      } else {
+        this.tweens.add({ targets: [errorLabel, errorMsg], alpha: 1, duration: 600, delay: 300, ease: 'Power2' });
+      }
+
+      const menuY = hideRetry ? Math.max(baseY + 28 + 60, h - 44) : Math.max(errorBtnY + 52, h - 44);
       return { buttonY: errorBtnY, menuY };
     }
     return null;

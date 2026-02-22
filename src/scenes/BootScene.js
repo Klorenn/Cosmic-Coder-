@@ -73,7 +73,7 @@ export default class BootScene extends Phaser.Scene {
     this.load.spritesheet('robot-hurt', asset('assets/sprites/player/robot-hurt.png'), { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-death', asset('assets/sprites/player/robot-death.png'), { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('vibecoder-death', asset('assets/sprites/player/VibeCoder/vibecoder-death.png'), { frameWidth: 128, frameHeight: 128 });
-    this.load.spritesheet('destroyer-death', asset('assets/sprites/player/VoidNull/voidnull-death.png'), { frameWidth: 128, frameHeight: 128 });
+    this.load.spritesheet('destroyer-death', asset('assets/sprites/player/VoidNull/Dead.png'), { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('swordsman-death', asset('assets/sprites/player/SyncStorm/sync-death.png'), { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-enabling', asset('assets/sprites/player/robot-enabling.png'), { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('destroyer-idle', asset('assets/sprites/player/destroyer-idle.png'), { frameWidth: 128, frameHeight: 128 });

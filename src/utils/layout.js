@@ -71,12 +71,12 @@ export function getHudLayout(scene) {
   const barHp = 14 * uiScale;
   const lineH = 18 * uiScale;
   const topY = 8;
-  const xpY = topY;
-  const hpY = xpY + barH + 6;
-  const leftTextY = hpY + barHp + 8;
+  const hpY = topY;
+  const xpY = hpY + barHp + 6;
+  const leftTextY = xpY + barH + 8;
   const rightX = w - pad;
   const centerX = w / 2;
-  const modeY = hpY + barHp + 6;
+  const modeY = xpY + barH + 6;
   const connectionY = h - 36;
   const bossBarW = Math.min(400, w * 0.6);
   const bossBarH = 22 * uiScale;
