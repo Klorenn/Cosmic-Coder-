@@ -228,7 +228,7 @@ export async function startMatch(signerPublicKey, signTransaction) {
 }
 
 /**
- * Submit result (end_game(player, wave, score)). Requires wallet sign.
+ * Submit result to contract (submit_result(player, wave, score)). Updates casual leaderboard. Requires wallet sign.
  */
 export async function submitResult(signerPublicKey, signTransaction, wave, score) {
   const contractId = getContractId();
@@ -239,7 +239,7 @@ export async function submitResult(signerPublicKey, signTransaction, wave, score
     xdr.ScVal.scvU32(wave),
     new ScInt(BigInt(Math.floor(score)), { type: 'i128' }).toI128(),
   ];
-  return invoke(contractId, 'end_game', args, signerPublicKey, signTransaction);
+  return invoke(contractId, 'submit_result', args, signerPublicKey, signTransaction);
 }
 
 /**

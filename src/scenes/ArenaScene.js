@@ -5154,7 +5154,7 @@ export default class ArenaScene extends Phaser.Scene {
             resolve({ status: 'zk', txHash: finalTxHash });
           } else {
             console.log('[Score Submit] submitResult starting');
-            await gameClient.submitResult(addr, sign, wave, state.totalXP);
+            await gameClient.submitResult(addr, sign, wave, score);
             console.log('[Score Submit] submitResult success');
             try { if (this._refreshGameOverLeaderboard) this._refreshGameOverLeaderboard(); } catch (_) {}
             clear();
@@ -5191,7 +5191,7 @@ export default class ArenaScene extends Phaser.Scene {
           }
           
           try {
-            await gameClient.submitResult(addr, sign, wave, state.totalXP);
+            await gameClient.submitResult(addr, sign, wave, score);
           } catch (_) {}
           clear();
           resolve({ status: 'zk_failed', error: e?.message || 'Unknown error', contractMissing: this.zkContractMissing });
