@@ -5170,6 +5170,17 @@ export default class ArenaScene extends Phaser.Scene {
     }).then((status) => {
       // Show BACK TO MENU button and enable exit after ZK submission completes or fails
       this.tweens.add({ targets: returnMenuBtn, alpha: 1, duration: 600, ease: 'Power2' });
+      // Casual mode: hint to connect Freighter for verifiable runs
+      if (this.gameMode === 'casual') {
+        const casualHint = this.add.text(cx, returnMenuBtn.y - 32, t('leaderboard.casual_verifiable_hint'), {
+          fontFamily: 'monospace',
+          fontSize: `${Math.round(11 * (this.uiScale || 1))}px`,
+          color: '#00aaff',
+          align: 'center',
+          wordWrap: { width: Math.min(420, w - 80) }
+        }).setOrigin(0.5);
+        gameOverContainer.add(casualHint);
+      }
       // Show ZK Proof UI based on submission result
       let zkUi = null;
       if (status && (status.status === 'zk' || status.status === 'zk_failed')) {

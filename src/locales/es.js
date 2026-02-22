@@ -50,6 +50,7 @@ export default {
     empty_short: 'Aún no hay partidas. ¡Juega para aparecer!',
     connect_hint: 'Conecta tu wallet (Freighter) para aparecer en el ranking',
     submit_hint: 'Al morir verás "Enviando..." y luego "ZK RANKED" o "CASUAL" si el contrato está configurado.',
+    casual_verifiable_hint: 'Para que tu partida sea verificable on-chain, conéctate con Freighter en el menú principal.',
     back: '[ PULSA CUALQUIER TECLA O CLIC PARA CERRAR ]',
     view_ranks: 'VER RANGOS',
     position: '#',

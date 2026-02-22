@@ -2120,9 +2120,15 @@ export default class TitleScene extends Phaser.Scene {
 
   setupInput() {
     // Navegación: flechas (ArrowUp/Down) y WASD — handler genérico para máxima compatibilidad
+    this.leaderboardOpen = false;
     this.onKeyDownHandler = (event) => {
-      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.menuBlocked) return;
       const k = event.key?.toLowerCase?.() || event.key;
+      if (k === 'escape' || k === 'esc') {
+        if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
+        if (this.isFullscreen()) this.toggleFullscreen();
+        return;
+      }
+      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
       if (k === 'arrowup' || k === 'up' || k === 'w') this.moveSelection(-1);
       else if (k === 'arrowdown' || k === 'down' || k === 's') this.moveSelection(1);
       else if (k === 'enter' || k === ' ') { event.preventDefault(); this.selectOption(); }
@@ -2144,7 +2150,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   moveSelection(direction) {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.menuBlocked) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
     Audio.initAudio();
 
     this.selectedOption += direction;
@@ -2211,7 +2217,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   selectOption() {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.menuBlocked) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
     Audio.initAudio();
 
     const currentText = this.menuTexts?.[this.selectedOption];
@@ -2438,6 +2444,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   async showLeaderboard(opts = {}) {
+    this.leaderboardOpen = true;
     const showAll = !!opts.showAll;
     const uiScale = getUIScale(this);
     const w = this.scale.width || 800;
@@ -2938,6 +2945,7 @@ export default class TitleScene extends Phaser.Scene {
     }
 
     const close = () => {
+      this.leaderboardOpen = false;
       container.destroy();
       this.input.keyboard.off('keydown', onNavKey);
     };

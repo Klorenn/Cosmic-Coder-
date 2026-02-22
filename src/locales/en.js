@@ -51,6 +51,7 @@ export default {
     empty_short: 'No entries yet. Play to rank!',
     connect_hint: 'Connect wallet (Freighter) to appear on leaderboard',
     submit_hint: 'On death you\'ll see "Submitting..." then "ZK RANKED" or "CASUAL" if contract is set.',
+    casual_verifiable_hint: 'To make your run verifiable on-chain, connect with Freighter on the main menu.',
     back: '[ PRESS ANY KEY OR CLICK TO CLOSE ]',
     view_ranks: 'VIEW RANKS',
     position: '#',
