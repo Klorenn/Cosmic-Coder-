@@ -79,6 +79,7 @@ export default class TitleScene extends Phaser.Scene {
       }).then(async () => {
         this.updateContinueMenuOption?.();
         this.updateIdleCharacter?.();
+        this.updateBitsDisplay?.();
         // If wallet connected but user has no username in DB, show name modal (transparent overlay)
         try {
           const me = await authApi.getMe();
@@ -519,9 +520,9 @@ export default class TitleScene extends Phaser.Scene {
       color: '#ffd700'
     }).setOrigin(0, 0.5).setDepth(10);
 
-    const currency = window.VIBE_UPGRADES?.currency || 0;
+    const currency = window.VIBE_UPGRADES?.currency ?? 0;
     const bitsPos = anchorBottomRight(this, 140, 42);
-    this.add.text(bitsPos.x, bitsPos.y, `${t('footer.bits')}: ${currency}`, {
+    this.bitsText = this.add.text(bitsPos.x, bitsPos.y, `${t('footer.bits')}: ${currency}`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: 13 * uiScale,
       color: '#00ffff'
@@ -568,6 +569,7 @@ export default class TitleScene extends Phaser.Scene {
         if (addr) {
           await loadProgressForWallet(addr);
           this.updateContinueMenuOption();
+          this.updateBitsDisplay?.();
           // SEP-10: only mark as connected after user SIGNS (not just after opening Freighter).
           this.walletBtn.setText(t('auth.sign_prompt'));
           try {
@@ -655,6 +657,13 @@ export default class TitleScene extends Phaser.Scene {
     if (this.fullscreenBtn && !this.fullscreenBtn.scene) return;
     if (this.fullscreenBtn) {
       this.fullscreenBtn.setText(this.isFullscreen() ? t('footer.fullscreen_exit') : t('footer.fullscreen'));
+    }
+  }
+
+  updateBitsDisplay() {
+    if (this.bitsText && this.bitsText.scene) {
+      const currency = window.VIBE_UPGRADES?.currency ?? 0;
+      this.bitsText.setText(`${t('footer.bits')}: ${currency}`);
     }
   }
 
@@ -4267,6 +4276,7 @@ export default class TitleScene extends Phaser.Scene {
       upgradeTexts.forEach(item => item.text.destroy());
 
       this.upgradeMenuOpen = false;
+      this.updateBitsDisplay?.();
     };
 
     this.input.keyboard.on('keydown', onUpgradesKeyDown);
