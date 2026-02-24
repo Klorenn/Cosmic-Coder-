@@ -7,7 +7,7 @@ import { getRankById, getRankName, getRankColor, getRankColorCSS, getRankBonusPe
 import { isConnected } from '../utils/socket.js';
 import { t, setLanguage, currentLang } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
-import { loadProgressForWallet, resetProgressForDisconnect, progressStore, cycleCharacter, selectCharacter } from '../utils/walletProgressService.js';
+import { loadProgressForWallet, resetProgressForDisconnect, progressStore, cycleCharacter, selectCharacter, hydrateProgressFromLocal } from '../utils/walletProgressService.js';
 import * as authApi from '../utils/authApi.js';
 import * as gameClient from '../contracts/gameClient.js';
 import * as weaponClient from '../contracts/weaponClient.js';
@@ -71,6 +71,8 @@ export default class TitleScene extends Phaser.Scene {
     SaveManager.clearSave();
     this.hasSavedGame = false;
     this.menuOptions = [...this.baseMenuOptions];
+
+    hydrateProgressFromLocal();
 
     // Load progress from API if wallet already connected (updates menu and character after load)
     if (stellarWallet.isConnected()) {

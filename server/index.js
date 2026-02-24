@@ -7,6 +7,8 @@ import { generateProof, generateProofV2 } from './zkProve.js';
 import { generateSkillProof } from './skillProof.js';
 import authRoutes from './routes/auth.js';
 import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_WEB_AUTH_DOMAIN } from './config/sep10.js';
+import { fetchLeaderboard, upsertLeaderboardEntry } from './db/leaderboard.js';
+import { fetchProgress as dbFetchProgress, saveProgress as dbSaveProgress } from './db/progress.js';
 import * as snarkjs from 'snarkjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -137,15 +139,22 @@ app.post('/cli/:source', (req, res) => {
 
 const playerProgress = new Map();
 
-app.get('/player/:address/progress', (req, res) => {
+app.get('/player/:address/progress', async (req, res) => {
   const address = String(req.params.address || '').trim().slice(0, 56);
   if (!address) return res.status(400).json({ error: 'address required' });
+  const fromDb = await dbFetchProgress(address);
+  if (fromDb) {
+    return res.status(200).json({
+      ...fromDb,
+      updatedAt: Date.now()
+    });
+  }
   const data = playerProgress.get(address);
   if (!data) return res.status(200).json({ upgrades: null, legendaries: null, highWave: 0, highScore: 0, saveState: null, selectedCharacter: 'vibecoder' });
   res.status(200).json(data);
 });
 
-app.post('/player/:address/progress', (req, res) => {
+app.post('/player/:address/progress', async (req, res) => {
   const address = String(req.params.address || '').trim().slice(0, 56);
   if (!address) return res.status(400).json({ error: 'address required' });
   const { upgrades, legendaries, highWave, highScore, saveState, selectedCharacter } = req.body || {};
@@ -160,7 +169,15 @@ app.post('/player/:address/progress', (req, res) => {
     selectedCharacter: char,
     updatedAt: Date.now()
   };
-  playerProgress.set(address, data);
+  const dbOk = await dbSaveProgress(address, {
+    upgrades: data.upgrades,
+    legendaries: data.legendaries,
+    highWave: data.highWave,
+    highScore: data.highScore,
+    saveState: data.saveState,
+    selectedCharacter: data.selectedCharacter
+  });
+  if (!dbOk) playerProgress.set(address, data);
   res.status(200).json({ success: true });
 });
 
@@ -173,12 +190,25 @@ function leaderboardSort(a, b) {
   return (b.date || 0) - (a.date || 0);
 }
 
-app.get('/leaderboard', (req, res) => {
-  const top = [...leaderboardEntries].sort(leaderboardSort).slice(0, 10);
+app.get('/leaderboard', async (req, res) => {
+  const limit = Math.min(50, Math.max(10, parseInt(req.query.limit, 10) || 10));
+  const fromDb = await fetchLeaderboard(limit);
+  if (fromDb && fromDb.length >= 0) {
+    const entries = fromDb.map((e) => ({
+      address: e.address,
+      name: e.name ?? '',
+      wave: e.wave ?? 0,
+      score: e.score ?? 0,
+      date: e.updated_at ? new Date(e.updated_at).getTime() : Date.now(),
+      games_played: e.games_played ?? 0
+    }));
+    return res.status(200).json({ entries });
+  }
+  const top = [...leaderboardEntries].sort(leaderboardSort).slice(0, limit);
   res.status(200).json({ entries: top });
 });
 
-app.post('/leaderboard', (req, res) => {
+app.post('/leaderboard', async (req, res) => {
   const { address, wave, score, name } = req.body || {};
   if (!address || typeof wave !== 'number' || typeof score !== 'number') {
     console.warn('[leaderboard] invalid body:', req.body);
@@ -193,11 +223,26 @@ app.post('/leaderboard', (req, res) => {
   };
 
   console.log('[leaderboard] submit:', entry.address, 'wave=' + entry.wave, 'score=' + entry.score);
+
+  const dbOk = await upsertLeaderboardEntry({ ...entry, games_played: 0 });
+  if (dbOk) {
+    const fromDb = await fetchLeaderboard(10);
+    if (fromDb && fromDb.length >= 0) {
+      const entries = fromDb.map((e) => ({
+        address: e.address,
+        name: e.name ?? '',
+        wave: e.wave ?? 0,
+        score: e.score ?? 0,
+        date: e.updated_at ? new Date(e.updated_at).getTime() : Date.now()
+      }));
+      return res.status(200).json({ success: true, entries });
+    }
+  }
+
   const existing = leaderboardEntries.findIndex((e) => e.address === entry.address);
   if (existing >= 0) {
     const prev = leaderboardEntries[existing];
     if (entry.score <= prev.score && entry.wave <= prev.wave) {
-      // Still allow updating the display name even if score doesn't improve.
       if (entry.name && entry.name !== prev.name) {
         leaderboardEntries[existing] = { ...prev, name: entry.name, date: Date.now() };
       }

@@ -2231,11 +2231,13 @@ export default class ArenaScene extends Phaser.Scene {
     // Tamaño enemigos: más grandes para mejor visibilidad
     const enemyScale = type === 'bug' ? 1.0 : 1.65;
     enemy.setScale(enemyScale);
-    // Minimum hitbox so overlap with player always registers (enemies can hit)
-    if (enemy.body && (enemy.body.width < 20 || enemy.body.height < 20)) {
-      const w = Math.max(20, enemy.body.width);
-      const h = Math.max(20, enemy.body.height);
-      enemy.body.setSize(w, h, (enemy.width - w) / 2, (enemy.height - h) / 2);
+    // Hitbox: large enough for player/melee overlap; centered horizontally, slightly lower vertically so melee slash at player height hits
+    if (enemy.body) {
+      const w = Math.max(20, Math.min(enemy.width * 0.85, enemy.width));
+      const h = Math.max(20, Math.min(enemy.height * 0.7, enemy.height));
+      const offsetX = (enemy.width - w) / 2;
+      const offsetY = enemy.height * 0.15;
+      enemy.body.setSize(w, h, offsetX, offsetY);
     }
 
     // Play enemy animation based on type
@@ -2458,6 +2460,27 @@ export default class ArenaScene extends Phaser.Scene {
         this.player.x, this.player.y,
         nearest.x, nearest.y
       );
+
+      // Melee weapons with 0 projectiles (sword, spear): spawn one short-range slash so they can hit
+      const meleeRange = weapon.range || 80;
+      if (weapon.melee && (weapon.projectiles === 0 || weapon.projectiles == null) && nearestDist <= meleeRange) {
+        const projectile = this.projectiles.create(this.player.x, this.player.y, 'slash');
+        projectile.setRotation(baseAngle);
+        projectile.damage = Math.floor(stats.attackDamage * weapon.damage);
+        projectile.pierce = !!weapon.pierce;
+        projectile.setTint(weapon.color);
+        this.physics.velocityFromRotation(baseAngle, 380, projectile.body.velocity);
+        const lifetime = 220;
+        this.time.delayedCall(lifetime, () => {
+          if (projectile.active) projectile.destroy();
+        });
+        if (projectile.body && projectile.body.setSize) {
+          projectile.body.setSize(48, 48);
+        }
+        this.cameras.main.shake(50, 0.002);
+        Audio.playShoot();
+        return;
+      }
 
       // Fire based on weapon type
       const projectileCount = weapon.projectiles;

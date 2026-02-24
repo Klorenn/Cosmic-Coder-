@@ -1,11 +1,13 @@
 /**
  * Wallet-backed progress service.
- * Loads/saves upgrades, legendaries, high wave/score, save state via API — no cookies/localStorage.
- * Progress is keyed by wallet address.
+ * Loads/saves upgrades, legendaries, high wave/score, save state via API.
+ * Fallback: high score / high wave persisted to localStorage when API fails or no wallet.
  */
 
 import * as stellarWallet from './stellarWallet.js';
 import { fetchProgress, saveProgress as apiSaveProgress } from './walletProgressApi.js';
+
+const LOCAL_PROGRESS_KEY = 'cosmicCoderProgressLocal';
 
 /** Global store for high wave/score and selected character (set on load) */
 export const progressStore = {
@@ -14,15 +16,62 @@ export const progressStore = {
   selectedCharacter: 'vibecoder'
 };
 
+function loadLocalProgress() {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LOCAL_PROGRESS_KEY) : null;
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    return {
+      highWave: typeof o.highWave === 'number' ? o.highWave : 0,
+      highScore: typeof o.highScore === 'number' ? o.highScore : 0
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveLocalProgress(highWave, highScore) {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(LOCAL_PROGRESS_KEY, JSON.stringify({
+      highWave: typeof highWave === 'number' ? highWave : 0,
+      highScore: typeof highScore === 'number' ? highScore : 0
+    }));
+  } catch (_) {}
+}
+
+/** Hydrate progressStore from localStorage (e.g. when no wallet or before API load). Call at app/scene init. */
+export function hydrateProgressFromLocal() {
+  const local = loadLocalProgress();
+  if (local) {
+    progressStore.highWave = local.highWave;
+    progressStore.highScore = local.highScore;
+  }
+}
+
 /**
  * Load progress from API and hydrate VIBE_UPGRADES, VIBE_LEGENDARIES, SaveManager, progressStore.
  * @param {string} address - Wallet address
  * @returns {Promise<boolean>} true if loaded, false if failed or no data
  */
 export async function loadProgressForWallet(address) {
-  if (!address) return false;
+  if (!address) {
+    const local = loadLocalProgress();
+    if (local) {
+      progressStore.highWave = local.highWave;
+      progressStore.highScore = local.highScore;
+    }
+    return false;
+  }
   const data = await fetchProgress(address);
-  if (!data) return false;
+  if (!data) {
+    const local = loadLocalProgress();
+    if (local) {
+      progressStore.highWave = local.highWave;
+      progressStore.highScore = local.highScore;
+    }
+    return false;
+  }
 
   const upgrades = data.upgrades;
   const legendaries = data.legendaries;
@@ -80,6 +129,10 @@ export async function saveProgressToWallet(address, extra = {}) {
     progressStore.selectedCharacter = extra.selectedCharacter;
     if (typeof window !== 'undefined') window.VIBE_SELECTED_CHARACTER = extra.selectedCharacter;
   }
+  const hw = extra.highWave ?? progressStore.highWave;
+  const hs = extra.highScore ?? progressStore.highScore;
+  if (!ok) saveLocalProgress(hw, hs);
+  else saveLocalProgress(hw, hs);
   return ok;
 }
 

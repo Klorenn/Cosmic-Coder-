@@ -96,7 +96,7 @@ Para que el ranking esté siempre activo y visible para todos (incluso sin login
 ```sql
 CREATE TABLE IF NOT EXISTS public.cosmic_coder_leaderboard (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  address      VARCHAR(56) NOT NULL,
+  address      VARCHAR(56) NOT NULL UNIQUE,
   name         VARCHAR(64) NULL,
   score        BIGINT NOT NULL DEFAULT 0,
   wave         INT NOT NULL DEFAULT 0,
@@ -113,4 +113,30 @@ CREATE POLICY "Public read for leaderboard"
   ON public.cosmic_coder_leaderboard FOR SELECT USING (true);
 ```
 
+El backend usa `SUPABASE_SERVICE_ROLE_KEY` para escribir (bypasea RLS). En `GET/POST /leaderboard` se usa Supabase si está configurado; si no, fallback en memoria.
+
 El backend debe: en `POST /leaderboard` hacer upsert por `address` (actualizar name, score, wave, games_played); en `GET /leaderboard` devolver las entradas ordenadas por score. Así el frontend solo muestra este ranking y no existe un leaderboard local con "Anonymous".
+
+### Tabla de progreso (opcional)
+
+Para persistir high score, high wave, mejoras y save state por jugador:
+
+```sql
+CREATE TABLE IF NOT EXISTS public.cosmic_coder_progress (
+  address           VARCHAR(56) PRIMARY KEY,
+  high_score        BIGINT NOT NULL DEFAULT 0,
+  high_wave         INT NOT NULL DEFAULT 0,
+  upgrades          JSONB NULL,
+  legendaries       JSONB NULL,
+  save_state        JSONB NULL,
+  selected_character VARCHAR(32) NOT NULL DEFAULT 'vibecoder',
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.cosmic_coder_progress ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Service role full access progress"
+  ON public.cosmic_coder_progress FOR ALL USING (true);
+```
+
+El backend usa esta tabla en `GET/POST /player/:address/progress` si Supabase está configurado; si no, usa memoria.
