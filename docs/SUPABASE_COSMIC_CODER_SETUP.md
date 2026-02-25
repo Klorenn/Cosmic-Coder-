@@ -113,7 +113,7 @@ CREATE POLICY "Public read for leaderboard"
   ON public.cosmic_coder_leaderboard FOR SELECT USING (true);
 ```
 
-El backend usa `SUPABASE_SERVICE_ROLE_KEY` para escribir (bypasea RLS). En `GET/POST /leaderboard` se usa Supabase si está configurado; si no, fallback en memoria.
+El backend usa `SUPABASE_SERVICE_ROLE_KEY` para escribir (bypasea RLS). En `GET/POST /leaderboard` se usa Supabase si está configurado; si no, fallback en memoria y persistencia en archivo `server/data/leaderboard.json` (persiste entre reinicios si el servidor tiene disco persistente). El frontend, si la API devuelve vacío, muestra las partidas guardadas en localStorage para que siempre veas algo al jugar.
 
 El backend debe: en `POST /leaderboard` hacer upsert por `address` (actualizar name, score, wave, games_played); en `GET /leaderboard` devolver las entradas ordenadas por score. Así el frontend solo muestra este ranking y no existe un leaderboard local con "Anonymous".
 

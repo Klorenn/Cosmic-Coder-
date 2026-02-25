@@ -8,6 +8,7 @@ import { generateSkillProof } from './skillProof.js';
 import authRoutes from './routes/auth.js';
 import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_WEB_AUTH_DOMAIN } from './config/sep10.js';
 import { fetchLeaderboard, upsertLeaderboardEntry } from './db/leaderboard.js';
+import { loadLeaderboardFromFile, saveLeaderboardToFile } from './db/leaderboardFile.js';
 import { fetchProgress as dbFetchProgress, saveProgress as dbSaveProgress } from './db/progress.js';
 import * as snarkjs from 'snarkjs';
 import path from 'path';
@@ -181,7 +182,7 @@ app.post('/player/:address/progress', async (req, res) => {
   res.status(200).json({ success: true });
 });
 
-const leaderboardEntries = [];
+const leaderboardEntries = loadLeaderboardFromFile();
 const LEADERBOARD_MAX = 50;
 
 function leaderboardSort(a, b) {
@@ -254,6 +255,7 @@ app.post('/leaderboard', async (req, res) => {
   }
   leaderboardEntries.sort(leaderboardSort);
   if (leaderboardEntries.length > LEADERBOARD_MAX) leaderboardEntries.length = LEADERBOARD_MAX;
+  saveLeaderboardToFile(leaderboardEntries);
   res.status(200).json({ success: true, entries: leaderboardEntries.slice(0, 10) });
 });
 

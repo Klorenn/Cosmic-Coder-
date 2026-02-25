@@ -109,23 +109,49 @@ export default class LeaderboardManager {
 
   /**
    * Fetch top entries from on-chain leaderboard API.
-   * @returns {Promise<Array<{ rank: number, name: string, wave: number, score: number }>>}
+   * If API returns empty, returns local entries (localStorage) so rankings are visible after playing.
+   * @returns {Promise<Array<{ rank: number, name: string, wave: number, score: number, address?: string }>>}
    */
   static async fetchOnChain() {
     try {
       const res = await fetch(`${getLeaderboardApiUrl()}/leaderboard`);
       const data = await res.json().catch(() => ({}));
       const entries = Array.isArray(data.entries) ? data.entries : [];
-      return entries.map((e, i) => ({
-        rank: i + 1,
-        address: e.address ? String(e.address) : '',
-        name: (e.name ? String(e.name) : (e.address ? shortAddress(e.address) : '???')).slice(0, 20),
-        wave: e.wave ?? 0,
-        score: e.score ?? 0,
-        gamesPlayed: e.games_played ?? e.gamesPlayed ?? 0
-      }));
+      if (entries.length > 0) {
+        return entries.map((e, i) => ({
+          rank: i + 1,
+          address: e.address ? String(e.address) : '',
+          name: (e.name ? String(e.name) : (e.address ? shortAddress(e.address) : '???')).slice(0, 20),
+          wave: e.wave ?? 0,
+          score: e.score ?? 0,
+          gamesPlayed: e.games_played ?? e.gamesPlayed ?? 0
+        }));
+      }
+      const local = this.load();
+      if (local.length > 0) {
+        return local.map((e, i) => ({
+          rank: i + 1,
+          address: '',
+          name: (e.name || 'Anonymous').slice(0, 20),
+          wave: e.wave ?? 0,
+          score: e.score ?? 0,
+          gamesPlayed: 0
+        }));
+      }
+      return [];
     } catch (e) {
       console.warn('[Leaderboard] fetch failed:', e);
+      const local = this.load();
+      if (local.length > 0) {
+        return local.map((e, i) => ({
+          rank: i + 1,
+          address: '',
+          name: (e.name || 'Anonymous').slice(0, 20),
+          wave: e.wave ?? 0,
+          score: e.score ?? 0,
+          gamesPlayed: 0
+        }));
+      }
       return [];
     }
   }
