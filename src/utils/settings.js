@@ -4,7 +4,7 @@
  * The game must sanitize, never crash.
  */
 export const DEFAULT_SETTINGS = Object.freeze({
-  autoMove: true,
+  autoMove: false,        // Autopilot is opt-in (Settings → Auto-move)
   sfxEnabled: true,
   musicEnabled: true,
   masterVolume: 0.7,

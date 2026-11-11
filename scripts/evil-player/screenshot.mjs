@@ -61,7 +61,7 @@ async function capture(browser, width, height) {
       return new NativeWS(url, proto);
     };
     if (!localStorage.getItem('vibeCoderSettings')) {
-      localStorage.setItem('vibeCoderSettings', JSON.stringify({ playerName: 'HUDCAM', musicEnabled: false, sfxEnabled: false }));
+      localStorage.setItem('vibeCoderSettings', JSON.stringify({ playerName: 'HUDCAM', musicEnabled: false, sfxEnabled: false, autoMove: true }));
     }
   });
   const page = await context.newPage();

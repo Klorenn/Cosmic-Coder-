@@ -199,6 +199,8 @@ async function startRun(page, run, character) {
     const m = await import('/src/utils/walletProgressService.js');
     m.progressStore.selectedCharacter = charId;
     window.VIBE_SELECTED_CHARACTER = charId;
+    // The game defaults to manual control; the bot opts into the autopilot for its runs.
+    if (window.VIBE_SETTINGS) window.VIBE_SETTINGS.autoMove = true;
     const title = window.__VIBE_GAME__.scene.getScene('TitleScene');
     title.startCasualGame();
   }, character);

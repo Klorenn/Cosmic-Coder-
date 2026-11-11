@@ -38,7 +38,7 @@ async function main() {
   });
   await context.addInitScript(() => {
     if (!localStorage.getItem('vibeCoderSettings')) {
-      localStorage.setItem('vibeCoderSettings', JSON.stringify({ playerName: 'GEMCAM', musicEnabled: false, sfxEnabled: false }));
+      localStorage.setItem('vibeCoderSettings', JSON.stringify({ playerName: 'GEMCAM', musicEnabled: false, sfxEnabled: false, autoMove: true }));
     }
   });
   const page = await context.newPage();

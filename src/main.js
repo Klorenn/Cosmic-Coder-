@@ -349,7 +349,7 @@ window.VIBE_MELEE = {
 
 // Game settings - persisted to localStorage
 window.VIBE_SETTINGS = {
-  autoMove: true,         // Auto-move when coding is detected
+  autoMove: false,        // Autopilot is opt-in (Settings → Auto-move)
   sfxEnabled: true,       // Sound effects (weapons, hits)
   musicEnabled: true,     // Background music
   masterVolume: 0.7,      // Master volume (0-1)
