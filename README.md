@@ -123,6 +123,20 @@ So: **Stellar** provides the chain and the Game Hub session lifecycle; **ZK** en
 - **Leaderboard:** Per-season ranked board via `get_leaderboard_by_season(season_id, limit)`; legacy `get_leaderboard(limit)` for casual.
 - **Minimum score:** `MIN_SCORE_PER_WAVE = 5`. You need at least 5 score per wave for a valid ZK proof.
 
+### Security status
+
+> **Ranked uses Groth16 with a pinned VK.** The game submits ranked runs through `submit_zk` (browser snarkjs proof, prover-server fallback). The contract runs the BN254 pairing check against the VK fixed by the admin with `set_run_vk` and binds the public signals to the claimed run (hash, score, wave, nonce, season). This is only true on a deploy where `set_verifier` + `set_run_vk` ran (`scripts/deploy_contracts_testnet.sh` does both; without them `submit_zk` fails with #7 VkNotSet). `isRankedVerified()` reports verified when `VITE_ZK_BACKEND` is `groth16` (default) and `VITE_COSMIC_CODER_CONTRACT_ID` is set, so it reflects configuration, not a probe of the deployed contract.
+
+Remaining limitations:
+
+- **Private witness (GameRunV3, default):** ranked proofs use `GameRunV3.circom`: private `seed, kills, events_hash`, public `run_hash = Poseidon(seed, score, wave, kills, nonce, season, events_hash)` and `score <= kills*26250 + wave^2*875 + wave*5000` (e.g. score 100000 with 1 kill at wave 3 cannot be proven). The deploy script pins the V3 VK (`ZK_CIRCUIT=v1` pins the legacy GameRun VK). Still open: `seed` and `kills` are chosen by the prover until the seed is issued at `start_match` and the event log is checked server-side, so V3 bounds the score by the claimed kills, it does not prove the kills happened. See [docs/ZK_CIRCUIT_STATUS.md](docs/ZK_CIRCUIT_STATUS.md).
+- **SkillProof wallet is private:** `SkillProof.circom` keeps `wallet` private and the contract does not bind proofs to the player, so a pending weapon-unlock proof can be front-run. Fixing it requires a circuit change.
+- Legacy `VITE_ZK_BACKEND=noir` (`submit_zk_noir`) uses the bundled `ultrahonk_verifier`, a **structural stub** that does not check proofs (ranked forgeable); the deploy script does not wire it unless `ENABLE_NOIR_STUB=1`. `VITE_RANKED_VERIFIED` is only read in that mode.
+- Trusted setup is a single local contribution per circuit (`pot12_final.ptau` + one phase-2 contribution; testnet only).
+- `VITE_COSMIC_CODER_CONTRACT_ID` must point to a deploy of the **new** `cosmic_coder` contract. Its ABI is incompatible with the previous contract.
+
+Details: [contracts/README.md](contracts/README.md#security-status-read-before-trusting-the-ranked-board).
+
 ---
 
 ## How to Play and Verify On-Chain

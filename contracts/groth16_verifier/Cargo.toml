@@ -14,8 +14,4 @@ zk_types = { path = "../zk_types" }
 
 [dev-dependencies]
 soroban-sdk = { version = "25.1", features = ["testutils"] }
-
-[profile.release]
-lto = true
-opt-level = 3
-strip = "symbols"
+serde_json = "1.0"

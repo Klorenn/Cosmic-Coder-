@@ -2,6 +2,24 @@
  * ShrineManager - Interactive risk/reward objects on the map
  * Spawns shrines that players can interact with for buffs/effects
  */
+import { canSpendXP, spendXP } from './scoreRules.js';
+import logger from '../utils/log.js';
+import { pixelText } from '../scenes/boot/uiAssets.js';
+
+
+/** 'SHRINE OF FORTUNE' -> 'Shrine of Fortune' (sentence-style name for the proximity prompt). */
+export function displayName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\b([a-z])/g, (m) => m.toUpperCase())
+    .replace(/\b(Of|The|And)\b/g, (m) => m.toLowerCase());
+}
+
+/** True for a finite number in the open interval (0, 1). */
+function isFraction(v) {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 1;
+}
+
 export default class ShrineManager {
   constructor(scene) {
     this.scene = scene;
@@ -109,33 +127,48 @@ export default class ShrineManager {
   }
 
   /**
-   * Create the [E] interaction prompt
+   * Proximity prompt (world space): glass pill with an "E" keycap and the shrine name.
+   * Hidden until the player is within interactRadius of an unused shrine.
    */
   createInteractPrompt() {
-    this.interactPrompt = this.scene.add.container(0, 0);
+    const add = this.scene.add;
+    this.interactPrompt = add.container(0, 0);
     this.interactPrompt.setDepth(100);
     this.interactPrompt.setVisible(false);
+    this.promptBg = add.graphics();
+    this.promptKey = pixelText(this.scene, 0, 0, 'E', { size: 16, color: '#0b1020', shadow: false }).setOrigin(0.5);
+    this.promptLabel = pixelText(this.scene, 0, 0, '', { size: 16, color: '#f1f5f9' }).setOrigin(0, 0.5);
+    this.interactPrompt.add([this.promptBg, this.promptKey, this.promptLabel]);
+    this.promptShrine = null;
+  }
 
-    const bg = this.scene.add.rectangle(0, 0, 120, 30, 0x000000, 0.8);
-    bg.setStrokeStyle(2, 0xffffff);
-
-    const text = this.scene.add.text(0, 0, '[E] INTERACT', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '12px',
-      color: '#ffffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-
-    this.interactPrompt.add([bg, text]);
-
-    // Pulse animation — store reference for cleanup in destroy()
-    this.promptPulseTween = this.scene.tweens.add({
-      targets: this.interactPrompt,
-      scale: { from: 1, to: 1.1 },
-      duration: 500,
-      yoyo: true,
-      repeat: -1
-    });
+  /** Lay out the prompt for a shrine (name + accent colour). */
+  layoutPrompt(shrine) {
+    if (!this.promptLabel || !this.promptBg) return;
+    const type = shrine.shrineType || {};
+    this.promptLabel.setText(displayName(type.name));
+    const pad = 8;
+    const cap = 26;
+    const gap = 10;
+    const h = 40;
+    const w = pad + cap + gap + this.promptLabel.width + pad + 6;
+    const x0 = -w / 2;
+    const g = this.promptBg;
+    g.clear();
+    g.fillStyle(0x000000, 0.25);
+    g.fillRoundedRect(x0, -h / 2 + 2, w, h, h / 2);
+    g.fillStyle(0x0b1020, 0.78);
+    g.fillRoundedRect(x0, -h / 2, w, h, h / 2);
+    g.lineStyle(1, 0xffffff, 0.14);
+    g.strokeRoundedRect(x0, -h / 2, w, h, h / 2);
+    // keycap: light face with a darker bottom lip
+    const kx = x0 + pad;
+    g.fillStyle(0x94a3b8, 1);
+    g.fillRoundedRect(kx, -cap / 2 + 2, cap, cap, 6);
+    g.fillStyle(0xf1f5f9, 1);
+    g.fillRoundedRect(kx, -cap / 2 - 1, cap, cap - 1, 6);
+    this.promptKey.setPosition(kx + cap / 2, -1.5);
+    this.promptLabel.setPosition(kx + cap + gap, 0);
   }
 
   /**
@@ -164,7 +197,7 @@ export default class ShrineManager {
       }
     }
 
-    console.log(`Spawned ${this.shrines.length} shrines`);
+    logger.log(`Spawned ${this.shrines.length} shrines`);
   }
 
   /**
@@ -206,56 +239,54 @@ export default class ShrineManager {
    * @param {object} shrineType - Shrine definition
    */
   createShrine(x, y, shrineType) {
-    // Container for all shrine elements
-    const container = this.scene.add.container(x, y);
+    const add = this.scene.add;
+    const tex = this.scene.textures;
+    const has = (k) => !!(tex && tex.exists && tex.exists(k));
+    const container = add.container(x, y);
     container.shrineType = shrineType;
     container.isUsed = false;
+    container.setDepth(3);
+    const color = shrineType.color;
+    const parts = [];
+    const ADD = 1; // Phaser.BlendModes.ADD
 
-    // Base pedestal
-    const pedestal = this.scene.add.rectangle(0, 20, 60, 20, 0x333333, 0.9);
-    pedestal.setStrokeStyle(2, shrineType.color);
-
-    // Glowing orb
-    const orb = this.scene.add.circle(0, -10, 25, shrineType.color, 0.6);
-    orb.setStrokeStyle(3, 0xffffff, 0.8);
-
-    // Icon text
-    const icon = this.scene.add.text(0, -12, shrineType.icon, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '24px'
-    }).setOrigin(0.5);
-
-    // Name label
-    const label = this.scene.add.text(0, 45, shrineType.name, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
-      color: '#ffffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-
-    container.add([pedestal, orb, icon, label]);
-    container.orb = orb;
-
-    // Pulsing glow animation
-    this.scene.tweens.add({
-      targets: orb,
-      scale: { from: 0.9, to: 1.2 },
-      alpha: { from: 0.4, to: 0.8 },
-      duration: 1200,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut'
-    });
-
-    // Floating animation
-    this.scene.tweens.add({
-      targets: [orb, icon],
-      y: '-=5',
-      duration: 1500,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut'
-    });
+    if (has('shrine-pedestal') && has(`shrine-${shrineType.id}`)) {
+      // Pedestal + floating crystal + pulsing halo; no permanent text (name shows on approach).
+      const floorGlow = has('fx-glow') ? add.image(0, 26, 'fx-glow').setDisplaySize(170, 56).setTint(color).setBlendMode(ADD).setAlpha(0.55) : null;
+      const pedestal = add.image(0, 30, 'shrine-pedestal').setDisplaySize(104, 52);
+      const halo = has('fx-glow') ? add.image(0, -26, 'fx-glow').setDisplaySize(130, 130).setTint(color).setBlendMode(ADD).setAlpha(0.6) : null;
+      const crystal = add.image(0, -26, `shrine-${shrineType.id}`).setDisplaySize(46, 69);
+      [floorGlow, pedestal, halo, crystal].forEach((p) => { if (p) parts.push(p); });
+      container.add(parts);
+      container.orb = crystal;
+      container.halo = halo;
+      container.floorGlow = floorGlow;
+      const tweens = [];
+      if (halo) {
+        const s0 = halo.scaleX;
+        tweens.push(this.scene.tweens.add({
+          targets: halo, scaleX: { from: s0 * 0.85, to: s0 * 1.1 }, scaleY: { from: s0 * 0.85, to: s0 * 1.1 },
+          alpha: { from: 0.35, to: 0.7 }, duration: 1300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+        }));
+      }
+      if (floorGlow) {
+        tweens.push(this.scene.tweens.add({ targets: floorGlow, alpha: { from: 0.35, to: 0.65 }, duration: 1300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' }));
+      }
+      tweens.push(this.scene.tweens.add({ targets: [crystal, halo].filter(Boolean), y: '-=6', duration: 1600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' }));
+      container.shrineTweens = tweens;
+    } else {
+      // Fallback (art missing): simple orb on a slab
+      const pedestal = add.rectangle(0, 20, 60, 20, 0x1e293b, 0.9);
+      pedestal.setStrokeStyle(1, 0xffffff, 0.15);
+      const orb = add.circle(0, -10, 20, color, 0.6);
+      orb.setStrokeStyle(2, 0xffffff, 0.6);
+      container.add([pedestal, orb]);
+      container.orb = orb;
+      container.shrineTweens = [this.scene.tweens.add({
+        targets: orb, scale: { from: 0.9, to: 1.15 }, alpha: { from: 0.45, to: 0.8 },
+        duration: 1200, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
+      })];
+    }
 
     this.shrines.push(container);
     return container;
@@ -286,14 +317,22 @@ export default class ShrineManager {
       }
     });
 
-    // Update prompt visibility and position
+    // Update prompt visibility and position (fades in, name + keycap)
     if (closestShrine) {
       this.nearbyShrine = closestShrine;
+      if (this.promptShrine !== closestShrine) {
+        this.promptShrine = closestShrine;
+        this.layoutPrompt(closestShrine);
+        this.interactPrompt.setAlpha(0);
+        if (this.promptTween) this.promptTween.stop();
+        this.promptTween = this.scene.tweens.add({ targets: this.interactPrompt, alpha: 1, duration: 160, ease: 'Cubic.easeOut' });
+      }
       this.interactPrompt.setVisible(true);
       this.interactPrompt.x = closestShrine.x;
-      this.interactPrompt.y = closestShrine.y - 60;
+      this.interactPrompt.y = closestShrine.y - 92;
     } else {
       this.nearbyShrine = null;
+      this.promptShrine = null;
       this.interactPrompt.setVisible(false);
     }
 
@@ -335,10 +374,12 @@ export default class ShrineManager {
       duration: 500
     });
 
-    // Dim the orb
-    if (shrine.orb) {
-      shrine.orb.setFillStyle(0x333333, 0.3);
-    }
+    // Spent: stop the glow and grey the crystal out
+    (shrine.shrineTweens || []).forEach((tw) => tw && tw.stop && tw.stop());
+    if (shrine.halo) shrine.halo.setVisible(false);
+    if (shrine.floorGlow) shrine.floorGlow.setAlpha(0.15);
+    if (shrine.orb && shrine.orb.setTint) shrine.orb.setTint(0x475569);
+    else if (shrine.orb && shrine.orb.setFillStyle) shrine.orb.setFillStyle(0x333333, 0.3);
   }
 
   /**
@@ -354,9 +395,12 @@ export default class ShrineManager {
 
     switch (cost.type) {
       case 'health':
-        return player.health > player.maxHealth * cost.amount;
+        // Amount must be a real fraction in (0, 1): negative/NaN/Infinity costs would heal or poison HP.
+        if (!isFraction(cost.amount) || !Number.isFinite(player.health) || !Number.isFinite(player.maxHealth)) return false;
+        return player.health > player.maxHealth * cost.amount && player.health - Math.floor(player.maxHealth * cost.amount) > 0;
       case 'xp':
-        return vibeState.totalXP >= cost.amount;
+        // Spends the XP pool only; the run score never goes down (systems/scoreRules.js).
+        return canSpendXP(vibeState, cost.amount);
       case 'weapon':
         return this.scene.currentWeapon && this.scene.currentWeapon.type !== 'basic';
       default:
@@ -375,12 +419,17 @@ export default class ShrineManager {
     const vibeState = window.VIBE_CODER;
 
     switch (cost.type) {
-      case 'health':
-        player.health -= Math.floor(player.maxHealth * cost.amount);
+      case 'health': {
+        if (!this.canPayCost(cost)) return;
+        // Never leave the player at <= 0 HP (a shrine must not kill) nor above max.
+        const next = player.health - Math.floor(player.maxHealth * cost.amount);
+        player.health = Math.min(player.maxHealth, Math.max(1, next));
         this.scene.updateHUD();
         break;
+      }
       case 'xp':
-        vibeState.totalXP -= cost.amount;
+        if (!this.canPayCost(cost)) return;
+        spendXP(vibeState, cost.amount);
         break;
       case 'weapon':
         this.scene.currentWeapon = { type: 'basic' };
@@ -603,14 +652,8 @@ export default class ShrineManager {
    * Show floating message at position
    */
   showMessage(text, x, y, color) {
-    const message = this.scene.add.text(x, y - 30, text, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '14px',
-      color: color,
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 3
-    }).setOrigin(0.5);
+    const message = pixelText(this.scene, x, y - 30, String(text ?? ''), { size: 16, color: color || '#ffffff', align: 'center' })
+      .setOrigin(0.5);
 
     this.scene.tweens.add({
       targets: message,
@@ -625,7 +668,11 @@ export default class ShrineManager {
    * Clear all shrines
    */
   clearShrines() {
-    this.shrines.forEach(shrine => shrine.destroy());
+    this.shrines.forEach((shrine) => {
+      (shrine.shrineTweens || []).forEach((tw) => tw && tw.stop && tw.stop());
+      shrine.destroy();
+    });
+    this.promptShrine = null;
     this.shrines = [];
     this.nearbyShrine = null;
   }
@@ -647,9 +694,9 @@ export default class ShrineManager {
    */
   destroy() {
     this.clearShrines();
-    if (this.promptPulseTween) {
-      this.promptPulseTween.stop();
-      this.promptPulseTween = null;
+    if (this.promptTween) {
+      this.promptTween.stop();
+      this.promptTween = null;
     }
     if (this.interactPrompt) {
       this.interactPrompt.destroy();

@@ -8,7 +8,7 @@
  *   import { sep10Login, getJWT, authenticatedFetch } from './utils/sep10StellarAuth.js';
  *   await sep10Login();  // Muestra alerta si no hay Freighter; guarda JWT en localStorage
  *   const token = getJWT();
- *   const data = await authenticatedFetch('https://cosmic-coder.onrender.com/auth/me');
+ *   const data = await authenticatedFetch('<API_URL>/auth/me');
  *
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md
  * @see https://www.freighter.app/
@@ -17,7 +17,10 @@
 // ---------------------------------------------------------------------------
 // Configuración: URL base del backend (Cosmic Coder en Render)
 // ---------------------------------------------------------------------------
-const API_BASE = 'https://cosmic-coder.onrender.com';
+import { getApiUrl } from '../config/runtime.js';
+
+/** Resolved lazily so runtime config.json (loaded after module init) is honored. */
+const getApiBase = () => getApiUrl();
 const STORAGE_KEY = 'cosmicCoderJwt';
 
 /** Red por defecto para firmar el challenge (Testnet). */
@@ -87,7 +90,7 @@ export async function sep10Login() {
     console.log('[SEP-10] Public key:', publicKey);
 
     // --- Paso 3: Solicitar challenge al backend ---
-    const challengeUrl = `${API_BASE.replace(/\/$/, '')}/auth/challenge?account=${encodeURIComponent(publicKey)}`;
+    const challengeUrl = `${getApiBase()}/auth/challenge?account=${encodeURIComponent(publicKey)}`;
     console.log('[SEP-10] Solicitando challenge al backend...');
     const challengeRes = await fetch(challengeUrl, { method: 'GET', credentials: 'omit' });
     if (!challengeRes.ok) {
@@ -117,7 +120,7 @@ export async function sep10Login() {
     console.log('[SEP-10] Transacción firmada correctamente');
 
     // --- Paso 5: Enviar transacción firmada al backend y obtener JWT ---
-    const tokenUrl = `${API_BASE.replace(/\/$/, '')}/auth/token`;
+    const tokenUrl = `${getApiBase()}/auth/token`;
     console.log('[SEP-10] Enviando transacción al backend...');
     const tokenRes = await fetch(tokenUrl, {
       method: 'POST',
@@ -215,4 +218,4 @@ export function authenticatedFetch(url, options = {}) {
 // Export adicional para integración
 // ---------------------------------------------------------------------------
 
-export { API_BASE };
+export { getApiBase };

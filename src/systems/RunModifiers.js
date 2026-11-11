@@ -2,6 +2,8 @@
  * RunModifiers - Run-start mutators that add variety and challenge
  * Selected at run start, provides multipliers and flags for ArenaScene
  */
+import { logger } from '../utils/log.js';
+
 export default class RunModifiers {
   // Available modifiers with their effects
   static MODIFIERS = {
@@ -103,15 +105,18 @@ export default class RunModifiers {
       vampiricEnemies: false
     };
 
+    if (!Array.isArray(modifiers)) return combined;
+
     modifiers.forEach(mod => {
-      if (!mod.effects) return;
+      if (!mod || typeof mod.effects !== 'object' || !mod.effects) return;
 
       Object.entries(mod.effects).forEach(([key, value]) => {
-        if (typeof value === 'boolean') {
-          // Flags: OR them together
-          combined[key] = combined[key] || value;
-        } else {
-          // Multipliers: multiply together
+        if (!Object.prototype.hasOwnProperty.call(combined, key)) return; // unknown keys ignored
+        if (typeof combined[key] === 'boolean') {
+          // Flags: OR them together (only real booleans count)
+          if (typeof value === 'boolean') combined[key] = combined[key] || value;
+        } else if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+          // Multipliers: multiply together (poisoned values ignored)
           combined[key] *= value;
         }
       });
@@ -129,7 +134,7 @@ export default class RunModifiers {
       const ids = modifiers.map(m => m.id);
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(ids));
     } catch (e) {
-      console.error('Failed to save modifiers:', e);
+      logger.warn('Failed to save modifiers:', e);
     }
   }
 
@@ -143,6 +148,8 @@ export default class RunModifiers {
       if (!saved) return [];
 
       const ids = JSON.parse(saved);
+      // Must be an array of ids: a bare string would substring-match ("glass_cannon_vampiric".includes(...)).
+      if (!Array.isArray(ids)) return [];
       const modifiers = [];
 
       Object.values(this.MODIFIERS).forEach(mod => {
@@ -153,7 +160,7 @@ export default class RunModifiers {
 
       return modifiers;
     } catch (e) {
-      console.error('Failed to load modifiers:', e);
+      logger.warn('Failed to load modifiers:', e);
       return [];
     }
   }

@@ -47,6 +47,13 @@ jobs:
           VITE_PROGRESS_API_URL: ${{ secrets.VITE_PROGRESS_API_URL }}
           VITE_LEADERBOARD_URL: ${{ secrets.VITE_LEADERBOARD_URL }}
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
+          # Not a secret: repo variable. Leave unset (=> "false" from public/config.json) until a real
+          # UltraHonk verifier is wired on-chain.
+          VITE_RANKED_VERIFIED: ${{ vars.VITE_RANKED_VERIFIED }}
+          # Repo variables (not secrets). Unset => public/config.json defaults (groth16 / v3).
+          # VITE_ZK_CIRCUIT must match the VK pinned by scripts/deploy_contracts_testnet.sh (v3 default).
+          VITE_ZK_BACKEND: ${{ vars.VITE_ZK_BACKEND }}
+          VITE_ZK_CIRCUIT: ${{ vars.VITE_ZK_CIRCUIT }}
 
       - name: Build
         env:

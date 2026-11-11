@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { isTouchDevice, isMobileDevice } from '../utils/device.js';
 import { getUIScale } from '../utils/layout.js';
+import { pixelText } from '../scenes/boot/uiAssets.js';
 
 /**
  * TouchControls
@@ -38,11 +39,10 @@ export default class TouchControls {
     this.joystickThumb = this.scene.add.circle(joyX, joyY, thumbRadius, 0x00ffff, 0.6).setScrollFactor(0).setDepth(1001);
 
     // Label "MOVE" under joystick for accessibility / Indicador táctil
-    this.joystickLabel = this.scene.add.text(joyX, joyY + radius + 14, 'MOVE', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${10 * uiScale}px`,
-      color: 'rgba(0, 255, 255, 0.9)'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+    // Pixel font of the UI kit, integer glyph scale (8 px font) for crisp texels.
+    const glyph = Math.max(1, Math.round(uiScale));
+    this.joystickLabel = pixelText(this.scene, joyX, joyY + radius + 14, 'MOVE', { size: 8 * glyph, color: '#00ffff', align: 'center' })
+      .setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     // Botón de pausa en esquina inferior derecha
     const pauseX = this.scene.scale.width - padding;
@@ -51,17 +51,11 @@ export default class TouchControls {
     this.pauseButton = this.scene.add.circle(pauseX, pauseY, 38 * uiScale, 0x000000, 0.45).setScrollFactor(0).setDepth(1000);
     this.pauseButton.setStrokeStyle(2, 0xff00ff, 0.9);
 
-    this.pauseLabel = this.scene.add.text(pauseX, pauseY - 2, 'II', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${22 * uiScale}px`,
-      color: '#ff00ff'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+    this.pauseLabel = pixelText(this.scene, pauseX, pauseY - 2, 'II', { size: 16 * glyph, color: '#ff00ff', align: 'center' })
+      .setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
-    this.pauseTextLabel = this.scene.add.text(pauseX, pauseY + 38 * uiScale + 12, 'PAUSE', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${10 * uiScale}px`,
-      color: 'rgba(255, 0, 255, 0.9)'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+    this.pauseTextLabel = pixelText(this.scene, pauseX, pauseY + 38 * uiScale + 12, 'PAUSE', { size: 8 * glyph, color: '#ff00ff', align: 'center' })
+      .setOrigin(0.5).setScrollFactor(0).setDepth(1001);
 
     this.scene.input.on('pointerdown', this.handlePointerDown, this);
     this.scene.input.on('pointermove', this.handlePointerMove, this);

@@ -35,8 +35,7 @@ function g2ToBytes(pt) {
   return Buffer.concat([x0, x1, y0, y1]);
 }
 
-export function exportProof(proofPath) {
-  const proof = JSON.parse(fs.readFileSync(proofPath, 'utf8'));
+export function proofToContract(proof) {
   const a = g1ToBytes(proof.pi_a.slice(0, 2));
   const b = g2ToBytes(proof.pi_b);
   const c = g1ToBytes(proof.pi_c.slice(0, 2));
@@ -44,8 +43,7 @@ export function exportProof(proofPath) {
   return { a, b, c };
 }
 
-export function exportVk(vkeyPath) {
-  const vk = JSON.parse(fs.readFileSync(vkeyPath, 'utf8'));
+export function vkToContract(vk) {
   const alpha = g1ToBytes(vk.vk_alpha_1 ?? vk.alpha_1);
   const beta = g2ToBytes(vk.vk_beta_2 ?? vk.beta_2);
   const gamma = g2ToBytes(vk.vk_gamma_2 ?? vk.gamma_2);
@@ -57,21 +55,19 @@ export function exportVk(vkeyPath) {
   return { alpha, beta, gamma, delta, ic };
 }
 
-export function exportPubSignals(publicPath) {
-  const pub = JSON.parse(fs.readFileSync(publicPath, 'utf8'));
-  return pub.map((s) => toBytes32BE(s));
-}
+export const exportProof = (proofPath) => proofToContract(JSON.parse(fs.readFileSync(proofPath, 'utf8')));
+export const exportVk = (vkeyPath) => vkToContract(JSON.parse(fs.readFileSync(vkeyPath, 'utf8')));
+export const exportPubSignals = (publicPath) => JSON.parse(fs.readFileSync(publicPath, 'utf8')).map((s) => toBytes32BE(s));
 
-export function exportAll(buildDir, outPath) {
-  const proof = exportProof(path.join(buildDir, 'proof.json'));
-  const vk = exportVk(path.join(buildDir, 'vkey.json'));
-  const pub_signals = exportPubSignals(path.join(buildDir, 'public.json'));
-  const out = {
-    proof: {
-      a: proof.a.toString('hex'),
-      b: proof.b.toString('hex'),
-      c: proof.c.toString('hex'),
-    },
+/** snarkjs objects (proof, vkey, decimal public signals) -> contract_proof.json shape (hex). */
+export function toContractFormat(proof, vkey, publicSignals) {
+  const p = proofToContract(proof);
+  const vk = vkToContract(vkey);
+  if (vk.ic.length !== publicSignals.length + 1) {
+    throw new Error(`VK has ${vk.ic.length} IC points for ${publicSignals.length} public signals (wrong vkey for this circuit)`);
+  }
+  return {
+    proof: { a: p.a.toString('hex'), b: p.b.toString('hex'), c: p.c.toString('hex') },
     vk: {
       alpha: vk.alpha.toString('hex'),
       beta: vk.beta.toString('hex'),
@@ -79,8 +75,13 @@ export function exportAll(buildDir, outPath) {
       delta: vk.delta.toString('hex'),
       ic: vk.ic.map((b) => b.toString('hex')),
     },
-    pub_signals: pub_signals.map((b) => b.toString('hex')),
+    pub_signals: publicSignals.map((s) => toBytes32BE(s).toString('hex')),
   };
+}
+
+export function exportAll(buildDir, outPath, vkeyFile = 'vkey.json') {
+  const read = (f) => JSON.parse(fs.readFileSync(path.join(buildDir, f), 'utf8'));
+  const out = toContractFormat(read('proof.json'), read(vkeyFile), read('public.json'));
   if (outPath) fs.writeFileSync(outPath, JSON.stringify(out, null, 2));
   return out;
 }
@@ -89,6 +90,6 @@ export function exportAll(buildDir, outPath) {
 const buildDir = process.argv[2] || path.join(process.cwd(), 'circuits/build');
 const outPath = process.argv[3] || path.join(buildDir, 'contract_proof.json');
 if (process.argv[1]?.includes('export_for_contract')) {
-  exportAll(buildDir, outPath);
+  exportAll(buildDir, outPath, process.argv[4] || 'vkey.json');
   console.log('Written', outPath);
 }

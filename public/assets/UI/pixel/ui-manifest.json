@@ -1,0 +1,347 @@
+{
+ "generator": "scripts/assets/gen-ui.mjs",
+ "atlas": {
+  "key": "ui-pixel",
+  "image": "ui-pixel.png",
+  "data": "ui-pixel.json"
+ },
+ "font": {
+  "key": "pixel",
+  "image": "pixel.png",
+  "data": "pixel.xml",
+  "size": 8,
+  "lineHeight": 10,
+  "base": 7,
+  "spaceAdvance": 3,
+  "chars": "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,:;!?-+=_/\\'\"`()[]{}%#*<>&@$~|^áéíóúüñ¡¿…·—–×▶◀→←↑↓≥≤★♪✓.✕"
+ },
+ "dither": {
+  "key": "ui-dither",
+  "image": "ui-dither.png"
+ },
+ "nine": {
+  "panel-dark": {
+   "w": 48,
+   "h": 48,
+   "slice": 12
+  },
+  "panel-light": {
+   "w": 48,
+   "h": 48,
+   "slice": 12
+  },
+  "panel-accent": {
+   "w": 48,
+   "h": 48,
+   "slice": 12
+  },
+  "card": {
+   "w": 24,
+   "h": 24,
+   "slice": 6
+  },
+  "card-hover": {
+   "w": 24,
+   "h": 24,
+   "slice": 6
+  },
+  "card-dim": {
+   "w": 24,
+   "h": 24,
+   "slice": 6
+  },
+  "card-selected": {
+   "w": 24,
+   "h": 24,
+   "slice": 6
+  },
+  "card-selected-cyan": {
+   "w": 24,
+   "h": 24,
+   "slice": 6
+  },
+  "card-selected-amber": {
+   "w": 24,
+   "h": 24,
+   "slice": 6
+  },
+  "tab": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "tab-active": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "slider-track": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "progress-track": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "keycap": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "chip": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "bubble": {
+   "w": 24,
+   "h": 24,
+   "slice": 7
+  },
+  "well": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "button-normal": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-hover": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-pressed": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-primary-normal": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-primary-hover": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-primary-pressed": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-cyan-normal": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-cyan-hover": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-cyan-pressed": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-amber-normal": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-amber-hover": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-amber-pressed": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-green-normal": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-green-hover": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-green-pressed": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-red-normal": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-red-hover": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-red-pressed": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "button-disabled": {
+   "w": 20,
+   "h": 20,
+   "slice": 6
+  },
+  "progress-fill-violet": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "tile-violet": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "progress-fill-cyan": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "tile-cyan": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "progress-fill-amber": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "tile-amber": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "progress-fill-green": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "tile-green": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "progress-fill-red": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "tile-red": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "progress-fill-steel": {
+   "w": 12,
+   "h": 6,
+   "slice": 2
+  },
+  "tile-steel": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  },
+  "tile-neutral": {
+   "w": 16,
+   "h": 16,
+   "slice": 5
+  }
+ },
+ "sprites": [
+  "slider-thumb",
+  "toggle-off",
+  "toggle-on",
+  "bubble-tail",
+  "cursor",
+  "px"
+ ],
+ "icons": [
+  "heart",
+  "star",
+  "sword",
+  "shield",
+  "bolt",
+  "clock",
+  "hourglass",
+  "crosshair",
+  "lock",
+  "check",
+  "close",
+  "arrow-right",
+  "arrow-left",
+  "arrow-up",
+  "arrow-down",
+  "chevron",
+  "chevron-left",
+  "chevrons",
+  "gem",
+  "gem-amber",
+  "wallet",
+  "wave",
+  "skull",
+  "book",
+  "gear",
+  "speaker",
+  "music",
+  "note",
+  "globe",
+  "flag",
+  "expand",
+  "fullscreen",
+  "user",
+  "gamepad",
+  "crown",
+  "bullet",
+  "reload",
+  "burst",
+  "branch",
+  "medal-gold",
+  "medal-silver",
+  "medal-bronze",
+  "magnet",
+  "trash",
+  "wrench",
+  "chip",
+  "key",
+  "bag"
+ ],
+ "palette": {
+  "ink": "#0f1228",
+  "night": "#1a1f3d",
+  "dusk": "#262d58",
+  "slate": "#3b4489",
+  "periw": "#7b86d9",
+  "mist": "#b5bcff",
+  "white": "#ffffff",
+  "cyan": "#4fe3ff",
+  "cyanD": "#1aa3c9",
+  "violet": "#a66bff",
+  "violetD": "#6b3fd1",
+  "amber": "#ffc14d",
+  "amberD": "#d98a1e",
+  "green": "#5df28a",
+  "greenD": "#2fa65a",
+  "red": "#ff5c7a",
+  "redD": "#c0304f",
+  "magenta": "#ff6be6"
+ }
+}

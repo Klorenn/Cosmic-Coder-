@@ -1,159 +1,169 @@
 /**
- * ZK proof generation for Cosmic Coder ranked submit.
- * Writes input.json from request, runs generate_proof.js, returns contract_proof.json content.
- * Requires: circuits built (npm run zk:build), snarkjs, circom in PATH.
+ * ZK proof generation for Cosmic Coder ranked submit (Groth16, in-process snarkjs).
+ * Each request proves in memory: no shared input.json/proof.json, so concurrent requests cannot
+ * read each other's proof and circuits/build/contract_proof.json (deploy + test fixture) is never touched.
+ * Every proof is verified against the circuit VK before it is returned.
  */
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
+import * as snarkjs from 'snarkjs';
+import { StrKey } from '@stellar/stellar-base';
+import { toContractFormat } from '../scripts/zk/export_for_contract.js';
+import { buildRunWitness } from '../src/zk/gameProof.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, '..');
-const BUILD_DIR = path.join(ROOT, 'circuits', 'build');
+const BUILD_DIR = path.join(path.resolve(__dirname, '..'), 'circuits', 'build');
+
+const CIRCUITS = {
+  GameRun: {
+    wasm: path.join(BUILD_DIR, 'GameRun_js', 'GameRun.wasm'),
+    zkey: path.join(BUILD_DIR, 'GameRun_final.zkey'),
+    vkey: path.join(BUILD_DIR, 'GameRun_vkey.json'),
+  },
+  GameRunV3: {
+    wasm: path.join(BUILD_DIR, 'GameRunV3_js', 'GameRunV3.wasm'),
+    zkey: path.join(BUILD_DIR, 'GameRunV3_final.zkey'),
+    vkey: path.join(BUILD_DIR, 'GameRunV3_vkey.json'),
+  },
+  GameRunV2: {
+    wasm: path.join(BUILD_DIR, 'GameRunV2_js', 'GameRunV2.wasm'),
+    zkey: path.join(BUILD_DIR, 'GameRunV2_final.zkey'),
+    vkey: path.join(BUILD_DIR, 'GameRunV2_vkey.json'),
+  },
+};
+
+const vkCache = new Map();
+function loadVk(name) {
+  if (!vkCache.has(name)) vkCache.set(name, JSON.parse(fs.readFileSync(CIRCUITS[name].vkey, 'utf8')));
+  return vkCache.get(name);
+}
+
+async function prove(name, input) {
+  const c = CIRCUITS[name];
+  for (const f of [c.wasm, c.zkey, c.vkey]) {
+    if (!fs.existsSync(f)) throw new Error(`${name} artifact missing: ${path.relative(BUILD_DIR, f)}. Run npm run zk:build.`);
+  }
+  const { proof, publicSignals } = await snarkjs.groth16.fullProve(input, c.wasm, c.zkey);
+  const vk = loadVk(name);
+  if (!(await snarkjs.groth16.verify(vk, publicSignals, proof))) {
+    throw new Error(`${name} proof failed local verification`);
+  }
+  return toContractFormat(proof, vk, publicSignals);
+}
+
+const u32 = (v, field) => {
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 0xffffffff) throw new Error(`${field} must be a u32 integer`);
+  return String(n);
+};
+const u64 = (v, field) => {
+  const n = BigInt(String(v ?? '').trim() || 'x');
+  if (n < 0n || n >= 1n << 64n) throw new Error(`${field} must be a u64 integer`);
+  return n.toString();
+};
+
+/** Decimal, 0x-hex or bare hex -> decimal string (bare all-digit values are decimal). */
+function toDecimalString(val) {
+  if (val === undefined || val === null || val === '') return '0';
+  let str = String(val).trim();
+  if (!/^\d+$/.test(str) && /^[0-9a-fA-F]+$/.test(str)) str = `0x${str}`;
+  return BigInt(str).toString(10);
+}
+
+/** G.../C... strkey or 32-byte hex -> { hi, lo } 128-bit limbs (decimal strings). */
+function addressToLimbs(addr) {
+  if (!addr) return { hi: '0', lo: '0' };
+  const s = String(addr).trim();
+  let hex;
+  if (StrKey.isValidEd25519PublicKey(s)) hex = Buffer.from(StrKey.decodeEd25519PublicKey(s)).toString('hex');
+  else if (StrKey.isValidContract(s)) hex = Buffer.from(StrKey.decodeContract(s)).toString('hex');
+  else if (/^(0x)?[0-9a-fA-F]{1,64}$/.test(s)) hex = s.replace(/^0x/, '');
+  else throw new Error(`invalid address: ${s.slice(0, 8)}...`);
+  const v = BigInt('0x' + hex);
+  return { hi: (v >> 128n).toString(), lo: (v & ((1n << 128n) - 1n)).toString() };
+}
 
 /**
- * Build circuit input from prover request.
- * @param {{ run_hash_hex: string, score: number, wave: number, nonce: number, season_id: number }} body
- * run_hash_hex: 64 hex chars (32 bytes). Split into hi (first 16 bytes) and lo (last 16 bytes) as decimal strings.
+ * GameRun input (the circuit submit_zk consumes: 7 public signals).
+ * run_hash_hex: 64 hex chars (32 bytes) -> hi = first 16 bytes, lo = last 16 bytes.
  */
-function buildInput(body) {
-  const run_hash_hex = String(body.run_hash_hex || '').replace(/^0x/, '').padStart(64, '0').slice(0, 64);
-  if (run_hash_hex.length !== 64) {
-    throw new Error('run_hash_hex must be 64 hex chars (32 bytes)');
-  }
-  const run_hash_hi = BigInt('0x' + run_hash_hex.slice(0, 32)).toString();
-  const run_hash_lo = BigInt('0x' + run_hash_hex.slice(32, 64)).toString();
-  const score = Math.max(0, Math.floor(Number(body.score) || 0));
-  const wave = Math.max(0, Math.floor(Number(body.wave) || 0));
-  const nonce = BigInt(body.nonce != null ? body.nonce : 0).toString();
-  const season_id = Math.max(0, Math.floor(Number(body.season_id) || 1));
-  const used_zk_weapon = Number(body.used_zk_weapon) ? 1 : 0;
+export function buildInput(body) {
+  const run_hash_hex = String(body.run_hash_hex || '').replace(/^0x/, '');
+  if (!/^[0-9a-fA-F]{64}$/.test(run_hash_hex)) throw new Error('run_hash_hex must be 64 hex chars (32 bytes)');
   return {
-    run_hash_hi,
-    run_hash_lo,
-    score: String(score),
-    wave: String(wave),
-    nonce,
-    season_id: String(season_id),
-    used_zk_weapon: String(used_zk_weapon)
+    run_hash_hi: BigInt('0x' + run_hash_hex.slice(0, 32)).toString(),
+    run_hash_lo: BigInt('0x' + run_hash_hex.slice(32, 64)).toString(),
+    score: u32(body.score, 'score'),
+    wave: u32(body.wave, 'wave'),
+    nonce: u64(body.nonce, 'nonce'),
+    season_id: u32(body.season_id ?? 1, 'season_id'),
+    used_zk_weapon: Number(body.used_zk_weapon) ? '1' : '0',
+  };
+}
+
+/** @returns {Promise<{ proof: { a, b, c }, vk: { alpha, beta, gamma, delta, ic }, pub_signals: string[] }>} hex */
+export function generateProof(body) {
+  return prove('GameRun', buildInput(body));
+}
+
+export function buildInputV2(body) {
+  const player = body.player_address_hi != null && body.player_address_lo != null
+    ? { hi: toDecimalString(body.player_address_hi), lo: toDecimalString(body.player_address_lo) }
+    : addressToLimbs(body.player_address);
+  const contract = body.contract_id_hi != null && body.contract_id_lo != null
+    ? { hi: toDecimalString(body.contract_id_hi), lo: toDecimalString(body.contract_id_lo) }
+    : addressToLimbs(body.contract_id);
+  return {
+    run_hash_hi: toDecimalString(body.run_hash_hi),
+    run_hash_lo: toDecimalString(body.run_hash_lo),
+    score: u32(body.score, 'score'),
+    wave: u32(body.wave, 'wave'),
+    nonce: u64(body.nonce, 'nonce'),
+    season_id: u32(body.season_id ?? 1, 'season_id'),
+    challenge_id: u32(body.challenge_id ?? 1, 'challenge_id'),
+    player_address_hi: player.hi,
+    player_address_lo: player.lo,
+    contract_id_hi: contract.hi,
+    contract_id_lo: contract.lo,
+    domain_separator: toDecimalString(body.domain_separator || '0'),
   };
 }
 
 /**
- * Generate proof and return contract-ready payload.
- * @param {{ run_hash_hex: string, score: number, wave: number, nonce: number, season_id: number }} body
- * @returns {{ proof: { a, b, c }, vk: { alpha, beta, gamma, delta, ic }, pub_signals: string[] }}
- */
-export function generateProof(body) {
-  const input = buildInput(body);
-  const inputPath = path.join(BUILD_DIR, 'input.json');
-  if (!fs.existsSync(BUILD_DIR)) {
-    throw new Error('circuits/build not found. Run npm run zk:build first.');
-  }
-  if (!fs.existsSync(path.join(BUILD_DIR, 'GameRun_final.zkey'))) {
-    throw new Error('Circuit not built. Run npm run zk:build first.');
-  }
-  fs.writeFileSync(inputPath, JSON.stringify(input, null, 2));
-
-  const scriptPath = path.join(ROOT, 'scripts', 'zk', 'generate_proof.js');
-  execSync(`node "${scriptPath}" "${inputPath}" "${BUILD_DIR}"`, {
-    cwd: ROOT,
-    stdio: 'pipe',
-    timeout: 60000
-  });
-
-  const outPath = path.join(BUILD_DIR, 'contract_proof.json');
-  const raw = JSON.parse(fs.readFileSync(outPath, 'utf8'));
-  return raw;
-}
-
-/**
- * Generate proof and return contract-ready payload for GameRunV2.
- * @param {{ run_hash_hi, run_hash_lo, score, wave, nonce, season_id, challenge_id, player_address, contract_id, domain_separator }} body
- * @returns {{ proof: { a, b, c }, vk: { alpha, beta, gamma, delta, ic }, pub_signals: string[] }}
+ * GameRunV2 (12 public signals). NOTE: cosmic_coder.submit_zk only accepts the 7-signal GameRun
+ * layout, so this proof is verifiable off-chain / by the verifier contract but not submittable.
  */
 export function generateProofV2(body) {
-  const input = buildInputV2(body);
-  const inputPath = path.join(BUILD_DIR, 'input.json');
-  if (!fs.existsSync(BUILD_DIR)) {
-    throw new Error('circuits/build not found. Run npm run zk:build first.');
-  }
-  if (!fs.existsSync(path.join(BUILD_DIR, 'GameRunV2_js', 'GameRunV2.wasm'))) {
-    throw new Error('GameRunV2 circuit not built. Run npm run zk:build first.');
-  }
-  fs.writeFileSync(inputPath, JSON.stringify(input, null, 2));
-
-  const scriptPath = path.join(ROOT, 'scripts', 'zk', 'generate_proof_v2.js');
-  execSync(`node "${scriptPath}" "${inputPath}" "${BUILD_DIR}"`, {
-    cwd: ROOT,
-    stdio: 'pipe',
-    timeout: 60000
-  });
-
-  const outPath = path.join(BUILD_DIR, 'contract_proof.json');
-  const raw = JSON.parse(fs.readFileSync(outPath, 'utf8'));
-  return raw;
+  return prove('GameRunV2', buildInputV2(body));
 }
 
-function buildInputV2(body) {
-  // Normalize any numeric/hex-ish value to decimal string for snarkjs/circom runtime.
-  const toDecimalString = (val) => {
-    if (val === undefined || val === null || val === '') return '0';
-    let str = String(val).trim();
-    if (/^[0-9a-fA-F]+$/.test(str) && !str.startsWith('0x')) str = `0x${str}`;
-    return BigInt(str).toString(10);
-  };
+/** True when the GameRunV3 wasm/zkey/vkey are built (scripts/zk/build_GameRunV3.sh). */
+export function hasV3Artifacts() {
+  const c = CIRCUITS.GameRunV3;
+  return [c.wasm, c.zkey, c.vkey].every((f) => fs.existsSync(f));
+}
 
-  // Convert all inputs to decimal strings for circom compatibility
-  const run_hash_hi = toDecimalString(body.run_hash_hi);
-  const run_hash_lo = toDecimalString(body.run_hash_lo);
-  const score = String(Math.max(0, Math.floor(Number(body.score) || 0)));
-  const wave = String(Math.max(0, Math.floor(Number(body.wave) || 0)));
-  const nonce = toDecimalString(body.nonce != null ? body.nonce : '0');
-  const season_id = String(Math.max(0, Math.floor(Number(body.season_id) || 1)));
-  const challenge_id = String(Math.max(0, Math.floor(Number(body.challenge_id) || 1)));
-  
-  // Handle Stellar addresses - split hex into 128-bit parts for Circom
-  const stellarAddressTo128BitParts = (hexAddress) => {
-    if (!hexAddress || typeof hexAddress !== 'string') return { hi: '0', lo: '0' };
-    
-    // Remove 0x prefix if present
-    const cleanHex = hexAddress.replace(/^0x/, '');
-    
-    // Convert to BigInt and split into 128-bit parts
-    const val = BigInt('0x' + cleanHex);
-    const hi = (val >> 128n).toString();
-    const lo = (val & ((1n << 128n) - 1n)).toString();
-    
-    return { hi, lo };
-  };
-  
-  const playerParts = body.player_address_hi != null && body.player_address_lo != null
-    ? { hi: toDecimalString(body.player_address_hi), lo: toDecimalString(body.player_address_lo) }
-    : stellarAddressTo128BitParts(body.player_address);
-  const contractParts = body.contract_id_hi != null && body.contract_id_lo != null
-    ? { hi: toDecimalString(body.contract_id_hi), lo: toDecimalString(body.contract_id_lo) }
-    : stellarAddressTo128BitParts(body.contract_id);
-  const player_address_hi = playerParts.hi;
-  const player_address_lo = playerParts.lo;
-  const contract_id_hi = contractParts.hi;
-  const contract_id_lo = contractParts.lo;
-  const domain_separator = toDecimalString(body.domain_separator || '0');
-  
-  return {
-    run_hash_hi,
-    run_hash_lo,
-    score,
-    wave,
-    nonce,
-    season_id,
-    challenge_id,
-    player_address_hi,
-    player_address_lo,
-    contract_id_hi,
-    contract_id_lo,
-    domain_separator
-  };
+/**
+ * GameRunV3 input. Body = buildRunWitness output (docs/ZK_CIRCUIT_STATUS.md, "V3 payload"):
+ * { seed, kills, events_hash, score, wave, nonce, season_id?, used_zk_weapon? }. `events` (raw log) is accepted
+ * instead of `events_hash`. Throws on values outside u32/u64 or a score the circuit cannot prove.
+ */
+export function buildInputV3(body) {
+  return buildRunWitness({
+    score: body.score,
+    wave: body.wave,
+    kills: body.kills,
+    seed: body.seed,
+    nonce: body.nonce,
+    season: body.season_id ?? 1,
+    events: body.events,
+    eventsHash: body.events_hash,
+    usedZkWeapon: body.used_zk_weapon,
+  });
+}
+
+/** GameRunV3 (7 public signals, same layout as GameRun; run_hash = Poseidon commitment in signals 0/1). */
+export async function generateProofV3(body) {
+  return prove('GameRunV3', await buildInputV3(body));
 }

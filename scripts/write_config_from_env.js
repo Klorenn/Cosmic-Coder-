@@ -21,7 +21,12 @@ const CONFIG_KEYS = [
   'VITE_PROGRESS_API_URL',
   'VITE_LEADERBOARD_URL',
   'VITE_API_URL',
-  'VITE_XP_WS_URL'
+  'VITE_XP_WS_URL',
+  // "true" only once ranked runs are verified by a REAL UltraHonk verifier (see contracts/README.md).
+  'VITE_RANKED_VERIFIED',
+  // Ranked backend ("groth16" | "noir") and circuit ("v3" default | "v1" legacy; must match the deployed VK).
+  'VITE_ZK_BACKEND',
+  'VITE_ZK_CIRCUIT'
 ];
 
 let base = {};

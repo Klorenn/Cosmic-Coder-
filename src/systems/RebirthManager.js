@@ -2,6 +2,8 @@
  * RebirthManager - Prestige/Rebirth system for permanent progression
  * Milestones grant permanent bonuses that persist across all runs
  */
+import { logger } from '../utils/log.js';
+
 export default class RebirthManager {
   static STORAGE_KEY = 'vibeCoderRebirth';
 
@@ -26,20 +28,31 @@ export default class RebirthManager {
    * @returns {object} Rebirth state
    */
   static load() {
+    let parsed = null;
     try {
       const saved = localStorage.getItem(this.STORAGE_KEY);
-      if (saved) {
-        return JSON.parse(saved);
-      }
+      if (saved) parsed = JSON.parse(saved);
     } catch (e) {
-      console.error('Failed to load rebirth data:', e);
+      logger.warn('Failed to load rebirth data:', e);
     }
+    return this.sanitize(parsed);
+  }
 
+  /**
+   * Coerce untrusted (localStorage) rebirth data into bounded, finite values.
+   * rebirthLevel is an integer in [0, MILESTONES.length]; counters are finite integers >= 0.
+   * @param {unknown} data
+   * @returns {{rebirthLevel:number, highestWave:number, totalRebirths:number, lifetimeKills:number}}
+   */
+  static sanitize(data) {
+    const d = data && typeof data === 'object' && !Array.isArray(data) ? data : {};
+    const count = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
+    const maxLevel = this.MILESTONES.length;
     return {
-      rebirthLevel: 0,
-      highestWave: 0,
-      totalRebirths: 0,
-      lifetimeKills: 0
+      rebirthLevel: Math.min(maxLevel, count(d.rebirthLevel)),
+      highestWave: count(d.highestWave),
+      totalRebirths: count(d.totalRebirths),
+      lifetimeKills: count(d.lifetimeKills)
     };
   }
 
@@ -51,7 +64,7 @@ export default class RebirthManager {
     try {
       localStorage.setItem(this.STORAGE_KEY, JSON.stringify(data));
     } catch (e) {
-      console.error('Failed to save rebirth data:', e);
+      logger.warn('Failed to save rebirth data:', e);
     }
   }
 
@@ -61,6 +74,7 @@ export default class RebirthManager {
    * @returns {object|null} Available milestone or null
    */
   static canRebirth(currentWave) {
+    if (typeof currentWave !== 'number' || Number.isNaN(currentWave)) return null;
     const data = this.load();
 
     // Find the highest milestone the player qualifies for
@@ -91,11 +105,11 @@ export default class RebirthManager {
     // Update rebirth level
     data.rebirthLevel = milestone.rebirth;
     data.totalRebirths++;
-    data.lifetimeKills += kills;
+    if (typeof kills === 'number' && Number.isFinite(kills) && kills > 0) data.lifetimeKills += Math.floor(kills);
 
     // Update highest wave if applicable
-    if (currentWave > data.highestWave) {
-      data.highestWave = currentWave;
+    if (Number.isFinite(currentWave) && currentWave > data.highestWave) {
+      data.highestWave = Math.floor(currentWave);
     }
 
     this.save(data);

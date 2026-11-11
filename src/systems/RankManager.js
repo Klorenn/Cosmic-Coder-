@@ -69,7 +69,10 @@ export const RANKS = {
  * @returns {object} Rank data object
  */
 export function getRankById(rankId) {
-  return RANKS[rankId] || RANKS[0];
+  // Own-property lookup only: ids like '__proto__' / 'toString' used to return Object.prototype members
+  // and crash getRankColorCSS (color undefined).
+  const key = typeof rankId === 'number' || typeof rankId === 'string' ? String(rankId) : '';
+  return Object.prototype.hasOwnProperty.call(RANKS, key) ? RANKS[key] : RANKS[0];
 }
 
 /**
@@ -177,7 +180,7 @@ export function isUnranked(rankId) {
  * @returns {boolean} True if rank has an icon
  */
 export function hasRankIcon(rankId) {
-  return rankId > 0 && getRankSprite(rankId) !== null;
+  return getRankById(rankId).id > 0 && getRankSprite(rankId) !== null;
 }
 
 /**

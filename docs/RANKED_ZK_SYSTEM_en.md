@@ -82,6 +82,12 @@ Responsibilities:
 
 This separation is intentional: policy contains *game and ranking policy*, the verifier contains *only cryptography*.
 
+Deployment and failure semantics (current contract):
+
+- Configured at deploy time via `__constructor(admin, game_hub)`; the admin then calls `set_verifier`, `set_run_vk` and `set_unlock_vk` (the VKs are pinned: any other VK fails with `#8 VkMismatch`). `set_noir_verifier` must only point to a REAL UltraHonk verifier: the bundled `ultrahonk_verifier` is a stub, so ranked is not cryptographically verified until one is deployed. Admin rotation is two-step: `propose_admin` + `accept_admin`.
+- Entry points return `Result<_, CosmicCoderError>`: failures abort the transaction instead of returning `false`. Notably `score < wave * 5` fails with `#10 ScoreBelowMinimum` and a negative casual score with `#11 NegativeScore`; the frontend (`src/contracts/contractErrors.js`) replicates these checks locally and maps every code to a typed `ContractError`.
+- Read helpers: `get_active_session(player)`, `is_nonce_used(player, season_id, nonce)`, `get_admin`, `get_game_hub`.
+
 ### 3.4 Verifier contract: `zk_verifier`
 
 Responsibilities:

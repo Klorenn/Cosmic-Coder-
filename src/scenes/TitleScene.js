@@ -3,7 +3,7 @@ import * as Audio from '../utils/audio.js';
 import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import LeaderboardManager from '../systems/LeaderboardManager.js';
-import { getRankById, getRankName, getRankColor, getRankColorCSS, getRankBonusPercent, isUnranked, getRankEmoji, getAllRanks, getRankIdFromScore } from '../systems/RankManager.js';
+import { getRankById, getRankName, getRankColor, getRankColorCSS, getRankBonusPercent, isUnranked, getRankEmoji, getAllRanks, getRankIdFromScore, getRankSprite } from '../systems/RankManager.js';
 import { isConnected } from '../utils/socket.js';
 import { t, setLanguage, currentLang } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
@@ -12,24 +12,44 @@ import * as authApi from '../utils/authApi.js';
 import * as gameClient from '../contracts/gameClient.js';
 import * as weaponClient from '../contracts/weaponClient.js';
 import { WEAPONS, WEAPON_TIERS, getWeaponById, getTierById } from '../config/weapons.js';
+import { bindDomListenerToScene } from '../utils/sceneListeners.js';
 import { getUIScale, getCameraZoom, anchorTopLeft, anchorTopRight, anchorBottomLeft, anchorBottomRight, anchorBottomCenter } from '../utils/layout.js';
+import logger from '../utils/log.js';
+import { getAssetPath } from '../utils/assetBase.js';
+import { version as GAME_VERSION } from '../../package.json';
+import { preloadTitleAssets, TITLE_TEX } from './title/titleAssets.js';
+import { visibleRect, cornerAnchors, cssPerUnit, menuRowSpacing } from './title/titleLayout.js';
+import { zkStatusLabel, formatVersion, shortWallet } from './title/titleStatus.js';
+import { TITLE_MENU_OPTIONS, menuHintKey, compactNumber } from './title/titleMenu.js';
+import { tr, tt } from './title/titleI18n.js';
+import { createOverlay, overlayMetrics, fitPanelHeight, glassCard, pillButton, dotsLevel, miniBar, keycap, toggle, slider, segmented, medalIcon, skeletonBar, pixelIcon, gemIcon, ovText, fitText, isTouch, colorInt, OV, iconTile, pixelDisc, mixColor, pixelText, pixelPanel, uiIcon, uiSprite, PX, PX_CSS, infoBadge, iconChip } from './title/overlayKit.js';
+import { startRunModel, cycleStartMode, startCardLayout } from './title/startRunModel.js';
+import { gridLayout, gridMove, wrapIndex, formatCost, canPurchase, upgradeIconKind, characterProfile, zkWeaponState, prepareLeaderboard, leaderboardName, medalTier, nudgeUnit } from './title/overlayModel.js';
+import { getCharacterAbility } from '../data/characters.js';
+import { createSpaceBackground } from '../systems/spaceBackground.js';
 
 // Debug flag for TitleScene (FPS overlay, selection logs, etc.)
 const DEBUG = false;
 
 // —— Title menu UI state (deterministic, single source of truth) ———
-const MENU_SELECTED_SCALE = 1.05;
+const MENU_SELECTED_SCALE = 1; // pixel font: no fractional scaling
 const MENU_SELECTED_ALPHA = 1;
 const MENU_UNSELECTED_ALPHA = 0.7;
 const MENU_UNSELECTED_SCALE = 1;
-const MENU_ITEM_COLOR = '#00ffff';
+const MENU_ITEM_COLOR = '#4fe3ff';
+const MENU_ITEM_SELECTED_COLOR = '#ffffff';
+const MENU_GLOW = 'rgba(34,211,238,0.95)';
+const TITLE_FONT = '"Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif';
+const CORNER_FONT_PX = 13;
+const DEPTH_BUBBLE = 60;
 const MENU_MAX_WIDTH_PERCENT = 0.6;
 
 export default class TitleScene extends Phaser.Scene {
   constructor() {
     super({ key: 'TitleScene' });
     this.selectedOption = 0;
-    this.baseMenuOptions = ['START_GAME', 'UPGRADES', 'WEAPONS', 'CHARACTER', 'LEADERBOARD', 'SETTINGS', 'CONTROLS', 'DOCUMENTATION', 'CREDITS'];
+    // Max 8 items; DOCUMENTATION is a link inside CREDITS (see openDocumentation()).
+    this.baseMenuOptions = [...TITLE_MENU_OPTIONS];
     this.menuOptions = [...this.baseMenuOptions];
     this.isMusicOn = false;
     this.settingsMenuOpen = false;
@@ -39,6 +59,16 @@ export default class TitleScene extends Phaser.Scene {
     this.gitQuoteTimer = null;
     this.startupLoadingOverlay = null;
     this.startupLoadingText = null;
+  }
+
+  preload() {
+    preloadTitleAssets(this);
+    if (!this.textures.exists('ui-logo')) this.load.image('ui-logo', getAssetPath('assets/UI/pixel/logo.png')); // pixel logotype (gen-logo.mjs)
+  }
+
+  /** Visible world rect (camera zoom crops the canvas edges on short windows). */
+  getTitleView() {
+    return visibleRect(this.scale.width, this.scale.height, this.cameras.main.zoom);
   }
 
   create(data) {
@@ -117,6 +147,7 @@ export default class TitleScene extends Phaser.Scene {
     // Zoom de cámara: en ventanas con poca altura acercamos ligeramente
     // todo el título para que texto y personaje no se vean tan pequeños.
     this.cameras.main.setZoom(getCameraZoom(this));
+    this.titleView = this.getTitleView();
 
     // Main centered UI layout container (title + menu)
     const centerX = this.cameras.main.width / 2;
@@ -148,6 +179,9 @@ export default class TitleScene extends Phaser.Scene {
     // Optional debug overlay (FPS, etc.)
     this.createDebugOverlay();
 
+    // Single entrance moment: fade in from black.
+    this.cameras.main.fadeIn(500, 0, 0, 0);
+
     // Check if we need to ask for name on first launch
     if (!window.VIBE_SETTINGS.playerName) {
       this.time.delayedCall(500, () => this.showNameInput(true));
@@ -157,18 +191,32 @@ export default class TitleScene extends Phaser.Scene {
     if (data?.showLeaderboard) {
       this.time.delayedCall(600, () => this.showLeaderboard());
     }
+    // Language switch restarts the scene: come back to SETTINGS.
+    if (data?.reopen === 'SETTINGS') {
+      this.time.delayedCall(80, () => this.showSettings());
+    }
+  }
+
+  /** Short ZK weapon hint (shotgun threshold from WEAPON_TIERS, no hardcoded numbers). */
+  getZkWeaponHint() {
+    const fmt = (n) => Number(n).toLocaleString('en-US');
+    const shotgun = fmt(WEAPON_TIERS[WEAPONS[2]?.tier ?? 2]?.threshold ?? 0);
+    return tt('zk_hint').replace('{shotgun}', shotgun);
+  }
+
+  /** Score tiers for the ZK weapons help panel: [{ name, threshold (formatted), color }]. */
+  getZkWeaponTiers() {
+    const fmt = (n) => Number(n).toLocaleString('en-US');
+    const COLORS = { Silver: PX_CSS.mist, Gold: PX_CSS.amber, Diamond: PX_CSS.cyan, Quantum: PX_CSS.violet };
+    return Object.values(WEAPON_TIERS)
+      .filter((tier) => tier.threshold > 0)
+      .map((tier) => ({ name: tier.name, threshold: fmt(tier.threshold), color: COLORS[tier.name] || PX_CSS.white }));
   }
 
   update() {
-    if (this.speechBubble && this.speechBubble.visible && this.speechShowTime != null && this.time.now - this.speechShowTime > 3200) {
-      this.speechBubble.setVisible(false);
-      if (this.speechText) this.speechText.setVisible(false);
-      this.speechShowTime = null;
-      this._speechBubbleW = this._speechBubbleH = null;
-      if (this.speechTimer) {
-        this.speechTimer.remove();
-        this.speechTimer = null;
-      }
+    this.positionCharacterExtras();
+    if (this.speechBubble && this.speechBubble.visible && this.speechShowTime != null && this.time.now - this.speechShowTime > 3400) {
+      this.hideSpeechBubble();
     }
     // Keep speech bubble following the character while visible
     if (this.speechBubble?.visible && this.speechText?.visible && this._speechBubbleW != null && this._speechBubbleH != null && this.idlePlayer) {
@@ -177,206 +225,57 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   createBackground() {
-    const width = this.scale.width;
-    const height = this.scale.height;
-
-    const pickKey = (...keys) => {
-      for (const key of keys) {
-        if (key && this.textures.exists(key)) return key;
-      }
-      return null;
-    };
-
-    const placeCover = (key, depth = 0, alpha = 1) => {
-      if (!this.textures.exists(key)) return null;
-      const img = this.add.image(width / 2, height / 2, key);
-      const scale = Math.max(width / img.width, height / img.height);
-      img.setScale(scale);
-      img.setDepth(depth);
-      img.setAlpha(alpha);
-      return img;
-    };
-
-    this.bgParallaxLayers = [];
-    this.bgTweens = [];
-
-    // Depth 0: base background (cover image, no tiling to avoid mosaic).
-    const bgBaseKey = pickKey('bg-blue-back');
-    this.bgBase = bgBaseKey ? placeCover(bgBaseKey, 0, 1) : null;
-    if (!this.bgBase) {
-      const fallback = this.add.graphics();
-      fallback.fillStyle(0x050913, 1);
-      fallback.fillRect(0, 0, width, height);
-      fallback.setDepth(0);
-      this.bgBase = fallback;
-    } else {
-      // Very slow drift to keep image alive without visible repetition.
-      this.bgTweens.push(this.tweens.add({
-        targets: this.bgBase,
-        x: width / 2 + 56,
-        y: height / 2 - 30,
-        duration: 10000,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
-      }));
-    }
-
-    // Depth 1: optional mid layer + stars.
-    const bgMidKey = pickKey('bg-blue-with-stars');
-    if (bgMidKey) {
-      this.bgMid = placeCover(bgMidKey, 1, 0.35);
-      if (this.bgMid) {
-        // Subtle breathing/rotation similar to layered animated space menus.
-        this.bgTweens.push(this.tweens.add({
-          targets: this.bgMid,
-          scaleX: this.bgMid.scaleX * 1.14,
-          scaleY: this.bgMid.scaleY * 1.14,
-          angle: 3.8,
-          duration: 7000,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut'
-        }));
-        this.bgTweens.push(this.tweens.add({
-          targets: this.bgMid,
-          alpha: { from: 0.24, to: 0.62 },
-          duration: 4200,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut'
-        }));
-      }
-    }
-
-    const starsKey = pickKey('bg-blue-stars');
-    if (starsKey) {
-      this.bgStarsFar = this.add.tileSprite(width / 2, height / 2, width, height, starsKey);
-      this.bgStarsFar.setDepth(1).setAlpha(0.25);
-      this.bgParallaxLayers.push({ layer: this.bgStarsFar, speedX: 0.18, speedY: 0.24 });
-
-      this.bgStars = this.add.tileSprite(width / 2, height / 2, width, height, starsKey);
-      this.bgStars.setDepth(2).setAlpha(0.48);
-      this.bgParallaxLayers.push({ layer: this.bgStars, speedX: 0.45, speedY: 0.68 });
-    }
-
-    if (this.bgParallaxLayers.length > 0) {
-      // Single lightweight loop for all layered parallax movement.
-      this.starScrollEvent = this.time.addEvent({
-        delay: 33,
-        loop: true,
-        callback: () => {
-          for (const entry of this.bgParallaxLayers) {
-            const layer = entry.layer;
-            if (!layer || !layer.scene || typeof layer.tilePositionX !== 'number') continue;
-            layer.tilePositionX += entry.speedX;
-            layer.tilePositionY += entry.speedY;
-          }
-        }
-      });
-    }
-
-    // Depth 2: planet + asteroids.
-    const planetKey = pickKey('bg-planet-big');
-    if (planetKey) {
-      this.bgPlanet = this.add.image(width - 200, height - 180, planetKey);
-      this.bgPlanet.setDepth(3).setScale(0.8).setAlpha(0.9);
-      this.bgTweens.push(this.tweens.add({
-        targets: this.bgPlanet,
-        x: this.bgPlanet.x - 34,
-        y: this.bgPlanet.y + 20,
-        duration: 4200,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
-      }));
-    }
-
-    const addAsteroid = (key, x, y, scale, driftX, driftY) => {
-      const finalKey = pickKey(key);
-      if (!finalKey) return;
-      const asteroid = this.add.image(x, y, finalKey).setDepth(3).setScale(scale).setAlpha(0.82);
-      const tween = this.tweens.add({
-        targets: asteroid,
-        x: x + driftX,
-        y: y + driftY,
-        duration: 8000,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
-      this.bgTweens.push(tween);
-    };
-
-    addAsteroid('bg-asteroid-1', width * 0.18, height * 0.22, 0.75, 10, -8);
-    addAsteroid('bg-asteroid-2', width * 0.78, height * 0.32, 0.85, -12, 8);
+    // Shared animated space background (src/systems/spaceBackground.js), DEBUG ZONE = the menu nebula.
+    if (this.spaceBg) this.spaceBg.destroy();
+    this.spaceBg = createSpaceBackground(this, { mode: 'title', variant: 'debug-zone' });
+    this.events.once('shutdown', () => { if (this.spaceBg) { this.spaceBg.destroy(); this.spaceBg = null; } });
   }
 
   createTitle() {
     if (!this.uiLayout) return;
-
-    // Título principal (layout local)
-    this.titleText = this.add.text(0, -220, t('title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '64px',
-      color: '#00ffff',
-      fontStyle: 'bold',
-      stroke: '#003333',
-      strokeThickness: 5
-    }).setOrigin(0.5).setDepth(10);
-    this.uiLayout.add(this.titleText);
-
-    // Glow suave, no exagerado
-    this.titleText.setShadow(0, 0, '#00ffff', 15, true, true);
-    this.titleGlowTween = this.tweens.add({
-      targets: this.titleText,
-      alpha: { from: 0.9, to: 1 },
-      duration: 2000,
-      yoyo: true,
-      repeat: -1,
-      ease: 'Sine.easeInOut'
-    });
-
-    // Glitch effect cada 5–8 segundos
-    const scheduleGlitch = () => {
-      this.glitchTimer = this.time.delayedCall(Phaser.Math.Between(5000, 8000), () => {
-        this.glitchTitle();
-        scheduleGlitch();
-      });
+    // Logo pixel (ui/arena-pixel-v3): logotipo 1x generado por scripts/assets/gen-logo.mjs, mostrado NEAREST
+    // a un número entero de px css por texel; si la textura no está, cae a la fuente pixel y se carga en caliente.
+    const LOGO_KEY = 'ui-logo';
+    const cssPerUnit = () => ((this.scale.displaySize?.width || this.scale.width) / this.scale.width) * (this.cameras.main.zoom || 1);
+    const placeLogo = () => {
+      if (!this.uiLayout || !this.textures.exists(LOGO_KEY)) return false;
+      const src = this.textures.get(LOGO_KEY).getSourceImage();
+      const k = cssPerUnit();
+      const n = Math.max(2, Math.round((600 * k) / Math.max(1, src.width))); // css px per texel
+      const img = this.add.image(0, -224, LOGO_KEY).setOrigin(0.5).setDepth(10).setScale(n / k);
+      if (this.titleText) { const i = this.uiLayout.getIndex(this.titleText); this.titleText.destroy(); this.uiLayout.addAt(img, Math.max(0, i)); } else this.uiLayout.add(img);
+      this.titleText = img;
+      if (this.logoGlow) this.logoGlow.setScale((img.displayWidth * 1.25) / 32, (img.displayHeight * 2.4) / 32);
+      return true;
     };
-    scheduleGlitch();
+    if (!placeLogo()) {
+      const k = cssPerUnit();
+      this.titleText = pixelText(this, 0, -220, t('title'), { size: 8 * Math.max(2, Math.round(4 * k)) / k, color: PX.cyan, align: 'center' }).setOrigin(0.5).setDepth(10);
+      this.uiLayout.add(this.titleText);
+      if (!this._logoLoading) {
+        this._logoLoading = true;
+        this.load.image(LOGO_KEY, getAssetPath('assets/UI/pixel/logo.png'));
+        this.load.once('complete', () => { this._logoLoading = false; if (this.scene.isActive()) placeLogo(); });
+        this.load.start();
+      }
+    }
 
-    // Subtitle
-    this.subtitleText = this.add.text(0, -160, t('subtitle'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
-      color: '#ff00ff'
-    }).setOrigin(0.5).setDepth(10);
-    this.uiLayout.add(this.subtitleText);
+    // Halo suave detrás del logo que "respira" (en vez del glitch).
+    if (this.textures.exists(TITLE_TEX.dot)) {
+      this.logoGlow = this.add.image(0, -224, TITLE_TEX.dot).setBlendMode(Phaser.BlendModes.ADD).setTint(0x7c5cff).setAlpha(0.22);
+      const tw = this.titleText.displayWidth || this.titleText.width;
+      const th = this.titleText.displayHeight || this.titleText.height;
+      this.logoGlow.setScale((tw * 1.25) / 32, (th * 2.4) / 32);
+      this.uiLayout.addAt(this.logoGlow, 0);
+      this.titleGlowTween = this.tweens.add({ targets: this.logoGlow, alpha: 0.1, duration: 2800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
 
-    // Decorative line
-    this.titleLine = this.add.rectangle(0, -135, 520, 2, 0x00ffff, 0.65).setDepth(10);
-    this.uiLayout.add(this.titleLine);
-  }
-
-  glitchTitle() {
-    if (!this.titleText || !this.titleText.scene) return;
-    const originalX = this.titleText.x;
-    const originalColor = '#00ffff';
-
-    // Quick glitch
-    this.titleText.setX(originalX + Phaser.Math.Between(-5, 5));
-    this.titleText.setColor('#ff0000');
-
-    this.time.delayedCall(50, () => {
-      this.titleText.setX(originalX + Phaser.Math.Between(-3, 3));
-      this.titleText.setColor('#00ff00');
-    });
-
-    this.time.delayedCall(100, () => {
-      this.titleText.setX(originalX);
-      this.titleText.setColor(originalColor);
-    });
+    // Tagline: fuente pixel (2 css px por texel), lila claro con sombra dura.
+    {
+      const k = cssPerUnit();
+      this.subtitleText = pixelText(this, 0, -157, t('subtitle'), { size: (8 * 2) / k, color: PX_CSS.mist, align: 'center' }).setOrigin(0.5).setDepth(10);
+      this.uiLayout.add(this.subtitleText);
+    }
   }
 
   createMenu() {
@@ -395,7 +294,18 @@ export default class TitleScene extends Phaser.Scene {
 
     const ctaY = -100;
     const optionsStartY = -18;
-    const optionSpacing = 32;
+    // 32px as before; on small screens grow toward 48 css px touch rows within the visible area.
+    const view = this.titleView || this.getTitleView();
+    const k = cssPerUnit(this.scale.displaySize?.width, this.scale.width, this.cameras.main.zoom);
+    const secondaryRows = Math.max(1, this.menuOptions.length - 1);
+    const displayW = this.scale.displaySize?.width || this.scale.width;
+    const touchLayout = displayW < 900 || !!this.sys.game.device?.input?.touch;
+    const optionSpacing = !touchLayout ? 32 : Math.round(menuRowSpacing({
+      base: 32,
+      rows: secondaryRows,
+      available: (view.h / 2 - 70) - optionsStartY - (gameClient.isZkProverConfigured() ? 70 : 0),
+      cssPerUnit: k
+    }));
     this.menuStartY = optionsStartY;
     this.menuSpacing = optionSpacing;
 
@@ -411,12 +321,12 @@ export default class TitleScene extends Phaser.Scene {
       const scale = isSelected ? MENU_SELECTED_SCALE : MENU_UNSELECTED_SCALE;
       const alpha = isSelected ? MENU_SELECTED_ALPHA : MENU_UNSELECTED_ALPHA;
 
-      const text = this.add.text(0, y, label, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: isPrimary ? '48px' : '28px',
+      // Pixel font: 6x (primary) / 3x art scale so glyph pixels land on whole css pixels at 1920 and 1280.
+      const text = pixelText(this, 0, y, label, {
+        size: isPrimary ? 48 : 24,
         color: MENU_ITEM_COLOR,
-        fontStyle: 'bold',
-        wordWrap: { width: menuMaxWidth - 40 }
+        align: 'center',
+        maxWidth: menuMaxWidth - 40
       }).setOrigin(0.5).setDepth(10).setAlpha(alpha).setScale(scale);
 
       this.uiLayout.add(text);
@@ -438,13 +348,15 @@ export default class TitleScene extends Phaser.Scene {
       const ctaY = this._primaryY;
 
       if (gameClient.isZkProverConfigured()) {
-        this.zkHintText = this.add.text(0, 0, t('prompt.zk_cta_hint'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${Math.max(14, 16 * uiScale)}px`,
-          color: '#ffffff',
+        // Honest hint: only claim verifiable proofs once ranked runs are really verified on-chain.
+        const ctaHint = tr(menuHintKey('START_GAME'));
+        this.zkHintText = pixelText(this, 0, 0, ctaHint, {
+          size: 24,
+          color: PX_CSS.mist,
           align: 'center',
-          wordWrap: { width: Math.max(200, buttonW - 48) }
-        }).setOrigin(0.5, 0).setDepth(10).setAlpha(0.82);
+          maxWidth: Math.max(420, buttonW)
+        }).setOrigin(0.5, 0).setDepth(10).setAlpha(0.9);
+        this.zkHintText.setShadow(0, 1, 'rgba(0,0,0,0.8)', 4, false, true);
         const hintH = this.zkHintText.height;
         const gapBelowCta = 12;
         this.zkHintText.setPosition(0, ctaY + bounds.height / 2 + gapBelowCta);
@@ -476,32 +388,31 @@ export default class TitleScene extends Phaser.Scene {
     const arrowOffset = 20;
     const selectorX = initialTarget ? initialTarget.x - initialTarget.width / 2 - arrowOffset : -200;
     this.menuSelectorArrowOffset = arrowOffset;
-    this.selector = this.add.text(selectorX, selectorY, '▶', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${22 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(10);
+    // Pixel cursor (atlas sprite) instead of a glowing ▶ glyph.
+    this.selector = uiSprite(this, selectorX, selectorY, 'cursor', { px: 3 }).setDepth(10);
     this.uiLayout.add(this.selector);
 
     this.selectorBlinkTween = this.tweens.add({
       targets: this.selector,
-      alpha: 0.3,
-      duration: 500,
+      alpha: 0.45,
+      duration: 700,
       yoyo: true,
       repeat: -1
     });
 
-    this.promptText = this.add.text(0, lastOptionY + 48, t('prompt.enter_select'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
+    this.promptText = this.add.text(0, lastOptionY + Math.max(48, optionSpacing * 1.4), t('prompt.enter_select'), {
+      fontFamily: TITLE_FONT,
       fontSize: '14px',
-      color: '#ffffff'
+      color: '#b9c3e6'
     }).setOrigin(0.5).setDepth(10).setAlpha(0.75);
     this.uiLayout.add(this.promptText);
 
+    // Less text on screen: the keyboard prompt now lives in CONTROLS.
+    this.promptText.setVisible(false);
+
     this.promptBlinkTween = this.tweens.add({
       targets: this.promptText,
-      alpha: 0.45,
+      alpha: 0.5,
       duration: 1000,
       yoyo: true,
       repeat: -1
@@ -510,134 +421,161 @@ export default class TitleScene extends Phaser.Scene {
     this.updateMenuVisuals();
   }
 
+  /**
+   * Corners: icons + 1-2 words only. Top-left wallet (icon + state, online dot), top-right ranked shield
+   * (tooltip), language and fullscreen icon; bottom-left best wave, bottom-right BITS; faint version.
+   */
   createFooter() {
     const uiScale = getUIScale(this);
+    const view = this.titleView || this.getTitleView();
+    const top = cornerAnchors(view, 28, 30);
+    const bottom = cornerAnchors(view, 32, 34);
+    const gap = Math.round(10 * uiScale);
+    // Pixel chips: bitmap label (2 css px per art px) + 16 px icon (1 css px per art px) on a bevelled 'chip'.
+    const cu = 1 / Math.max(0.2, cssPerUnit(this.scale.displaySize?.width, this.scale.width, this.cameras.main.zoom));
+    const cornerPx = 2 * cu;
+    const label = (x, y, str, color, originX) => pixelText(this, x, y, str, { size: 8 * cornerPx, color })
+      .setOrigin(originX, 0.5).setDepth(10);
+    const ICON_OF = { wallet: 'wallet', shield: 'shield', wave: 'wave', bits: 'gem' };
+    const iconAt = (x, y, kind, color) => uiIcon(this, x, y, ICON_OF[kind] || kind, { px: cu, big: false, tint: kind === 'shield' ? color : null }).setDepth(10);
+    const chipAt = (x0, x1, y) => {
+      const h = 16 * cornerPx;
+      const p = pixelPanel(this, Math.min(x0, x1), Math.round(y - h / 2), Math.abs(x1 - x0), h, 'chip', { px: cornerPx }).setDepth(9).setAlpha(0.92);
+      p.place = (a, b) => p.setPosition(Math.min(a, b), Math.round(y - h / 2)).resize(Math.abs(b - a), h);
+      return p;
+    };
+    const touch = Math.max(44 * uiScale, 48 / Math.max(0.2, cssPerUnit(this.scale.displaySize?.width, this.scale.width, this.cameras.main.zoom)));
 
-    // Ola máxima y BITS en esquinas inferiores, separados para que no se solapen
-    const highWave = String(progressStore.highWave);
-    const highWavePos = anchorBottomLeft(this, 140, 42);
-    this.add.text(highWavePos.x, highWavePos.y, `${t('footer.high_wave')}: ${highWave}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 13 * uiScale,
-      color: '#ffd700'
-    }).setOrigin(0, 0.5).setDepth(10);
+    // Top-left: wallet.
+    const wy = top.topLeft.y;
+    const iconW = 16 * cu; // 16 art px icons at 1 css px each
+    this.walletIcon = iconAt(top.topLeft.x + iconW / 2, wy, 'wallet', 0x9fe8ff);
+    this.connectionBadge = this.add.rectangle(top.topLeft.x + iconW - cornerPx, wy - iconW / 2 + cornerPx * 2, cornerPx * 3, cornerPx * 3, 0xff6666).setStrokeStyle(cornerPx, PX.ink).setDepth(11);
+    this.walletBtn = label(top.topLeft.x + iconW + gap, wy, tt('connect'), '#d7f6ff', 0);
+    const walletChip = chipAt(top.topLeft.x - 4 * cornerPx, top.topLeft.x + iconW + gap + this.walletBtn.width + 6 * cornerPx, wy);
+    const walletZone = this.add.zone(top.topLeft.x - 8, wy, 10, 10).setOrigin(0, 0.5).setDepth(12);
+    const sizeWalletZone = () => {
+      walletChip.place(top.topLeft.x - 4 * cornerPx, top.topLeft.x + iconW + gap + this.walletBtn.width + 6 * cornerPx);
+      const w = iconW + gap + this.walletBtn.width + 16;
+      walletZone.setSize(w, touch);
+      if (walletZone.input) walletZone.input.hitArea.setTo(0, 0, w, touch);
+    };
+    walletZone.setInteractive({ useHandCursor: true });
+    sizeWalletZone();
+    this._sizeWalletZone = sizeWalletZone;
+    walletZone.on('pointerdown', () => this.onWalletClick());
+    walletZone.on('pointerover', () => { this.walletBtn.setColor('#ffffff'); this.walletIcon.setAlpha(1); });
+    walletZone.on('pointerout', () => { this.walletBtn.setColor('#d7f6ff'); });
 
-    const currency = window.VIBE_UPGRADES?.currency ?? 0;
-    const bitsPos = anchorBottomRight(this, 140, 42);
-    this.bitsText = this.add.text(bitsPos.x, bitsPos.y, `${t('footer.bits')}: ${currency}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 13 * uiScale,
-      color: '#00ffff'
-    }).setOrigin(1, 0.5).setDepth(10);
-
-    // Fullscreen button (top left)
-    const fsPos = anchorTopLeft(this, 20, 20);
-    this.fullscreenBtn = this.add.text(fsPos.x, fsPos.y, this.isFullscreen() ? t('footer.fullscreen_exit') : t('footer.fullscreen'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 12 * uiScale,
-      color: '#00aaff'
-    }).setOrigin(0, 0).setDepth(10).setInteractive({ useHandCursor: true });
-    this.fullscreenBtn.on('pointerdown', () => this.toggleFullscreen());
-    this.fullscreenBtn.on('pointerover', () => this.fullscreenBtn.setColor('#00ffff'));
-    this.fullscreenBtn.on('pointerout', () => this.fullscreenBtn.setColor('#00aaff'));
+    // Top-right: only the ranked shield (language + fullscreen live in SETTINGS).
+    const rx = top.topRight.x;
+    // Keeps the SETTINGS fullscreen switch in sync when the browser leaves fullscreen on its own.
     document.addEventListener('fullscreenchange', this.onFullscreenChange = () => this.updateFullscreenButton());
 
-    // Wallet: mismo estilo que FULLSCREEN pero verde, justo debajo (Freighter)
-    const walletPos = anchorTopLeft(this, 20, 44);
-    this.walletBtn = this.add.text(walletPos.x, walletPos.y, t('footer.wallet_connect'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 12 * uiScale,
-      color: '#00cc88'
-    }).setOrigin(0, 0).setDepth(10).setInteractive({ useHandCursor: true });
-    this.walletBtn.on('pointerdown', async () => {
-      if (stellarWallet.isConnected()) {
-        stellarWallet.disconnect();
-        authApi.clearStoredToken();
-        resetProgressForDisconnect();
-        this.updateWalletButton();
-        this.updateConnectionBadge();
-        this.updateContinueMenuOption();
-        this.hideUsernameModal();
-      } else {
-        this.walletBtn.setText('...');
-        let addr = null;
-        let connectErrorMsg = null;
-        try {
-          addr = await stellarWallet.connect({ timeoutMs: 20000 });
-        } catch (e) {
-          addr = null;
-          connectErrorMsg = e?.message || null;
-        }
-        if (addr) {
-          await loadProgressForWallet(addr);
-          this.updateContinueMenuOption();
-          this.updateBitsDisplay?.();
-          // SEP-10: only mark as connected after user SIGNS (not just after opening Freighter).
-          this.walletBtn.setText(t('auth.sign_prompt'));
-          try {
-            await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase, addr), { timeoutMs: 60000 });
-            stellarWallet.confirmConnection(addr);
-            const me = await authApi.getMe();
-            if (me && (me.username == null || me.username === '')) {
-              this.showUsernameModal();
-            }
-          } catch (e) {
-            const msg = e?.message || String(e);
-            console.warn('SEP-10 login failed:', msg);
-            if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
-          }
-        }
-        this.updateWalletButton();
-        this.updateConnectionBadge();
-        if (!addr && this.sayQuote) {
-          if (connectErrorMsg === 'FREIGHTER_TIMEOUT') {
-            this.sayQuote(t('auth.connect_timeout'));
-          } else if (connectErrorMsg) {
-            this.sayQuote(connectErrorMsg);
-          } else {
-            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
-            this.sayQuote(t(isMobile ? 'footer.wallet_error_mobile' : 'footer.wallet_error'));
-          }
-        }
-      }
+    // Ranked status: small shield; details in a tooltip (hover) / quote (tap).
+    chipAt(rx - iconW - 4 * cornerPx, rx + 4 * cornerPx, wy);
+    this.zkBadge = iconAt(rx - iconW / 2, wy, 'shield', 0x8a90a8);
+    // Image hit area is in unscaled frame space (16x16 icon): grow it to the touch target around the centre.
+    const tz = touch / cu;
+    this.zkBadge.setInteractive({ hitArea: new Phaser.Geom.Rectangle(8 - tz / 2, 8 - tz / 2, tz, tz), hitAreaCallback: Phaser.Geom.Rectangle.Contains, useHandCursor: true });
+    // Tooltip: pixel chip panel + right-aligned bitmap text (keeps setText / setColor / text like the old Text).
+    const tipText = pixelText(this, 0, 0, '', { size: 8 * cornerPx, color: '#f1f5ff', align: 'right', lineSpacing: cornerPx });
+    const tipBg = pixelPanel(this, 0, 0, 10, 10, 'panel-dark', { px: cornerPx });
+    this.zkTooltip = this.add.container(rx + 4 * cornerPx, wy + iconW / 2 + 6 * cornerPx, [tipBg, tipText]).setDepth(200).setVisible(false);
+    const layoutTip = () => {
+      const pad = 7 * cornerPx;
+      tipText.setPosition(-pad - tipText.width, pad);
+      tipBg.setPosition(-tipText.width - pad * 2, 0).resize(tipText.width + pad * 2, tipText.height + pad * 2);
+    };
+    Object.defineProperty(this.zkTooltip, 'text', { get: () => tipText.text, configurable: true });
+    this.zkTooltip.setText = (v) => { tipText.setText(v); layoutTip(); return this.zkTooltip; };
+    this.zkTooltip.setColor = (c) => { tipText.setColor(c); return this.zkTooltip; };
+    this.zkBadge.on('pointerover', () => this.zkTooltip.setVisible(!!this.zkTooltip.text));
+    this.zkBadge.on('pointerout', () => this.zkTooltip.setVisible(false));
+    this.zkBadge.on('pointerdown', () => {
+      if (!gameClient.isRankedVerified()) this.sayQuote(tt('unverified_hint'));
     });
-    this.walletBtn.on('pointerover', () => this.walletBtn.setColor('#00ffaa'));
-    this.walletBtn.on('pointerout', () => this.walletBtn.setColor('#00cc88'));
-    this.updateWalletButton();
-
-    // Idioma (EN/ES) debajo del badge de conexión
-    const langPos = anchorTopRight(this, 20, 44);
-    this.langBtn = this.add.text(langPos.x, langPos.y, window.VIBE_SETTINGS?.language === 'es' ? 'ES' : 'EN', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 12 * uiScale,
-      color: '#00aaff'
-    }).setOrigin(1, 0).setDepth(10).setInteractive({ useHandCursor: true });
-    this.langBtn.on('pointerdown', () => {
-      const lang = window.VIBE_SETTINGS?.language === 'es' ? 'en' : 'es';
-      setLanguage(lang);
-      this.scene.start('TitleScene');
-    });
-    this.langBtn.on('pointerover', () => this.langBtn.setColor('#00ffff'));
-    this.langBtn.on('pointerout', () => this.langBtn.setColor('#00aaff'));
-
-    // Connection status badge: LIVE si XP server O wallet conectada (modo online)
-    const badgePos = anchorTopRight(this, 20, 20);
-    this.connectionBadge = this.add.text(badgePos.x, badgePos.y, t('footer.offline'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 12 * uiScale,
-      color: '#ff6666'
-    }).setOrigin(1, 0).setDepth(10);
-    this.updateConnectionBadge();
-
-    // ZK Status badge (below connection badge, above language button)
-    this.zkBadge = this.add.text(badgePos.x, badgePos.y + 48, 'ZK: ...', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: 10 * uiScale,
-      color: '#888888'
-    }).setOrigin(1, 0).setDepth(10);
-    // Check ZK status asynchronously
+    this.updateZkBadge(null);
     this.checkZkStatus().then(status => this.updateZkBadge(status));
 
+    // Bottom corners: best wave + BITS (icon + number).
+    const by = bottom.bottomLeft.y;
+    const waveChip = chipAt(0, 1, by);
+    const bitsChip = chipAt(0, 1, by);
+    iconAt(bottom.bottomLeft.x + iconW / 2, by, 'wave', 0xffd166);
+    this.highWaveText = label(bottom.bottomLeft.x + iconW + gap, by, '0', '#ffd166', 0);
+    this.bitsText = label(bottom.bottomRight.x - iconW - gap, by, '0', '#8ff3ff', 1);
+    iconAt(bottom.bottomRight.x - iconW / 2, by, 'bits', 0x22d3ee);
+    this._layoutCornerChips = () => {
+      if (!this.highWaveText?.scene || !this.bitsText?.scene) return;
+      waveChip.place(bottom.bottomLeft.x - 4 * cornerPx, bottom.bottomLeft.x + iconW + gap + this.highWaveText.width + 6 * cornerPx);
+      bitsChip.place(bottom.bottomRight.x - iconW - gap - this.bitsText.width - 6 * cornerPx, bottom.bottomRight.x + 4 * cornerPx);
+    };
+    this.updateBitsDisplay();
+
+    // Version: very faint, bottom centre.
+    const version = formatVersion(GAME_VERSION);
+    if (version) {
+      this.versionText = pixelText(this, bottom.bottomCenter.x, by, version, { size: 8 * cu * 2, color: PX_CSS.periw })
+        .setOrigin(0.5).setDepth(10).setAlpha(0.45);
+    }
+
+    this.updateWalletButton();
+    this.updateConnectionBadge();
+  }
+
+  /** Wallet click: connect (Freighter + SEP-10) or disconnect. Same logic as the old footer button. */
+  async onWalletClick() {
+    if (stellarWallet.isConnected()) {
+      stellarWallet.disconnect();
+      authApi.clearStoredToken();
+      resetProgressForDisconnect();
+      this.updateWalletButton();
+      this.updateConnectionBadge();
+      this.updateContinueMenuOption();
+      this.hideUsernameModal();
+    } else {
+      this.walletBtn.setText('...');
+      let addr = null;
+      let connectErrorMsg = null;
+      try {
+        addr = await stellarWallet.connect({ timeoutMs: 20000 });
+      } catch (e) {
+        addr = null;
+        connectErrorMsg = e?.message || null;
+      }
+      if (addr) {
+        await loadProgressForWallet(addr);
+        this.updateContinueMenuOption();
+        this.updateBitsDisplay?.();
+        // SEP-10: only mark as connected after user SIGNS (not just after opening Freighter).
+        this.walletBtn.setText(t('auth.sign_prompt'));
+        try {
+          await authApi.loginWithSep10(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase, addr), { timeoutMs: 60000 });
+          stellarWallet.confirmConnection(addr);
+          const me = await authApi.getMe();
+          if (me && (me.username == null || me.username === '')) {
+            this.showUsernameModal();
+          }
+        } catch (e) {
+          const msg = e?.message || String(e);
+          logger.warn('SEP-10 login failed:', msg);
+          if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
+        }
+      }
+      this.updateWalletButton();
+      this.updateConnectionBadge();
+      if (!addr && this.sayQuote) {
+        if (connectErrorMsg === 'FREIGHTER_TIMEOUT') {
+          this.sayQuote(t('auth.connect_timeout'));
+        } else if (connectErrorMsg) {
+          this.sayQuote(connectErrorMsg);
+        } else {
+          const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 0 && window.innerWidth < 1024);
+          this.sayQuote(t(isMobile ? 'footer.wallet_error_mobile' : 'footer.wallet_error'));
+        }
+      }
+    }
   }
 
   isFullscreen() {
@@ -656,32 +594,26 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   updateFullscreenButton() {
-    if (this.fullscreenBtn && !this.fullscreenBtn.scene) return;
-    if (this.fullscreenBtn) {
-      this.fullscreenBtn.setText(this.isFullscreen() ? t('footer.fullscreen_exit') : t('footer.fullscreen'));
-    }
+    // Fullscreen lives in SETTINGS now: refresh its switch while the overlay is open.
+    this._settingsFsToggle?.();
   }
 
   updateBitsDisplay() {
     if (this.bitsText && this.bitsText.scene) {
-      const currency = window.VIBE_UPGRADES?.currency ?? 0;
-      this.bitsText.setText(`${t('footer.bits')}: ${currency}`);
+      this.bitsText.setText(compactNumber(window.VIBE_UPGRADES?.currency ?? 0));
     }
+    if (this.highWaveText && this.highWaveText.scene) {
+      this.highWaveText.setText(String(progressStore.highWave || 0));
+    }
+    this._layoutCornerChips?.();
   }
 
   async updateWalletButton() {
     if (!this.walletBtn || !this.walletBtn.scene) return;
     const addr = await stellarWallet.getAddress();
-    if (addr) {
-      let label = stellarWallet.shortAddress(addr);
-      try {
-        const me = await authApi.getMe();
-        if (me && me.username) label = me.username + ' (' + label + ')';
-      } catch (_) {}
-      this.walletBtn.setText(label + ' | ' + t('footer.wallet_disconnect'));
-    } else {
-      this.walletBtn.setText(t('footer.wallet_connect'));
-    }
+    if (!this.walletBtn || !this.walletBtn.scene) return;
+    this.walletBtn.setText(addr ? shortWallet(addr) : tt('connect'));
+    this._sizeWalletZone?.();
   }
 
   showUsernameModal() {
@@ -851,7 +783,15 @@ export default class TitleScene extends Phaser.Scene {
     if (!nextTexture) return;
     this.idlePlayer.setTexture(nextTexture, 0);
     this.playIdleForActiveCharacter();
-    if (this.charNameText) this.charNameText.setText(char.name);
+  }
+
+  /** Keep the light halo attached to the (walking / floating) astronaut. */
+  positionCharacterExtras() {
+    const p = this.idlePlayer;
+    if (!p || !p.scene) return;
+    const baseY = this.idlePlayerBaseY ?? p.y;
+    if (this.charHalo) this.charHalo.setPosition(p.x, p.y - p.displayHeight * 0.05);
+    if (this.charFloorGlow) this.charFloorGlow.setPosition(p.x, baseY + p.displayHeight * 0.36);
   }
 
   updateContinueMenuOption() {
@@ -868,52 +808,43 @@ export default class TitleScene extends Phaser.Scene {
     this.menuPrimaryBg?.destroy();
     this.zkHintText?.destroy();
     this.createMenu();
+    this.bindMenuPointer();
   }
 
+  /** Online dot on the wallet icon: green when the XP server or a wallet is connected. */
   updateConnectionBadge() {
     if (!this.connectionBadge || !this.connectionBadge.scene) return;
     const online = isConnected() || stellarWallet.isConnected();
-    this.connectionBadge.setText(online ? t('footer.live') : t('footer.offline'));
-    this.connectionBadge.setColor(online ? '#00ff00' : '#ff6666');
+    this.connectionBadge.setFillStyle(online ? 0x34d399 : 0xf87171);
     this.tweens.killTweensOf(this.connectionBadge);
     this.connectionBadge.setAlpha(1);
     if (online) {
-      this.tweens.add({
-        targets: this.connectionBadge,
-        alpha: 0.6,
-        duration: 800,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
+      this.tweens.add({ targets: this.connectionBadge, alpha: 0.4, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     }
   }
 
   async checkZkStatus() {
     try {
       const status = await gameClient.getZkStatus();
-      console.log('[ZK Status]', status);
+      logger.log('[ZK Status]', status);
       return status;
     } catch (e) {
-      console.warn('[ZK Status] Check failed:', e);
+      logger.warn('[ZK Status] Check failed:', e);
       return { configured: false, proverHealthy: false, message: 'Check failed' };
     }
   }
 
+  /** Ranked shield. Honest: amber + "RANKED: UNVERIFIED" tooltip while gameClient.isRankedVerified() is false. */
   updateZkBadge(status) {
     if (!this.zkBadge || !this.zkBadge.scene) return;
-    this.zkBadge.setVisible(true);
-    if (!status.configured) {
-      this.zkBadge.setText('ZK: OFF');
-      this.zkBadge.setColor('#888888');
-    } else if (status.proverHealthy) {
-      this.zkBadge.setVisible(true);
-      this.zkBadge.setText('ZK: READY');
-      this.zkBadge.setColor('#00ff88');
-    } else {
-      this.zkBadge.setVisible(true);
-      this.zkBadge.setText('ZK: SLEEPING');
-      this.zkBadge.setColor('#ffaa00');
+    const label = zkStatusLabel(status, gameClient.isRankedVerified());
+    const color = { ok: 0x34d399, warn: 0xfbbf24, muted: 0x8a90a8 }[label.tone];
+    this.zkBadge.setTint(color);
+    this.zkBadge.setAlpha(label.tone === 'warn' ? 0.9 : 1);
+    if (this.zkTooltip) {
+      const extra = gameClient.isRankedVerified() ? '' : `\n${tt('unverified_hint')}`;
+      this.zkTooltip.setText(label.text + extra);
+      this.zkTooltip.setColor(label.tone === 'warn' ? '#fbbf24' : '#f1f5ff');
     }
   }
 
@@ -1046,38 +977,46 @@ export default class TitleScene extends Phaser.Scene {
     this.shutdown();
   }
 
+  /** Soft ambience: twinkling bright stars and slow drifting light motes (replaces the old code symbols). */
   createCodeParticles() {
-    // Floating code symbols (máx 20, tweens ligeros)
-    const codeSymbols = ['{ }', '( )', '< >', '[ ]', '//', '/*', '*/', '=>', '&&', '||', '!=', '==', '++', '--', '::'];
     const width = this.scale.width || 800;
     const height = this.scale.height || 600;
-    const maxParticles = 15;
-
     this.codeParticles = [];
+    if (!this.textures.exists(TITLE_TEX.dot)) return;
+    const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const rnd = new Phaser.Math.RandomDataGenerator(['cosmic-title']);
 
-    for (let i = 0; i < maxParticles; i++) {
-      const symbol = Phaser.Utils.Array.GetRandom(codeSymbols);
-      const x = Phaser.Math.Between(width * 0.1, width * 0.9);
-      const y = Phaser.Math.Between(height * 0.35, height * 0.9);
-
-      const particle = this.add.text(x, y, symbol, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: Phaser.Math.Between(10, 16) + 'px',
-        color: '#00ffff'
-      }).setAlpha(Phaser.Math.FloatBetween(0.15, 0.4));
-
-      this.codeParticles.push(particle);
-
-      this.tweens.add({
-        targets: particle,
-        y: y + Phaser.Math.Between(-40, 40),
-        x: x + Phaser.Math.Between(-20, 20),
-        alpha: { from: particle.alpha, to: 0.05 },
-        duration: Phaser.Math.Between(3000, 6000),
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
-      });
+    for (let i = 0; i < 22; i++) {
+      const star = this.add.image(rnd.between(0, width), rnd.between(0, height), TITLE_TEX.dot)
+        .setDepth(2).setScale(rnd.realInRange(0.18, 0.42)).setTint(rnd.pick([0xffffff, 0xd8ccff, 0xb8f6ff]))
+        .setAlpha(0.15).setBlendMode(Phaser.BlendModes.ADD);
+      this.codeParticles.push(star);
+      if (!reduced) {
+        this.tweens.add({ targets: star, alpha: rnd.realInRange(0.65, 1), scale: star.scale * 1.25, duration: rnd.between(900, 2200), delay: rnd.between(0, 4000), yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      }
+    }
+    if (reduced) return;
+    for (let i = 0; i < 16; i++) {
+      const mote = this.add.image(0, 0, TITLE_TEX.dot).setDepth(4).setScale(rnd.realInRange(0.12, 0.3))
+        .setTint(rnd.pick([0x9b87ff, 0x22d3ee, 0xf0abfc])).setAlpha(0).setBlendMode(Phaser.BlendModes.ADD);
+      this.codeParticles.push(mote);
+      const drift = () => {
+        if (!mote.scene) return;
+        mote.setPosition(rnd.between(0, width), rnd.between(height * 0.35, height + 30)).setAlpha(0);
+        this.tweens.add({
+          targets: mote,
+          y: mote.y - rnd.between(180, 420),
+          x: mote.x + rnd.between(-60, 60),
+          alpha: { from: 0, to: rnd.realInRange(0.3, 0.7) },
+          duration: rnd.between(7000, 12000),
+          ease: 'Sine.easeInOut',
+          onComplete: () => {
+            if (!mote.scene) return;
+            this.tweens.add({ targets: mote, alpha: 0, duration: 1200, onComplete: drift });
+          }
+        });
+      };
+      this.time.delayedCall(rnd.between(0, 6000), drift);
     }
   }
 
@@ -1117,11 +1056,14 @@ export default class TitleScene extends Phaser.Scene {
       });
     } else if (DEBUG) {
       // eslint-disable-next-line no-console
-      console.warn('[TitleScene] legendary-huntersWarglaive texture missing — skipping decoration');
+      logger.warn('[TitleScene] legendary-huntersWarglaive texture missing — skipping decoration');
     }
 
-    const playerX = Math.max(120, Math.floor(w * 0.18));
-    const playerY = Math.floor(h * 0.74);
+    // Anchored to the visible area so the astronaut is not cropped when the camera zooms (phones).
+    const view = this.titleView || this.getTitleView();
+    const playerX = Math.max(view.x + 120, Math.floor(view.x + view.w * 0.18));
+    const compactTitle = (this.scale.displaySize?.width || w) < 900;
+    const playerY = Math.floor(view.y + view.h * (compactTitle ? 0.6 : 0.74));
 
     // Player character - uses selected character (VibeCoder, Destroyer, Swordsman)
     const { char } = this.getActiveCharacterMeta();
@@ -1145,9 +1087,20 @@ export default class TitleScene extends Phaser.Scene {
       }
       textureKey = placeholderKey;
     }
+    // Soft light halo behind / under the astronaut (follows it in update()).
+    if (this.textures.exists(TITLE_TEX.dot)) {
+      this.charHalo = this.add.image(playerX, playerY, TITLE_TEX.dot).setDepth(CHARACTER_DEPTH - 2)
+        .setBlendMode(Phaser.BlendModes.ADD).setTint(0x7c5cff).setAlpha(0.42).setScale((150 * uiScale) / 32, (190 * uiScale) / 32);
+      this.charFloorGlow = this.add.image(playerX, playerY, TITLE_TEX.dot).setDepth(CHARACTER_DEPTH - 1)
+        .setBlendMode(Phaser.BlendModes.ADD).setTint(0x22d3ee).setAlpha(0.5).setScale((120 * uiScale) / 32, (22 * uiScale) / 32);
+      this.tweens.add({ targets: this.charHalo, alpha: 0.26, duration: 2400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
     this.idlePlayer = this.add.sprite(playerX, playerY, textureKey, 0);
     this.idlePlayer.setScale(1.45 * uiScale);
     this.idlePlayer.setDepth(CHARACTER_DEPTH);
+    this.idlePlayerBaseY = playerY;
+
+    this.positionCharacterExtras();
     this.playIdleForActiveCharacter(false);
 
     // Short walk burst so the title character feels alive.
@@ -1175,14 +1128,20 @@ export default class TitleScene extends Phaser.Scene {
     });
 
     // Speech bubble (hidden initially)
-    this.speechBubble = this.add.graphics();
+    // Pixel speech bubble: white 9-slice 'bubble' + pixel tail, ink bitmap text (no shadow).
+    const bubblePx = 2 / Math.max(0.2, cssPerUnit(this.scale.displaySize?.width, this.scale.width, this.cameras.main.zoom));
+    this._bubblePx = bubblePx;
+    this._bubblePanel = pixelPanel(this, 0, 0, 40, 30, 'bubble', { px: bubblePx });
+    this._bubbleTail = uiSprite(this, 0, 0, 'bubble-tail', { px: bubblePx }).setOrigin(0, 0);
+    this.speechBubble = this.add.container(0, 0, [this._bubblePanel, this._bubbleTail]);
     this.speechBubble.setDepth(CHARACTER_DEPTH + 1);
-    this.speechText = this.add.text(0, 0, '', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#000000',
+    this.speechText = pixelText(this, 0, 0, '', {
+      size: 8 * bubblePx,
+      color: PX.dusk,
       align: 'center',
-      wordWrap: { width: 170 * uiScale }
+      lineSpacing: bubblePx,
+      maxWidth: 230 * uiScale,
+      shadow: false
     }).setOrigin(0.5).setDepth(CHARACTER_DEPTH + 2);
     this.speechBubble.setVisible(false);
     this.speechText.setVisible(false);
@@ -1193,12 +1152,8 @@ export default class TitleScene extends Phaser.Scene {
     // Thinking bubble (shows coding activity)
     this.thinkingBubble = this.add.graphics();
     this.thinkingBubble.setDepth(CHARACTER_DEPTH + 1);
-    this.thinkingDots = this.add.text(0, 0, '...', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${16 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(CHARACTER_DEPTH + 2);
+    this.thinkingDots = pixelText(this, 0, 0, '...', { size: 16, color: PX.dusk, shadow: false })
+      .setOrigin(0.5).setDepth(CHARACTER_DEPTH + 2);
     this.thinkingBubble.setVisible(false);
     this.thinkingDots.setVisible(false);
     this.thinkingTimer = null;
@@ -1716,6 +1671,9 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   walkTo(targetX, targetY, goingToWarglaive = false) {
+    // Keep walks inside the visible area (camera zoom crops the canvas on short windows).
+    const view = this.titleView || this.getTitleView();
+    if (view.x > 0) targetX = Phaser.Math.Clamp(view.x + targetX * (view.w / this.scale.width), view.x + 60, view.x + view.w * 0.32);
     if (this.charState === 'walking') return;
 
     this.charState = 'walking';
@@ -1767,92 +1725,78 @@ export default class TitleScene extends Phaser.Scene {
   sayQuote(text) {
     if (!this.idlePlayer || !this.idlePlayer.scene || !this.speechBubble || !this.speechText) return;
     if (this.time.now < (this.sceneSpeechAllowedAt ?? 0)) return;
-
     if (this.speechTimer) this.speechTimer.remove();
 
     const uiScale = getUIScale(this);
-    const maxTextWidth = 200 * uiScale;
-    const paddingX = 16 * uiScale;
-    const paddingY = 12 * uiScale;
-    const maxBubbleW = 280 * uiScale;
-    const maxBubbleH = 110 * uiScale;
-
-    this.speechText.setWordWrapWidth(maxTextWidth);
+    const padX = 16 * uiScale;
+    const padY = 11 * uiScale;
     this.speechText.setText(text);
-    const textW = this.speechText.width;
-    const textH = this.speechText.height;
-    const bubbleWidth = Math.min(maxBubbleW, Math.max(120 * uiScale, textW + paddingX * 2));
-    const bubbleHeight = Math.min(maxBubbleH, Math.max(44 * uiScale, textH + paddingY * 2));
-
-    this._speechBubbleW = bubbleWidth;
-    this._speechBubbleH = bubbleHeight;
-
+    const w = Math.round(Math.max(90 * uiScale, this.speechText.width + padX * 2));
+    const h = Math.round(Math.max(38 * uiScale, this.speechText.height + padY * 2));
+    this._speechBubbleW = w;
+    this._speechBubbleH = h;
+    this.drawSpeechBubbleShape(w, h, uiScale);
     this.redrawSpeechBubbleAtCharacter();
 
-    this.speechBubble.setDepth(5);
-    this.speechText.setDepth(6);
-    this.speechBubble.setVisible(true);
-    this.speechText.setVisible(true);
+    // Soft pop-in from the tail.
+    const targets = [this.speechBubble, this.speechText];
+    this.tweens.killTweensOf(targets);
+    this.speechBubble.setDepth(DEPTH_BUBBLE).setVisible(true).setAlpha(0).setScale(0.85);
+    this.speechText.setDepth(DEPTH_BUBBLE + 1).setVisible(true).setAlpha(0).setScale(0.85);
+    this.tweens.add({ targets, alpha: 1, scale: 1, duration: 200, ease: 'Back.easeOut' });
     this.speechShowTime = this.time.now;
+    this.speechTimer = this.time.delayedCall(3000, () => this.hideSpeechBubble());
+  }
 
-    this.speechTimer = this.time.delayedCall(3000, () => {
-      this.speechBubble.setVisible(false);
-      this.speechText.setVisible(false);
-      this.speechShowTime = null;
-      this._speechBubbleW = this._speechBubbleH = null;
+  /** Fade + shrink the speech bubble out. */
+  hideSpeechBubble() {
+    if (!this.speechBubble || !this.speechBubble.visible) return;
+    this.speechShowTime = null;
+    if (this.speechTimer) { this.speechTimer.remove(); this.speechTimer = null; }
+    const targets = [this.speechBubble, this.speechText];
+    this.tweens.killTweensOf(targets);
+    this.tweens.add({
+      targets, alpha: 0, scale: 0.92, duration: 170, ease: 'Quad.easeIn',
+      onComplete: () => {
+        if (this.speechShowTime != null) return; // a new quote started meanwhile
+        this.speechBubble?.setVisible(false);
+        this.speechText?.setVisible(false);
+        this._speechBubbleW = this._speechBubbleH = null;
+      }
     });
   }
 
+  /**
+   * Bubble drawn around (0,0) so it can scale from its centre: dark translucent body, subtle light border,
+   * faint violet glow and a soft tail on the lower-left that points at the astronaut.
+   */
+  drawSpeechBubbleShape(w, h, uiScale) {
+    const P = this._bubblePx || 2;
+    const W = Math.round(w / P) * P; const H = Math.round(h / P) * P;
+    const left = -W / 2; const top = -H / 2;
+    const tailX = Math.round((left + Math.min(W * 0.22, 36 * uiScale)) / P) * P;
+    this._bubblePanel.setPosition(left, top).resize(W, H);
+    // The tail's first 3 rows overlap the bubble's bottom border (white fill erases it).
+    this._bubbleTail.setPosition(tailX, H / 2 - 3 * P);
+    this._speechTail = { dx: tailX + P, dy: H / 2 + 5 * P };
+  }
+
+  /** Place the bubble so its tail tip sits just above the astronaut's head (kept inside the visible area). */
   redrawSpeechBubbleAtCharacter() {
     if (!this.idlePlayer || !this.speechBubble || !this.speechText || this._speechBubbleW == null || this._speechBubbleH == null) return;
     const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const bubbleWidth = this._speechBubbleW;
-    const bubbleHeight = this._speechBubbleH;
-
-    let bubbleX = this.idlePlayer.x + 70 * uiScale;
-    const bubbleY = this.idlePlayer.y - 125 * uiScale;
-    if (bubbleX + bubbleWidth / 2 > w - 20) bubbleX = w - 20 - bubbleWidth / 2;
-    if (bubbleX - bubbleWidth / 2 < this.idlePlayer.x) bubbleX = this.idlePlayer.x + bubbleWidth / 2 + 10;
-
-    this.speechBubble.clear();
-    this.speechBubble.fillStyle(0xffffff, 0.95);
-    this.speechBubble.lineStyle(2, 0x00ffff, 1);
-    this.speechBubble.fillRoundedRect(
-      bubbleX - bubbleWidth / 2,
-      bubbleY - bubbleHeight / 2,
-      bubbleWidth,
-      bubbleHeight,
-      8
-    );
-    this.speechBubble.strokeRoundedRect(
-      bubbleX - bubbleWidth / 2,
-      bubbleY - bubbleHeight / 2,
-      bubbleWidth,
-      bubbleHeight,
-      8
-    );
-
-    const bubbleLeft = bubbleX - bubbleWidth / 2;
-    const bubbleRight = bubbleX + bubbleWidth / 2;
-    const bubbleBottom = bubbleY + bubbleHeight / 2;
-    const pointerBaseX = Phaser.Math.Clamp(
-      this.idlePlayer.x + 16 * uiScale,
-      bubbleLeft + 14 * uiScale,
-      bubbleRight - 14 * uiScale
-    );
-    const pointerTipX = this.idlePlayer.x + 10 * uiScale;
-    const pointerTipY = this.idlePlayer.y - 48 * uiScale;
-    this.speechBubble.fillTriangle(
-      pointerBaseX - 8 * uiScale, bubbleBottom,
-      pointerBaseX + 8 * uiScale, bubbleBottom,
-      pointerTipX, pointerTipY
-    );
-    this.speechBubble.lineStyle(2, 0x00ffff, 1);
-    this.speechBubble.lineBetween(pointerBaseX - 8 * uiScale, bubbleBottom, pointerTipX, pointerTipY);
-    this.speechBubble.lineBetween(pointerTipX, pointerTipY, pointerBaseX + 8 * uiScale, bubbleBottom);
-
-    this.speechText.setPosition(bubbleX, bubbleY);
+    const view = this.titleView || this.getTitleView();
+    const w = this._speechBubbleW;
+    const h = this._speechBubbleH;
+    const tail = this._speechTail || { dx: -w * 0.3, dy: h / 2 + 14 * uiScale };
+    const tipX = this.idlePlayer.x + 12 * uiScale;
+    const tipY = this.idlePlayer.y - 26 * uiScale;
+    let cx = tipX - tail.dx;
+    let cy = tipY - tail.dy;
+    cx = Phaser.Math.Clamp(cx, view.x + w / 2 + 12, view.x + view.w - w / 2 - 12);
+    cy = Math.max(view.y + h / 2 + 12, cy);
+    this.speechBubble.setPosition(cx, cy);
+    this.speechText.setPosition(cx, cy);
   }
 
   showThinkingBubble() {
@@ -1870,18 +1814,11 @@ export default class TitleScene extends Phaser.Scene {
 
     // Draw thought bubble (small circles leading to main bubble)
     this.thinkingBubble.clear();
-    this.thinkingBubble.fillStyle(0x1a1a2e, 0.9);
-    this.thinkingBubble.lineStyle(2, 0x00ffff, 1);
-
-    // Main bubble
-    this.thinkingBubble.fillCircle(bubbleX, bubbleY, 18);
-    this.thinkingBubble.strokeCircle(bubbleX, bubbleY, 18);
-
-    // Small thought circles leading down
-    this.thinkingBubble.fillCircle(bubbleX - 15, bubbleY + 22, 6);
-    this.thinkingBubble.strokeCircle(bubbleX - 15, bubbleY + 22, 6);
-    this.thinkingBubble.fillCircle(bubbleX - 22, bubbleY + 32, 4);
-    this.thinkingBubble.strokeCircle(bubbleX - 22, bubbleY + 32, 4);
+    // Pixel thought bubble: white discs with an ink outline (same look as the speech bubble).
+    const tb = { g: this.thinkingBubble, fill: PX.white, line: PX.ink, px: this._bubblePx || 2 };
+    pixelDisc(this, bubbleX, bubbleY, 20, { ...tb, light: null });
+    pixelDisc(this, bubbleX - 15, bubbleY + 24, 7, tb);
+    pixelDisc(this, bubbleX - 23, bubbleY + 34, 4, tb);
 
     // Position dots
     this.thinkingDots.setPosition(bubbleX, bubbleY);
@@ -2149,11 +2086,11 @@ export default class TitleScene extends Phaser.Scene {
     this.onKeyDownHandler = (event) => {
       const k = event.key?.toLowerCase?.() || event.key;
       if (k === 'escape' || k === 'esc') {
-        if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
+        if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.controlsOpen || this.creditsOpen || this.menuBlocked) return;
         if (this.isFullscreen()) this.toggleFullscreen();
         return;
       }
-      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
+      if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.controlsOpen || this.creditsOpen || this.menuBlocked) return;
       if (k === 'arrowup' || k === 'up' || k === 'w') this.moveSelection(-1);
       else if (k === 'arrowdown' || k === 'down' || k === 's') this.moveSelection(1);
       else if (k === 'enter' || k === ' ') { event.preventDefault(); this.selectOption(); }
@@ -2161,8 +2098,21 @@ export default class TitleScene extends Phaser.Scene {
     this.input.keyboard.on('keydown', this.onKeyDownHandler);
 
     // Click on menu items
+    this.bindMenuPointer();
+  }
+
+  /** Whole-row hit areas (≥ the row spacing tall, wider than the label) for mouse and touch. */
+  bindMenuPointer() {
+    const rowH = Math.max(32, this.menuSpacing || 32);
     this.menuTexts.forEach((text, index) => {
-      text.setInteractive({ useHandCursor: true });
+      const meta = this.menuMeta?.[index];
+      const h = meta?.isPrimary ? Math.max(text.height, rowH * 1.4) : rowH;
+      const w = Math.max(text.width + 80, 420);
+      text.setInteractive({
+        hitArea: new Phaser.Geom.Rectangle((text.width - w) / 2, (text.height - h) / 2, w, h),
+        hitAreaCallback: Phaser.Geom.Rectangle.Contains,
+        useHandCursor: true
+      });
       text.on('pointerover', () => {
         this.selectedOption = index;
         this.updateMenuVisuals();
@@ -2175,7 +2125,7 @@ export default class TitleScene extends Phaser.Scene {
   }
 
   moveSelection(direction) {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.controlsOpen || this.creditsOpen || this.menuBlocked) return;
     Audio.initAudio();
 
     this.selectedOption += direction;
@@ -2186,7 +2136,7 @@ export default class TitleScene extends Phaser.Scene {
     if (DEBUG) {
       const opt = this.menuOptions[this.selectedOption];
       // eslint-disable-next-line no-console
-      console.log('[TitleScene] selection changed ->', opt);
+      logger.log('[TitleScene] selection changed ->', opt);
     }
 
     // Pequeño sonido tipo terminal al mover
@@ -2201,11 +2151,13 @@ export default class TitleScene extends Phaser.Scene {
       const isSelected = index === this.selectedOption;
       const scale = isSelected ? MENU_SELECTED_SCALE : MENU_UNSELECTED_SCALE;
       const alpha = isSelected ? MENU_SELECTED_ALPHA : MENU_UNSELECTED_ALPHA;
-      text.setColor(MENU_ITEM_COLOR);
+      text.setColor(isSelected ? MENU_ITEM_SELECTED_COLOR : MENU_ITEM_COLOR);
       text.setFontStyle('bold');
       text.setAlpha(alpha);
       text.setScale(scale);
-      text.setShadow(0, 0, null);
+      // Soft glow on the selected item only (no boxes).
+      if (isSelected) text.setShadow(0, 0, MENU_GLOW, index === primaryIndex ? 18 : 12, true, true);
+      else text.setShadow(0, 2, 'rgba(0,0,0,0.6)', 4, false, true);
     });
 
     if (primaryIndex >= 0 && this.menuTexts[primaryIndex]) {
@@ -2214,12 +2166,10 @@ export default class TitleScene extends Phaser.Scene {
         this.ctaGlowTween = null;
       }
       const primaryText = this.menuTexts[primaryIndex];
-      const onlyCtaGetsGlow = primaryIndex === this.selectedOption;
-      if (onlyCtaGetsGlow) {
-        primaryText.setShadow(2, 2, '#00ffff', 8, true, true);
+      if (primaryIndex === this.selectedOption) {
         this.ctaGlowTween = this.tweens.add({
           targets: primaryText,
-          alpha: { from: 0.95, to: MENU_SELECTED_ALPHA },
+          alpha: { from: 0.9, to: MENU_SELECTED_ALPHA },
           duration: 1200,
           yoyo: true,
           repeat: -1,
@@ -2231,18 +2181,23 @@ export default class TitleScene extends Phaser.Scene {
     const target = this.menuTexts[this.selectedOption];
     if (target && this.selector) {
       const offset = this.menuSelectorArrowOffset ?? 20;
-      this.selector.setY(target.y);
-      this.selector.setX(target.x - target.width / 2 - offset);
+      const x = target.x - (target.width * target.scaleX) / 2 - offset;
+      // Glide the ▶ to the new row instead of jumping.
+      if (this.selectorMoveTween) this.selectorMoveTween.remove();
+      this.selectorMoveTween = this.tweens.add({ targets: this.selector, x, y: target.y, duration: 110, ease: 'Quad.easeOut' });
     }
 
     if (this.zkHintText && primaryIndex >= 0 && this.menuTexts[primaryIndex]) {
       const primaryText = this.menuTexts[primaryIndex];
       this.zkHintText.setPosition(0, primaryText.y + primaryText.height / 2 + 12);
+      // One short line, only under the selected item.
+      this.tweens.killTweensOf(this.zkHintText);
+      this.tweens.add({ targets: this.zkHintText, alpha: primaryIndex === this.selectedOption ? 0.9 : 0, duration: 160 });
     }
   }
 
   selectOption() {
-    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.menuBlocked) return;
+    if (this.upgradeMenuOpen || this.weaponMenuOpen || this.settingsMenuOpen || this.characterMenuOpen || this.nameInputOpen || this.usernameModal || this.leaderboardOpen || this.controlsOpen || this.creditsOpen || this.menuBlocked) return;
     Audio.initAudio();
 
     const currentText = this.menuTexts?.[this.selectedOption];
@@ -2291,10 +2246,7 @@ export default class TitleScene extends Phaser.Scene {
         break;
 
       case 'DOCUMENTATION':
-        // Abre toda la doc en nueva pestaña (evita "Connection lost" al abrir nueva pestaña)
-        this.lastDocsOpenTime = Date.now();
-        const docsUrl = new URL('docs/index.html', window.location.href).href + '#COSMIC_CODER_GUIDE';
-        if (typeof window !== 'undefined') window.open(docsUrl, '_blank', 'noopener');
+        this.openDocumentation();
         break;
 
       case 'CREDITS':
@@ -2303,101 +2255,100 @@ export default class TitleScene extends Phaser.Scene {
     }
   }
 
+  /** Opens the full docs in a new tab (linked from CREDITS). */
+  openDocumentation() {
+    // Avoid the "Connection lost" quote when the new tab steals focus.
+    this.lastDocsOpenTime = Date.now();
+    const docsUrl = new URL('docs/index.html', window.location.href).href + '#COSMIC_CODER_GUIDE';
+    if (typeof window !== 'undefined') window.open(docsUrl, '_blank', 'noopener');
+  }
+
+  /** CREDITS: small glowing logo, a few lines, link pills (Documentation / GitHub / Stellar / X) and the version. */
   showCredits() {
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
-    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
-
-    const boxW = 520;
-    const boxH = 460;
-    const textWidth = boxW - 48;
-    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001).setInteractive({ useHandCursor: true });
-
-    let currentY = cy - boxH / 2 + 36;
-
-    const title = this.add.text(cx, currentY, t('credits.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${24 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5, 0).setDepth(1002);
-    currentY += title.height + 12;
-
-    const createdBy = this.add.text(cx, currentY, t('credits.developed_by'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${14 * uiScale}px`,
-      color: '#ffd700',
-      fontStyle: 'bold'
-    }).setOrigin(0.5, 0).setDepth(1002);
-    currentY += createdBy.height + 8;
-
-    const xLink = this.add.text(cx, currentY, `${t('credits.x_twitter')}: x.com/kl0ren`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#00aaff'
-    }).setOrigin(0.5, 0).setDepth(1002).setInteractive({ useHandCursor: true });
-    xLink.on('pointerdown', () => window.open('https://x.com/kl0ren', '_blank'));
-    xLink.on('pointerover', () => xLink.setColor('#00ffff'));
-    xLink.on('pointerout', () => xLink.setColor('#00aaff'));
-    currentY += xLink.height + 16;
-
-    const musicTitle = this.add.text(cx, currentY, t('credits.music_title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${13 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5, 0).setDepth(1002);
-    currentY += musicTitle.height + 10;
-
-    const lineTexts = [];
-    const musicEntries = [
-      [t('credits.menu_track'), t('credits.menu_author')],
-      [t('credits.gameplay_track1'), t('credits.gameplay_author1')],
-      [t('credits.gameplay_track2'), t('credits.gameplay_author2')]
+    if (this.creditsOpen) return;
+    this.creditsOpen = true;
+    const LINKS = [
+      { icon: 'book', text: tt('docs'), run: () => this.openDocumentation() },
+      { icon: 'branch', text: tt('link_github'), url: 'https://github.com/Klorenn/Cosmic-Coder-' },
+      { icon: 'star', text: tt('link_stellar'), url: 'https://stellar.org' },
+      { text: 'X', url: 'https://x.com/kl0ren' }
     ];
+    let focus = 0;
+    let pills = [];
+    const pre = overlayMetrics(this, { width: 560, height: 520 });
+    const ov = createOverlay(this, {
+      title: tt('credits_title'),
+      icon: 'heart',
+      width: 560,
+      height: fitPanelHeight(pre.u, 330 * pre.u, 0, 520),
+      hide: this.getOverlayHideTargets(),
+      onClose: () => { this.creditsOpen = false; },
+      onKey: (k, event) => {
+        if (k === 'arrowleft' || k === 'a' || k === 'arrowup' || k === 'w') { setFocus(wrapIndex(focus - 1, LINKS.length)); return; }
+        if (k === 'arrowright' || k === 'd' || k === 'arrowdown' || k === 's' || k === 'tab') { event.preventDefault?.(); setFocus(wrapIndex(focus + 1, LINKS.length)); return; }
+        if (k === 'enter' || k === ' ') { event.preventDefault?.(); activate(focus); }
+      }
+    });
+    const u = ov.u;
+    const W = ov.bodyRect.w;
+    const cx = W / 2;
+    let y = 6 * u;
 
-    musicEntries.forEach(([track, author]) => {
-      const txt = this.add.text(cx, currentY, `${track} — ${author}`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${11 * uiScale}px`,
-        color: '#cccccc',
-        align: 'center'
-      }).setOrigin(0.5, 0).setDepth(1002);
-      lineTexts.push(txt);
-      currentY += txt.height + 6;
+    // Logo: pixel wordmark (cyan face, violet extrusion, ink shadow).
+    const logoSize = 8 * Math.max(2, Math.min(4, Math.floor((W / u) / (t('title').length * 6)))) * u; // 2-4 css per art px
+    const logoBack = pixelText(this, cx, y + logoSize / 8, t('title'), { size: logoSize, color: PX.violetD, align: 'center' }).setOrigin(0.5, 0);
+    const logo = pixelText(this, cx, y, t('title'), { size: logoSize, color: PX.cyan, align: 'center', shadow: false }).setOrigin(0.5, 0);
+    ov.body.add([logoBack, logo]);
+    y += logo.height + logoSize / 8 + 10 * u;
+
+    const line = (str, opts) => {
+      const tx = ovText(this, cx, y, str, { u, align: 'center', wrap: W * 0.92, ...opts }).setOrigin(0.5, 0);
+      ov.body.add(tx);
+      y += tx.height + 6 * u;
+      return tx;
+    };
+    line(t('credits.developed_by'), { size: 16, bold: true });
+    y += 4 * u;
+    line(tt('cr_built'), { size: 13, color: OV.muted });
+    line(tt('cr_music'), { size: 13, color: OV.muted });
+    line(tt('cr_thanks'), { size: 13, color: OV.muted });
+    y += 14 * u;
+
+    // Link pills, wrapped to as many rows as the width needs.
+    const activate = (i) => {
+      const l = LINKS[i];
+      if (!l) return;
+      if (l.run) l.run(); else if (l.url) window.open(l.url, '_blank', 'noopener');
+    };
+    const setFocus = (i) => {
+      focus = i;
+      pills.forEach((p, j) => p.setPrimary(j === focus));
+      Audio.playShoot();
+    };
+    pills = LINKS.map((l, i) => pillButton(this, l.icon ? { icon: l.icon, text: l.text } : { text: l.text }, () => { focus = i; pills.forEach((p, j) => p.setPrimary(j === focus)); activate(i); }, { u, primary: i === 0, minW: 64 }));
+    const gap = 10 * u;
+    const rowsOfPills = [[]];
+    let rowW = 0;
+    pills.forEach((p) => {
+      const cur = rowsOfPills[rowsOfPills.length - 1];
+      if (cur.length && rowW + gap + p.w > W) { rowsOfPills.push([p]); rowW = p.w; } else { cur.push(p); rowW += (cur.length > 1 ? gap : 0) + p.w; }
+    });
+    rowsOfPills.forEach((row) => {
+      const total = row.reduce((s, p) => s + p.w, 0) + gap * (row.length - 1);
+      let x = cx - total / 2;
+      const h = row[0].h;
+      row.forEach((p) => { p.container.setPosition(x + p.w / 2, y + h / 2); ov.body.add(p.container); x += p.w + gap; });
+      y += h + gap;
     });
 
-    const closeHint = this.add.text(cx, cy + boxH / 2 - 28, t('prompt.any_key_close'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#00aaff'
-    }).setOrigin(0.5).setDepth(1002).setInteractive({ useHandCursor: true });
-
-    const close = () => {
-      backdrop.destroy();
-      overlay.destroy();
-      title.destroy();
-      createdBy.destroy();
-      xLink.destroy();
-      musicTitle.destroy();
-      lineTexts.forEach(el => el.destroy());
-      closeHint.destroy();
-      this.input.keyboard.off('keydown', close);
-      this.input.keyboard.off('keydown-ESC', close);
-    };
-
-    backdrop.on('pointerdown', close);
-    overlay.on('pointerdown', close);
-    closeHint.on('pointerdown', close);
-    this.input.keyboard.once('keydown', close);
-    this.input.keyboard.once('keydown-ESC', close);
+    const version = formatVersion(GAME_VERSION);
+    if (version) {
+      y += 6 * u;
+      line(version, { size: 12, color: OV.dim });
+    }
+    ov.setScrollable(y);
+    // Centre short content vertically.
+    if (y < ov.bodyRect.h) ov.body.y += (ov.bodyRect.h - y) / 2;
   }
 
   showDocumentation() {
@@ -2468,524 +2419,308 @@ export default class TitleScene extends Phaser.Scene {
     container.add(backHint);
   }
 
-  async showLeaderboard(opts = {}) {
-    this.leaderboardOpen = true;
-    const showAll = !!opts.showAll;
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-    const cx = w / 2;
-    const cy = h / 2;
-
-    const container = this.add.container(0, 0);
-    container.setDepth(1000);
-
-    // Full screen backdrop
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
-    backdrop.setInteractive({ useHandCursor: true });
-    container.add(backdrop);
-
-    const overlayW = Math.min(820, w - 40);
-    const overlayH = Math.min(540, h - 40);
-    const overlayLeft = cx - overlayW / 2;
-    const overlayTop = cy - overlayH / 2;
-
-    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setInteractive({ useHandCursor: true });
-    container.add(overlay);
-
-    // Title - moved 10px lower to reduce top emptiness
-    const title = this.add.text(overlayLeft + overlayW / 2, overlayTop + 46, t('leaderboard.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${24 * uiScale}px`,
-      color: '#ffd700',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-    container.add(title);
-
-    // Headers — clean 3-column layout: #/NAME | SCORE | RANK
-    const headerY = overlayTop + 86;
-    const fs = (n) => `${Math.round(n * uiScale)}px`;
-    const pad = 32;
-    const tableFont = 'monospace';
-
-    const colPos = overlayLeft + pad;
-    const colName = overlayLeft + pad + 40;
-    const colScore = overlayLeft + overlayW * 0.55;
-    const colRankName = overlayLeft + overlayW - pad;
-
-    const posHeader = this.add.text(colPos, headerY, '#', { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
-    container.add(posHeader);
-
-    const nameHeader = this.add.text(colName, headerY, t('leaderboard.player_name'), { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
-    container.add(nameHeader);
-
-    const scoreHeader = this.add.text(colScore, headerY, 'SCORE', { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
-    container.add(scoreHeader);
-
-    const rankHeader = this.add.text(colRankName, headerY, t('leaderboard.rank_name'), { fontFamily: tableFont, fontSize: fs(13), color: '#00ffff', fontStyle: 'bold' });
-    rankHeader.setOrigin(1, 0);
-    container.add(rankHeader);
-
-    const dividerLine = this.add.rectangle(overlayLeft + overlayW / 2, headerY + 22, overlayW - pad * 2, 1, 0x00ffff, 0.6);
-    container.add(dividerLine);
-
-    const walletConnected = stellarWallet.isConnected();
-    let top;
-    let hasRankData = false;
-
-    const normAddr = (addr) => (addr || '').toLowerCase().trim();
-    let currentAddr = null;
-    let currentDisplayName = '';
-    if (walletConnected) {
-      currentAddr = await stellarWallet.getAddress();
-      const settings = window.VIBE_SETTINGS || {};
-      const nameFromSettings = (settings.playerName && String(settings.playerName).trim()) || '';
-      if (nameFromSettings) {
-        currentDisplayName = nameFromSettings.slice(0, 20);
-      } else {
-        try {
-          const me = await authApi.getMe();
-          if (me && me.username && String(me.username).trim()) {
-            currentDisplayName = String(me.username).trim().slice(0, 20);
-          }
-        } catch (_) {}
-        if (!currentDisplayName) {
-          const cid = progressStore?.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
-          const ch = window.VIBE_CHARACTERS?.[cid];
-          currentDisplayName = ch ? (ch.displayName_en || ch.displayName || ch.name || '').slice(0, 20) : 'Anonymous';
-        }
-        if (!(currentDisplayName && String(currentDisplayName).trim())) currentDisplayName = 'Player';
-        else currentDisplayName = String(currentDisplayName).trim().slice(0, 20);
-      }
+  /** Current wallet + display name for the "You" row (same resolution order as before). */
+  async getLeaderboardIdentity() {
+    if (!stellarWallet.isConnected()) return { addr: null, name: '' };
+    let addr = null;
+    try { addr = await stellarWallet.getAddress(); } catch (_) { addr = null; }
+    const settings = window.VIBE_SETTINGS || {};
+    let name = (settings.playerName && String(settings.playerName).trim()) || '';
+    if (!name) {
+      try {
+        const me = await authApi.getMe();
+        if (me && me.username && String(me.username).trim()) name = String(me.username).trim();
+      } catch (_) {}
     }
+    if (!name) {
+      const cid = progressStore?.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder';
+      const ch = window.VIBE_CHARACTERS?.[cid];
+      name = ch ? (ch.displayName_en || ch.displayName || ch.name || '') : '';
+    }
+    return { addr, name: String(name || 'Player').trim().slice(0, 20) };
+  }
 
-    if (walletConnected && gameClient.isContractConfigured()) {
-      // Fetch leaderboard with rank data from contract; fallback to local API if empty/unavailable
+  /**
+   * Leaderboard rows for a tab. Casual = leaderboard API (LeaderboardManager.fetchOnChain);
+   * Ranked = Soroban contract (season 1, legacy board as fallback) with names resolved from the API.
+   * Returns { rows, off } where off = the ranked contract is not configured on this build.
+   */
+  async loadLeaderboardRows(mode) {
+    const id = await this.getLeaderboardIdentity();
+    const norm = (a) => String(a || '').toLowerCase().trim();
+    const me = norm(id.addr);
+    const nameFor = (wallet, fallback) => (me && norm(wallet) === me ? (id.name || window.VIBE_SETTINGS?.playerName || fallback) : fallback);
+    if (mode === 'ranked') {
+      if (!gameClient.isContractConfigured()) return { rows: [], off: true };
       let onChain = [];
       try {
         onChain = await gameClient.getLeaderboardBySeason(1, 50);
-        if (onChain.length === 0) {
-          const legacy = await gameClient.getLeaderboard(50);
-          onChain.push(...legacy);
-        }
+        if (onChain.length === 0) onChain = await gameClient.getLeaderboard(50);
       } catch (e) {
-        console.warn('[Leaderboard] On-chain fetch failed, falling back to API:', e?.message || e);
+        logger.warn('[Leaderboard] On-chain fetch failed:', e?.message || e);
         onChain = [];
       }
-
-      if (onChain.length > 0) {
-        // Contract does not return player_name; resolve names from API (user-submitted name per wallet)
-        let addrToName = {};
-        if (currentAddr && currentDisplayName) addrToName[normAddr(currentAddr)] = currentDisplayName;
-        let apiEntries = [];
+      const addrToName = {};
+      if (onChain.length) {
         try {
-          apiEntries = await LeaderboardManager.fetchOnChain();
-          apiEntries.forEach((entry) => {
-            const a = (entry.address || entry.player || '').toString().trim().toLowerCase();
-            const nom = (entry.name || '').toString().trim();
-            if (a && nom) addrToName[a] = nom;
+          (await LeaderboardManager.fetchOnChain()).forEach((e) => {
+            const a = norm(e.address || e.player);
+            if (a && e.name) addrToName[a] = String(e.name).trim();
           });
         } catch (_) {}
-        const onChainWallets = new Set(onChain.map((e) => normAddr(e.player || '')).filter(Boolean));
-        top = onChain.map((e, i) => {
-          const isCurrentUser = currentAddr && e.player && normAddr(e.player) === normAddr(currentAddr);
-          const resolved = e.player_name || addrToName[normAddr(e.player)] || (e.player ? stellarWallet.shortAddress(e.player, 6) : 'Unknown');
-          const name = isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || resolved) : resolved;
-          return {
-            position: i + 1,
-            name,
-            wallet: e.player || '',
-            rank: e.rank !== undefined ? e.rank : 0,
-            bestScore: e.score ?? e.bestScore ?? 0,
-            bestWave: e.wave ?? e.bestWave ?? 0,
-            gamesPlayed: e.gamesPlayed ?? 0
-          };
-        });
-        // Include API-only entries so top 3 names appear even when contract returns fewer
-        apiEntries.forEach((e) => {
-          const addr = (e.address || e.player || '').toString().trim();
-          const key = normAddr(addr);
-          if (!key || onChainWallets.has(key)) return;
-          onChainWallets.add(key);
-          const isCurrentUser = currentAddr && normAddr(addr) === normAddr(currentAddr);
-          const name = isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || e.name || 'Unknown') : (e.name || 'Unknown');
-          top.push({
-            position: 0,
-            name,
-            wallet: addr,
-            rank: 0,
-            bestScore: Number(e.score) || 0,
-            bestWave: Number(e.wave) || 0,
-            gamesPlayed: 0
-          });
-        });
-        hasRankData = true;
-      } else {
-        const entries = await LeaderboardManager.fetchOnChain();
-        top = entries.map((e, i) => {
-          const isCurrentUser = currentAddr && e.address && normAddr(e.address) === normAddr(currentAddr);
-          return {
-            position: i + 1,
-            name: isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || e.name || 'Unknown') : (e.name || 'Unknown'),
-            wallet: e.address || '',
-            rank: 0,
-            bestScore: e.score ?? 0,
-            bestWave: e.wave ?? 0,
-            gamesPlayed: 0
-          };
-        });
       }
-    } else if (walletConnected) {
-      const entries = await LeaderboardManager.fetchOnChain();
-      top = entries.map((e, i) => {
-        const isCurrentUser = currentAddr && e.address && normAddr(e.address) === normAddr(currentAddr);
-        return {
-          position: i + 1,
-          name: isCurrentUser ? (currentDisplayName || window.VIBE_SETTINGS?.playerName || e.name || 'Unknown') : (e.name || 'Unknown'),
-          wallet: e.address || '',
-          rank: 0,
-          bestScore: e.score ?? 0,
-          bestWave: e.wave ?? 0,
-          gamesPlayed: 0
-        };
-      });
-    } else {
-      // Same on-chain/API leaderboard for everyone (no login required to view)
-      const entries = await LeaderboardManager.fetchOnChain();
-      top = entries.map((e, i) => ({
-        position: i + 1,
-        name: e.name || (e.address ? stellarWallet.shortAddress(e.address, 6) : '???'),
-        wallet: e.address || '',
-        rank: 0,
-        bestScore: e.score ?? 0,
-        bestWave: e.wave ?? 0,
-        gamesPlayed: 0
+      const rows = onChain.map((e) => ({
+        wallet: e.player || '',
+        name: nameFor(e.player, e.player_name || addrToName[norm(e.player)] || ''),
+        bestScore: e.score ?? e.bestScore ?? 0,
+        bestWave: e.wave ?? e.bestWave ?? 0,
+        gamesPlayed: e.gamesPlayed ?? 0
       }));
+      return { rows: prepareLeaderboard(rows), off: false, me };
     }
+    let entries = [];
+    try { entries = await LeaderboardManager.fetchOnChain(); } catch (_) { entries = []; }
+    const rows = entries.map((e) => ({
+      wallet: e.address || '',
+      name: nameFor(e.address, e.name || ''),
+      bestScore: e.score ?? 0,
+      bestWave: e.wave ?? 0,
+      gamesPlayed: e.gamesPlayed ?? 0
+    }));
+    return { rows: prepareLeaderboard(rows), off: false, me };
+  }
 
-    const scoreOf = (e) => Number(e.bestScore ?? e.score ?? 0) || 0;
-    const isRealPlay = (e) => (Number(e.bestScore ?? e.score ?? 0) || 0) > 0;
-    const byWallet = new Map();
-    top.forEach((entry) => {
-      const wallet = (entry.wallet || entry.address || '').trim();
-      const key = normAddr(wallet);
-      if (!key) return;
-      if (!isRealPlay(entry)) return;
-      const existing = byWallet.get(key);
-      if (!existing || scoreOf(entry) > scoreOf(existing)) byWallet.set(key, { ...entry });
-    });
-    top = Array.from(byWallet.values());
-
-    // Only show players who really played (score > 0); no local/Anonymous fallback
-    top = top.filter(isRealPlay);
-
-    // Sort by bestScore DESC, then bestWave DESC, then gamesPlayed DESC
-    top.sort((a, b) => {
-      const sa = Number(a.bestScore ?? a.score ?? 0) || 0;
-      const sb = Number(b.bestScore ?? b.score ?? 0) || 0;
-      if (sb !== sa) return sb - sa;
-      const wa = Number(a.bestWave ?? a.wave ?? 0) || 0;
-      const wb = Number(b.bestWave ?? b.wave ?? 0) || 0;
-      if (wb !== wa) return wb - wa;
-      return (b.gamesPlayed ?? 0) - (a.gamesPlayed ?? 0);
-    });
-
-    // Re-assign positions after sort
-    top.forEach((entry, i) => entry.position = i + 1);
-
-    // Normalize score/wave so rank derivation always has a value (some sources use .score / .wave)
-    top.forEach((entry) => {
-      if (entry.bestScore == null && entry.score != null) entry.bestScore = Number(entry.score) || 0;
-      if (entry.bestWave == null && entry.wave != null) entry.bestWave = Number(entry.wave) || 0;
-    });
-
-    const visibleRows = 7;
-    const lineHeight = showAll ? (28 * uiScale) : (36 * uiScale);
-    const maxRows = showAll ? 16 : visibleRows;
-    const tableStartY = overlayTop + 120;
-
-    const rowObjects = [];
-    const clearRows = () => {
-      while (rowObjects.length) {
-        const obj = rowObjects.pop();
-        if (obj && obj.destroy) obj.destroy();
+  /** LEADERBOARD: Casual / Ranked segmented tabs, medal top 3, own row highlighted, skeleton while loading. */
+  showLeaderboard(opts = {}) {
+    if (this.leaderboardOpen) return;
+    this.leaderboardOpen = true;
+    const verified = gameClient.isRankedVerified();
+    const TABS = [
+      { id: 'casual', icon: 'star', label: tt('tab_casual'), color: 0xe6edf7 },
+      { id: 'ranked', icon: 'shield', label: tt('tab_ranked'), color: verified ? 0x34d399 : OV.amber }
+    ];
+    let tabIndex = Math.max(0, TABS.findIndex((tb) => tb.id === (opts.tab || this.leaderboardTab || 'casual')));
+    let rows = [];
+    let meWallet = '';
+    let sel = 0;
+    let token = 0;
+    let rankPopup = null;
+    let rowObjs = [];
+    const cache = {};
+    const pre = overlayMetrics(this, { width: 760, height: 600, footerH: 64 });
+    const compact = pre.bodyH / pre.u < 320;
+    const ROW_H = (compact ? 42 : 46) * pre.u;
+    const GAP = 6 * pre.u;
+    const HEAD_H = 26 * pre.u;
+    const ov = createOverlay(this, {
+      title: tt('lb_title'),
+      icon: 'crown',
+      accent: OV.violet,
+      width: 760,
+      height: fitPanelHeight(pre.u, HEAD_H + 8 * (ROW_H + GAP), 64),
+      footerH: 64,
+      hide: this.getOverlayHideTargets(),
+      blockKeys: () => !!(rankPopup && rankPopup.active),
+      onClose: () => { this.leaderboardOpen = false; this.leaderboardTab = TABS[tabIndex].id; token++; },
+      onKey: (k, event) => {
+        if (k === 'tab' || k === 'q' || k === 'e' || k === 'arrowleft' || k === 'arrowright' || k === 'a' || k === 'd') {
+          event.preventDefault?.();
+          const back = k === 'q' || k === 'arrowleft' || k === 'a' || (k === 'tab' && event.shiftKey);
+          switchTab(wrapIndex(tabIndex + (back ? -1 : 1), TABS.length));
+          return;
+        }
+        if (k === '1' || k === '2') { switchTab(Number(k) - 1); return; }
+        if ((k === 'arrowup' || k === 'w') && rows.length) { select(wrapIndex(sel - 1, rows.length)); return; }
+        if ((k === 'arrowdown' || k === 's') && rows.length) { select(wrapIndex(sel + 1, rows.length)); return; }
+        if (k === 'enter' || k === ' ') { event.preventDefault?.(); openRow(sel); }
       }
+    });
+    const u = ov.u;
+    const W = ov.bodyRect.w;
+    const colPos = 22 * u;
+    const colName = 50 * u;
+    const colScore = W - 14 * u;
+    const colWave = W - (compact ? 96 : 120) * u;
+
+    // Header tabs (same segmented pill pattern as WEAPONS: active = filled).
+    const tabsC = this.add.container(0, ov.headerH / 2);
+    ov.header.add(tabsC);
+    let tabBtns = [];
+    const drawTabs = () => {
+      tabBtns.forEach((b) => b.container.destroy());
+      tabBtns = TABS.map((tb, i) => {
+        const active = i === tabIndex;
+        const b = pillButton(this, { icon: tb.icon, text: tb.label, iconColor: active && tb.id !== 'ranked' ? 0xffffff : tb.color }, () => switchTab(i), { u, primary: active, h: 36 });
+        tabsC.add(b.container);
+        return b;
+      });
+      const gap = 6 * u;
+      const total = tabBtns.reduce((s, b) => s + b.w, 0) + gap * (tabBtns.length - 1);
+      let x = ov.headerRightX - total;
+      tabBtns.forEach((b) => { b.container.setX(x + b.w / 2); x += b.w + gap; });
+      ov.titleText.setVisible(ov.titleText.x + ov.titleText.width + 12 * u < ov.headerRightX - total);
     };
 
-    let scrollOffset = 0;
-    const maxScroll = Math.max(0, top.length - maxRows);
+    // Footer: your position (left), Ranks table (right).
+    const fw = ov.footerRect.w; const fh = ov.footerRect.h;
+    const youChip = this.add.container(0, fh / 2);
+    ov.footer.add(youChip);
+    const ranksBtn = pillButton(this, { icon: 'crown', text: tt('lb_ranks'), iconColor: 0xfbbf24 }, () => openRanks(), { u, h: 36 });
+    ranksBtn.container.setPosition(fw - ranksBtn.w / 2, fh / 2);
+    ov.footer.add(ranksBtn.container);
 
-    const drawRows = (startIndex = 0) => {
-      clearRows();
-      const toShow = showAll
-        ? top.slice(startIndex * maxRows, startIndex * maxRows + maxRows)
-        : top.slice(startIndex, startIndex + maxRows);
+    const openRanks = () => {
+      const before = new Set(this.children.list);
+      this.showRankSystem();
+      rankPopup = this.children.list.find((o) => !before.has(o) && o.depth >= 2000) || null;
+    };
 
-      if (toShow.length === 0) return;
+    const clearBody = () => { ov.body.removeAll(true); rowObjs = []; };
 
-      // Unified items: rows + footer buttons share one selector
-      const allItems = [];
-      const rowBgs = [];
+    const columnHead = () => {
+      const y = HEAD_H / 2 - 4 * u;
+      const hash = ovText(this, colPos, y, '#', { u, size: 12, bold: true, color: OV.dim }).setOrigin(0.5);
+      const waveIc = pixelIcon(this, 'wave', 16 * u).setPosition(colWave - 44 * u, y);
+      const wave = ovText(this, colWave, y, tt('lb_wave'), { u, size: 12, bold: true, color: OV.dim }).setOrigin(1, 0.5);
+      const score = ovText(this, colScore, y, tt('lb_score'), { u, size: 12, bold: true, color: OV.dim }).setOrigin(1, 0.5);
+      waveIc.setX(colWave - wave.width - 14 * u);
+      ov.body.add([hash, waveIc, wave, score]);
+    };
 
-      toShow.forEach((entry, i) => {
-        const y = tableStartY + i * lineHeight;
-        // Score/wave for display and rank (support both .bestScore/.bestWave and .score/.wave)
-        const score = Number(entry.bestScore ?? entry.score ?? 0) || 0;
-        const wave = Number(entry.bestWave ?? entry.wave ?? 0) || 0;
-        // Derive rank from score when API rank is 0 or missing (Bronze 50+, Silver 500+, etc.)
-        const apiRank = entry.rank != null ? Number(entry.rank) : 0;
-        const displayRank = (apiRank > 0 && apiRank <= 4) ? apiRank : getRankIdFromScore(score, wave >= 3 ? wave : 99);
-        const rankData = getRankById(displayRank);
-        const globalIdx = showAll ? startIndex * maxRows + i : startIndex + i;
+    const showLoading = () => {
+      clearBody();
+      columnHead();
+      const n = Math.max(3, Math.min(7, Math.floor((ov.bodyRect.h - HEAD_H) / (ROW_H + GAP))));
+      for (let i = 0; i < n; i++) {
+        const y = HEAD_H + i * (ROW_H + GAP);
+        const a = 1 - i * 0.11;
+        const bg = skeletonBar(this, 0, y, W, ROW_H, { u });
+        const nm = skeletonBar(this, colName, y + ROW_H / 2 - 6 * u, W * (0.28 - (i % 3) * 0.04), 12 * u, { u });
+        const sc = skeletonBar(this, colScore - 56 * u, y + ROW_H / 2 - 6 * u, 56 * u, 12 * u, { u });
+        [bg, nm, sc].forEach((o) => o.setAlpha(a));
+        ov.body.add([bg, nm, sc]);
+      }
+      ov.setScrollable(0);
+      youChip.removeAll(true);
+    };
 
-        const rowBg = this.add.rectangle(overlayLeft + overlayW / 2, y + lineHeight / 2 - 2, overlayW - pad * 2, lineHeight, 0x00ffff, 0);
-        rowBg.setInteractive({ useHandCursor: true });
-        container.add(rowBg);
-        rowObjects.push(rowBg);
-        rowBgs.push(rowBg);
+    const showEmpty = (glyph, text) => {
+      clearBody();
+      const cx = W / 2; const cy = ov.bodyRect.h / 2;
+      ov.body.add(pixelIcon(this, glyph, 34 * u, 0x64748b).setPosition(cx, cy - 22 * u));
+      ov.body.add(ovText(this, cx, cy + 12 * u, text, { u, size: 14, color: OV.muted, align: 'center', wrap: W * 0.8 }).setOrigin(0.5, 0));
+      ov.setScrollable(0);
+      youChip.removeAll(true);
+    };
 
-        const posColor = globalIdx === 0 ? '#ffd700' : globalIdx === 1 ? '#c0c0c0' : globalIdx === 2 ? '#cd7f32' : '#666666';
-        const posText = this.add.text(colPos, y, String(entry.position), { fontFamily: tableFont, fontSize: fs(13), color: posColor, fontStyle: 'bold' });
-        container.add(posText);
-        rowObjects.push(posText);
+    const drawRow = (it, i) => {
+      it.g.setSkin(i === sel ? 'card-selected' : (it.isMe ? 'card-selected-cyan' : 'card'));
+    };
 
-        const isCurrentUserRow = currentAddr && entry.wallet && normAddr(entry.wallet) === normAddr(currentAddr);
-        let displayName = (isCurrentUserRow ? (currentDisplayName || entry.name) : (entry.name || '')).trim().slice(0, 20);
-        if (!displayName || /^g[a-z0-9]{4}\.\.\.[a-z0-9]{4}$/i.test(displayName) || (displayName.length >= 10 && /[a-z0-9]{4}\.\.\.[a-z0-9]{4}/i.test(displayName))) displayName = entry.wallet ? stellarWallet.shortAddress(entry.wallet, 6) : '???';
-        if (!displayName) displayName = entry.wallet ? stellarWallet.shortAddress(entry.wallet, 6) : '???';
-        const nameColor = globalIdx === 0 ? '#ffd700' : '#ffffff';
-        const nm = this.add.text(colName, y, displayName, { fontFamily: tableFont, fontSize: fs(12), color: nameColor });
-        container.add(nm);
-        rowObjects.push(nm);
-
-        const scoreVal = score > 0 ? String(Math.floor(score)) : '-';
-        const sc = this.add.text(colScore, y, scoreVal, { fontFamily: tableFont, fontSize: fs(12), color: '#00ff88' });
-        container.add(sc);
-        rowObjects.push(sc);
-
-        const rankEmoji = getRankEmoji(displayRank);
-        const rankName = isUnranked(displayRank) ? t('ranks.unranked') : rankData.name + (rankEmoji ? ' ' + rankEmoji : '');
-        const rankColor = isUnranked(displayRank) ? '#555555' : getRankColorCSS(displayRank);
-        const rk = this.add.text(colRankName, y, rankName, { fontFamily: tableFont, fontSize: fs(11), color: rankColor });
-        rk.setOrigin(1, 0);
-        container.add(rk);
-        rowObjects.push(rk);
-
-        allItems.push({
-          type: 'row',
-          y,
-          entry,
-          bg: rowBg,
-          action: () => {
-            if (entry.wallet) window.open(`https://stellar.expert/explorer/testnet/account/${entry.wallet}`, '_blank');
-          }
+    const buildRows = () => {
+      clearBody();
+      columnHead();
+      rowObjs = rows.map((entry, i) => {
+        const y = HEAD_H + i * (ROW_H + GAP);
+        const c = this.add.container(0, y);
+        const g = pixelPanel(this, 0, 0, W, ROW_H, 'card', { px: ov.px });
+        c.add(g);
+        const cy = ROW_H / 2;
+        const tier = medalTier(entry.position);
+        if (tier) c.add(medalIcon(this, tier, 18 * u).setPosition(colPos, cy + 3 * u));
+        else c.add(ovText(this, colPos, cy, String(entry.position), { u, size: 13, bold: true, color: OV.muted }).setOrigin(0.5));
+        const isMe = !!(meWallet && String(entry.wallet).toLowerCase().trim() === meWallet);
+        const nameStr = leaderboardName(entry.name, entry.wallet);
+        const name = ovText(this, colName, cy, nameStr, { u, size: 14, bold: tier === 'gold' || isMe, color: tier === 'gold' ? OV.amberCss : OV.text }).setOrigin(0, 0.5);
+        let nameMax = colWave - 64 * u - colName;
+        let chip = null;
+        let chipW = 0;
+        if (isMe) {
+          chip = this.add.container(0, cy);
+          const ct = ovText(this, 0, -ov.px / 2, tt('lb_you'), { u, size: 11, bold: true, color: PX_CSS.ink }).setOrigin(0.5);
+          ct.setPixelShadow?.(false);
+          const cw = Math.round((ct.width + 8 * ov.px) / ov.px) * ov.px;
+          const cg = pixelPanel(this, -cw / 2, -6 * ov.px, cw, 12 * ov.px, 'button-cyan-normal', { px: ov.px });
+          chip.add([cg, ct]);
+          chipW = cw;
+          nameMax -= cw + 8 * u;
+        }
+        fitText(name, nameMax);
+        if (chip) chip.setX(name.x + name.width + 8 * u + chipW / 2);
+        const wave = ovText(this, colWave, cy, String(Math.floor(entry.bestWave || 0)), { u, size: 13, color: OV.muted }).setOrigin(1, 0.5);
+        const score = ovText(this, colScore, cy, compactNumber(entry.bestScore), { u, size: 15, bold: true, color: tier ? OV.amberCss : OV.text }).setOrigin(1, 0.5);
+        c.add([name, wave, score]);
+        if (chip) c.add(chip);
+        const zone = this.add.zone(W / 2, cy, W, ROW_H).setInteractive({ useHandCursor: true });
+        zone.on('pointerup', (ptr) => {
+          if (ov.dragged() || !ov.pointerInBody(ptr)) return;
+          if (i === sel) openRow(i); else select(i, false);
         });
-
-        rowBg.on('pointerover', () => { selIdx = i; updateSel(); });
-        rowBg.on('pointerout', () => { rowBg.setFillStyle(0x00ffff, 0); });
-        rowBg.on('pointerdown', () => allItems[i].action());
+        c.add(zone);
+        ov.body.add(c);
+        const it = { c, g, y, isMe, position: entry.position };
+        drawRow(it, i);
+        return it;
       });
-
-      // Store allItems ref so footer can append to it
-      this._lbAllItems = allItems;
-      this._lbRowBgs = rowBgs;
-      this._lbRowObjects = rowObjects;
-    };
-
-    if (top.length === 0) {
-      const centerX = overlayLeft + overlayW / 2;
-      // Move message slightly upward
-      const centerY = overlayTop + overlayH / 2 - 50;
-      
-      // Create hierarchy between headline and explanation
-      const headline = this.add.text(centerX, centerY, 'NO ENTRIES YET', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(18),
-        color: '#ffffff',  // Brighter than before
-        fontStyle: 'bold',
-        align: 'center',
-        wordWrap: { width: overlayW - 80 }
-      }).setOrigin(0.5);
-      container.add(headline);
-      
-      // Subtext smaller and lighter
-      const subtext = this.add.text(centerX, centerY + 32, 'Play to rank!', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: fs(12),
-        color: '#aaaaaa',
-        align: 'center',
-        wordWrap: { width: overlayW - 80 }
-      }).setOrigin(0.5);
-      container.add(subtext);
-      
-      if (walletConnected) {
-        container.add(this.add.text(centerX, centerY + 60, t('leaderboard.submit_hint'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: fs(10),
-          color: '#777777',
-          align: 'center',
-          wordWrap: { width: overlayW - 80 }
-        }).setOrigin(0.5));
-      }
-    } else {
-      drawRows(showAll ? 0 : scrollOffset);
-    }
-
-    // Footer buttons
-    const footerTopY = overlayTop + overlayH - 52;
-
-    const canScroll = top.length > visibleRows && !showAll;
-    if (canScroll) {
-      const scrollHint = this.add.text(overlayLeft + overlayW / 2, footerTopY - 28, '[ ↑/↓ SCROLL ]', {
-        fontFamily: 'monospace', fontSize: fs(10), color: '#00aaff'
-      }).setOrigin(0.5, 0.5);
-      container.add(scrollHint);
-    }
-
-    const canViewAll = top.length > visibleRows;
-    if (canViewAll) {
-      const viewAllBtn = this.add.text(overlayLeft + overlayW - 40, footerTopY - 10, `[ ${showAll ? `${visibleRows}` : 'ALL'} ]`, {
-        fontFamily: 'monospace', fontSize: fs(10), color: '#00ff88'
-      }).setOrigin(1, 0.5).setInteractive({ useHandCursor: true });
-      container.add(viewAllBtn);
-      viewAllBtn.on('pointerdown', () => {
-        container.destroy();
-        this.showLeaderboard({ showAll: !showAll });
-      });
-    }
-
-    const viewRanksBtn = this.add.text(cx, footerTopY, `[ ${t('leaderboard.view_ranks')} ]`, {
-      fontFamily: 'monospace', fontSize: fs(12), color: '#ffd700', fontStyle: 'bold'
-    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true });
-    container.add(viewRanksBtn);
-
-    const closeText = this.add.text(cx, footerTopY + 22, '[ ESC TO CLOSE ]', {
-      fontFamily: 'monospace', fontSize: fs(10), color: '#555555'
-    }).setOrigin(0.5, 0.5).setInteractive({ useHandCursor: true });
-    container.add(closeText);
-
-    // Add footer items to the unified list
-    const allItems = this._lbAllItems || [];
-    const rowBgs = this._lbRowBgs || [];
-
-    allItems.push({
-      type: 'button', y: footerTopY, target: viewRanksBtn,
-      action: () => this.showRankSystem()
-    });
-    allItems.push({
-      type: 'button', y: footerTopY + 22, target: closeText,
-      action: () => close()
-    });
-
-    viewRanksBtn.on('pointerdown', () => this.showRankSystem());
-    closeText.on('pointerdown', () => close());
-
-    // Single unified selector arrow
-    let selIdx = allItems.length > 0 ? allItems.length - 2 : 0; // default to VIEW RANKS
-    const selArrow = this.add.text(0, 0, '▶', {
-      fontFamily: 'monospace', fontSize: fs(12), color: '#00ffff', fontStyle: 'bold'
-    }).setOrigin(0.5, 0.5);
-    container.add(selArrow);
-
-    let walletHintText = null;
-    const updateSel = () => {
-      if (walletHintText) { try { walletHintText.destroy(); } catch (_) {} walletHintText = null; }
-      rowBgs.forEach((bg) => bg.setFillStyle(0x00ffff, 0));
-      allItems.forEach((item) => { if (item.target) item.target.setAlpha(0.6); });
-
-      if (selIdx < 0 || selIdx >= allItems.length) return;
-      const item = allItems[selIdx];
-
-      if (item.type === 'row') {
-        selArrow.setPosition(colPos - 14, item.y + 6);
-        if (item.bg) item.bg.setFillStyle(0x00ffff, 0.06);
-        if (item.entry?.wallet) {
-          const shortW = item.entry.wallet.length > 16 ? `${item.entry.wallet.slice(0, 8)}...${item.entry.wallet.slice(-6)}` : item.entry.wallet;
-          walletHintText = this.add.text(cx, footerTopY - 16, `${shortW}  [ ENTER → Stellar Expert ]`, {
-            fontFamily: 'monospace', fontSize: fs(9), color: '#00aaff'
-          }).setOrigin(0.5);
-          container.add(walletHintText);
-        }
-      } else {
-        selArrow.setPosition(item.target.x - item.target.width / 2 - 14, item.y);
-        item.target.setAlpha(1);
-      }
-    };
-    updateSel();
-
-    // Mouse hover on footer buttons
-    viewRanksBtn.on('pointerover', () => { selIdx = allItems.length - 2; updateSel(); });
-    closeText.on('pointerover', () => { selIdx = allItems.length - 1; updateSel(); });
-    // Mouse hover on rows already handled in drawRows
-
-    let pageIndex = 0;
-    const totalPages = top.length > 0 ? Math.ceil(top.length / maxRows) : 1;
-    if (showAll && top.length > 0 && totalPages > 1) {
-      const pager = this.add.text(overlayLeft + overlayW / 2, footerTopY - 14, `PAGE ${pageIndex + 1}/${totalPages}`, {
-        fontFamily: 'monospace',
-        fontSize: fs(11),
-        color: '#666666'
-      }).setOrigin(0.5, 0.5);
-      container.add(pager);
-
-      const onPageKey = (ev) => {
-        const k = ev.key?.toLowerCase?.() || ev.key;
-        if (k === 'arrowleft' || k === 'left' || k === 'a') {
-          pageIndex = (pageIndex - 1 + totalPages) % totalPages;
-          drawRows(pageIndex);
-          pager.setText(`PAGE ${pageIndex + 1}/${totalPages}`);
-        } else if (k === 'arrowright' || k === 'right' || k === 'd') {
-          pageIndex = (pageIndex + 1) % totalPages;
-          drawRows(pageIndex);
-          pager.setText(`PAGE ${pageIndex + 1}/${totalPages}`);
-        }
-      };
-      this.input.keyboard.on('keydown', onPageKey);
-      container.once(Phaser.Scenes.Events.DESTROY, () => {
-        this.input.keyboard.off('keydown', onPageKey);
-      });
-    }
-
-    const close = () => {
-      this.leaderboardOpen = false;
-      container.destroy();
-      this.input.keyboard.off('keydown', onNavKey);
-    };
-
-    const onNavKey = (ev) => {
-      const k = ev.key?.toLowerCase?.() || ev.code;
-      if (k === 'escape' || k === 'backspace' || k === 'q') {
-        close();
-      } else if (k === 'arrowup' || k === 'w') {
-        if (canScroll && scrollOffset > 0) {
-          scrollOffset--;
-          drawRows(scrollOffset);
-          allItems.splice(0, visibleRows, ...(this._lbAllItems || []));
-          updateSel();
-        } else {
-          selIdx = selIdx <= 0 ? allItems.length - 1 : selIdx - 1;
-          updateSel();
-        }
-      } else if (k === 'arrowdown' || k === 's') {
-        if (canScroll && scrollOffset < maxScroll) {
-          scrollOffset++;
-          drawRows(scrollOffset);
-          allItems.splice(0, visibleRows, ...(this._lbAllItems || []));
-          updateSel();
-        } else {
-          selIdx = selIdx >= allItems.length - 1 ? 0 : selIdx + 1;
-          updateSel();
-        }
-      } else if (k === 'enter' || k === ' ') {
-        ev.preventDefault?.();
-        if (selIdx >= 0 && selIdx < allItems.length) allItems[selIdx].action();
+      ov.setScrollable(HEAD_H + rows.length * (ROW_H + GAP) - GAP);
+      // Footer chip: your place on this board.
+      youChip.removeAll(true);
+      const mine = rows.findIndex((e) => meWallet && String(e.wallet).toLowerCase().trim() === meWallet);
+      if (mine >= 0) {
+        const dot = pixelIcon(this, 'user', 16 * u).setPosition(8 * u, 0);
+        const tx = ovText(this, 18 * u, 0, `${tt('lb_you')}  #${rows[mine].position}`, { u, size: 14, bold: true, color: OV.cyanCss }).setOrigin(0, 0.5);
+        youChip.add([dot, tx]);
       }
     };
 
-    backdrop.on('pointerdown', close);
-    this.input.keyboard.on('keydown', onNavKey);
+    const select = (i, reveal = true) => {
+      if (!rowObjs.length) return;
+      const prev = sel;
+      sel = Phaser.Math.Clamp(i, 0, rowObjs.length - 1);
+      if (rowObjs[prev]) drawRow(rowObjs[prev], prev);
+      drawRow(rowObjs[sel], sel);
+      if (reveal) ov.reveal(rowObjs[sel].y, ROW_H);
+      Audio.playShoot();
+    };
+
+    const openRow = (i) => {
+      const entry = rows[i];
+      if (entry?.wallet && /^G[A-Z0-9]{55}$/.test(entry.wallet)) {
+        window.open(`https://stellar.expert/explorer/testnet/account/${entry.wallet}`, '_blank', 'noopener');
+      }
+    };
+
+    const render = (data) => {
+      rows = data.rows || [];
+      meWallet = data.me || '';
+      if (data.off) { showEmpty('shield', tt('lb_ranked_off')); return; }
+      if (!rows.length) { showEmpty('crown', tt('lb_empty')); return; }
+      const mine = rows.findIndex((e) => meWallet && String(e.wallet).toLowerCase().trim() === meWallet);
+      sel = mine >= 0 ? mine : 0;
+      buildRows();
+      ov.reveal(rowObjs[sel].y, ROW_H);
+    };
+
+    const switchTab = (i) => {
+      if (i === tabIndex && token > 0) return;
+      tabIndex = i;
+      drawTabs();
+      const mode = TABS[tabIndex].id;
+      const my = ++token;
+      if (cache[mode]) { render(cache[mode]); return; }
+      showLoading();
+      this.loadLeaderboardRows(mode).then((data) => {
+        cache[mode] = data;
+        if (my !== token || ov.isClosing()) return;
+        render(data);
+      }).catch((e) => {
+        logger.warn('[Leaderboard] load failed:', e?.message || e);
+        if (my === token && !ov.isClosing()) showEmpty('crown', tt('lb_empty'));
+      });
+    };
+
+    drawTabs();
+    switchTab(tabIndex);
   }
 
   /**
@@ -3152,385 +2887,314 @@ export default class TitleScene extends Phaser.Scene {
     this.input.keyboard.on('keydown', onKey);
   }
 
-  /**
-   * Show ZK Start Popup - Pixel art book-style pre-game modal
-   * Displays ZK Proof info, mode, rank, and controls
-   */
-  async showZKStartPopup() {
-    const baseUiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-    const cx = w / 2;
-    const cy = h / 2;
+  /** Synchronous start-run state (wallet / contract / prover / verified). Overridable by the screenshot scripts. */
+  getStartRunState() {
+    return {
+      wallet: stellarWallet.isConnected(),
+      contract: gameClient.isContractConfigured(),
+      prover: gameClient.isZkProverConfigured(),
+      rankedVerified: gameClient.isRankedVerified()
+    };
+  }
 
-    // Disable menu interaction
-    this.menuBlocked = true;
-
-    const container = this.add.container(0, 0);
-    container.setDepth(2000);
-
-    // Full screen backdrop (blocks all interaction)
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 0.85);
-    backdrop.setInteractive({ useHandCursor: false });
-    container.add(backdrop);
-
-    // Book-style panel dimensions (pixel art aesthetic)
-    const panelW = Math.min(760, w - 24);
-    const panelH = Math.min(720, h - 24);
-    const panelLeft = cx - panelW / 2;
-    const panelTop = cy - panelH / 2;
-
-    // Popup scale: keep readable on large canvases even if global uiScale is < 1
-    const uiScale = Math.min(1.25, Math.max(baseUiScale, panelW / 640));
-
-    const textScale = uiScale * 1.5;
-
-    // Main panel background (cream/beige book page color)
-    const panel = this.add.rectangle(cx, cy, panelW, panelH, 0xf5e6c8);
-    panel.setStrokeStyle(4, 0x4a2c2a); // Dark brown border
-    panel.setInteractive({ useHandCursor: true });
-    container.add(panel);
-
-    // Inner border (pixel art style - 2px border)
-    const innerPanel = this.add.rectangle(cx, cy, panelW - 12, panelH - 12, 0xf5e6c8);
-    innerPanel.setStrokeStyle(2, 0x8b7355); // Lighter brown inner border
-    container.add(innerPanel);
-
-    // RIGID GRID SYSTEM: Equivalent to CSS Grid with consistent spacing
-    const padding = 30; // Fixed internal padding
-    const gap = 22; // Consistent gap between sections
-    const gridPaddingLeft = panelLeft + padding;
-    const gridPaddingRight = panelLeft + panelW - padding;
-    const col1Left = gridPaddingLeft; // Left column
-    const col2Right = gridPaddingRight; // Right column
-    
-    // Calculate column widths for info section
-    const infoColWidth = (panelW - padding * 2) / 2;
-    
-    // Column positions for info section - left and right columns within the content area
-    const col1LeftInfo = gridPaddingLeft;                // Left column starts at left padding
-    const col2Left = gridPaddingLeft + infoColWidth;     // Right column starts in the middle
-    
-    // Fixed square size for close button
-    const closeBtnSize = 24 * uiScale;
-    const closeBtnMargin = 10;
-    const closeBtnX = panelLeft + panelW - closeBtnMargin - closeBtnSize / 2;
-    const closeBtnY = panelTop + closeBtnMargin + closeBtnSize / 2;
-    
-    // Close button (X) in top-right corner - flush to the panel corner
-    const closeBtn = this.add.rectangle(closeBtnX, closeBtnY, closeBtnSize, closeBtnSize, 0xff0000);
-    closeBtn.setStrokeStyle(2, 0x990000);
-    closeBtn.setInteractive({ useHandCursor: true });
-    container.add(closeBtn);
-    
-    // X symbol inside close button - vertically aligned with title
-    const closeSymbol = this.add.text(closeBtnX, closeBtnY, '✕', {
-      fontFamily: 'monospace',
-      fontSize: `${Math.round(16 * uiScale)}px`,
-      color: '#ffffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-    container.add(closeSymbol);
-
-    const fs = (n) => `${Math.round(n * textScale)}px`;
-
-    // === GRID AREAS EQUIVALENT SYSTEM ===
-    // grid-template-areas:
-    //   "header header"
-    //   "info-left info-right"
-    //   "description description"
-    //   "controls controls"
-    //   "buttons buttons";
-    // grid-template-columns: 1fr 1fr;
-
-    // === HEADER AREA ===
-    const headerTop = panelTop + padding;
-    
-    // Title - Pixel font style (monospace, high contrast) - Main heading
-    const titleText = this.add.text(cx, headerTop, t('zk_popup.title'), {
-      fontFamily: 'monospace',
-      fontSize: fs(24),
-      color: '#2d1810',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-    container.add(titleText);
-
-    // Divider line - perfectly aligned under title
-    const dividerY = headerTop + 30;
-    const divider = this.add.rectangle(cx, dividerY, panelW - padding * 2, 2, 0x4a2c2a);
-    container.add(divider);
-
-    // Get wallet and rank info
-    const walletConnected = stellarWallet.isConnected();
-    const contractConfigured = gameClient.isContractConfigured();
-    const proverConfigured = gameClient.isZkProverConfigured();
-    const isZkMode = walletConnected && contractConfigured && proverConfigured;
-    
-    let playerRank = 0;
-    let playerGamesPlayed = 0;
-    let proverHealthy = false;
-    if (walletConnected) {
+  /** Async extras for the start-run modal: { rank (0 = unranked), proverHealthy (null = not configured) }. */
+  async loadStartRunExtras(state) {
+    let rank = 0;
+    let proverHealthy = null;
+    if (state.wallet) {
       try {
         const stats = await weaponClient.getPlayerStats(await stellarWallet.getAddress());
-        playerGamesPlayed = stats.gamesPlayed || 0;
+        const gamesPlayed = stats.gamesPlayed || 0;
         const apiRank = stats.rank !== undefined ? stats.rank : stats.tier;
-        // Solo usar datos de ESTA wallet (API/contrato). Cuenta nueva = 0 partidas/0 score = UNRANKED.
-        const scoreFromApi = stats.bestScore != null ? Number(stats.bestScore) : 0;
-        const waveFromApi = stats.bestWave != null ? Number(stats.bestWave) : 0;
-        const hasNeverPlayedRanked = (playerGamesPlayed === 0 && scoreFromApi === 0) || (scoreFromApi === 0 && waveFromApi === 0);
-        if (hasNeverPlayedRanked) {
-          playerRank = 0;
-        } else if (apiRank != null && apiRank > 0) {
-          playerRank = apiRank;
-        } else {
-          playerRank = getRankIdFromScore(scoreFromApi, waveFromApi >= 3 ? waveFromApi : 99);
-        }
+        // Only this wallet's data (API/contract). Fresh account = 0 runs / 0 score = UNRANKED.
+        const score = stats.bestScore != null ? Number(stats.bestScore) : 0;
+        const wave = stats.bestWave != null ? Number(stats.bestWave) : 0;
+        const neverRanked = (gamesPlayed === 0 && score === 0) || (score === 0 && wave === 0);
+        if (neverRanked) rank = 0;
+        else if (apiRank != null && apiRank > 0) rank = apiRank;
+        else rank = getRankIdFromScore(score, wave >= 3 ? wave : 99);
       } catch (e) {
-        console.warn('[ZKPopup] Failed to get player rank:', e);
-        playerRank = 0;
+        logger.warn('[StartRun] Failed to get player rank:', e);
       }
     }
-    if (proverConfigured) {
+    if (state.prover) {
       try {
         const health = await gameClient.checkZkProverHealth();
         proverHealthy = !!health?.ok;
-      } catch (_) { /* ignore */ }
+      } catch (_) { proverHealthy = false; }
     }
+    return { rank, proverHealthy };
+  }
 
-    // === INFO-LEFT AREA ===
-    const infoSectionTop = dividerY + gap;
-    
-    // Left column: Mode info
-    const modeText = isZkMode ? t('zk_popup.mode_ranked') : t('zk_popup.mode_casual');
-    const modeColor = isZkMode ? '#228b22' : '#8b4513'; // Green for ranked, brown for casual
-    const modeDisplay = this.add.text(col1LeftInfo, infoSectionTop, modeText, {
-      fontFamily: 'monospace',
-      fontSize: fs(16),
-      color: modeColor,
-      fontStyle: 'bold'
-    }).setOrigin(0, 0);
-    container.add(modeDisplay);
-
-    const zkStatusText = isZkMode ? t('zk_popup.zk_enabled') : t('zk_popup.zk_disabled');
-    const zkStatusColor = isZkMode ? '#228b22' : '#8b0000'; // Green or dark red
-    const zkStatus = this.add.text(col1LeftInfo, infoSectionTop + 28, zkStatusText, {
-      fontFamily: 'monospace',
-      fontSize: fs(14),
-      color: zkStatusColor,
-      fontStyle: 'bold'
-    }).setOrigin(0, 0);
-    container.add(zkStatus);
-
-    // === INFO-RIGHT AREA ===
-    // Right column: Rank info - Block vertical layout
-    const rankTitle = this.add.text(col2Left, infoSectionTop, t('zk_popup.rank_title'), {
-      fontFamily: 'monospace',
-      fontSize: fs(14),
-      color: '#4a2c2a',
-      fontStyle: 'bold'
-    }).setOrigin(0, 0);
-    container.add(rankTitle);
-
-    if (!isUnranked(playerRank)) {
-      // Show rank info with emoji + name (clean, no sprite)
-      const rankData = getRankById(playerRank);
-      const rankNameY = infoSectionTop + 24;
-      const emojiSuffix = getRankEmoji(playerRank) ? ' ' + getRankEmoji(playerRank) : '';
-      const rankNameText = this.add.text(col2Left, rankNameY, rankData.name + emojiSuffix, {
-        fontFamily: 'monospace',
-        fontSize: fs(16),
-        color: getRankColorCSS(playerRank),
-        fontStyle: 'bold'
-      }).setOrigin(0, 0);
-      container.add(rankNameText);
-    } else {
-      // Unranked
-      const unrankedText = this.add.text(col2Left, infoSectionTop + 24, t('ranks.unranked'), {
-        fontFamily: 'monospace',
-        fontSize: fs(16),
-        color: '#888888',
-        fontStyle: 'bold'
-      }).setOrigin(0, 0);
-      container.add(unrankedText);
-    }
-
-    // === DESCRIPTION AREA ===
-    const descTop = infoSectionTop + 92;
-    const descMaxWidth = panelW - padding * 2;
-
-    let descCursorY = descTop;
-    const descFullText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.description').replace(/\n/g, ' '), {
-      fontFamily: 'monospace',
-      fontSize: fs(12),
-      color: '#4a4a4a',
-      wordWrap: { width: descMaxWidth }
-    }).setOrigin(0, 0);
-    container.add(descFullText);
-    descCursorY += descFullText.height + 10;
-
-    const weaponHintText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.zk_weapon_hint'), {
-      fontFamily: 'monospace',
-      fontSize: fs(11),
-      color: '#00aaaa',
-      fontStyle: 'bold',
-      wordWrap: { width: descMaxWidth }
-    }).setOrigin(0, 0);
-    container.add(weaponHintText);
-    descCursorY += weaponHintText.height + 10;
-
-    // === MINIMUM SCORE WARNING (red pixel-art style alert) ===
-    const warnPadV = 8;
-    const warnPadH = 12;
-    const warnMaxW = descMaxWidth - warnPadH * 2;
-    // Warning title
-    const warnTitle = this.add.text(gridPaddingLeft + warnPadH, descCursorY + warnPadV, t('zk_popup.min_score_warning'), {
-      fontFamily: 'monospace',
-      fontSize: fs(13),
-      color: '#ff0000',
-      fontStyle: 'bold'
-    }).setOrigin(0, 0);
-    // Warning detail
-    const warnDetail = this.add.text(gridPaddingLeft + warnPadH, descCursorY + warnPadV + 22, t('zk_popup.min_score_detail'), {
-      fontFamily: 'monospace',
-      fontSize: fs(9),
-      color: '#ff4444',
-      wordWrap: { width: warnMaxW }
-    }).setOrigin(0, 0);
-    const warnBoxH = warnPadV * 2 + 22 + warnDetail.height + 4;
-    // Red border box behind text
-    const warnBorder = this.add.rectangle(
-      gridPaddingLeft + descMaxWidth / 2,
-      descCursorY + warnBoxH / 2,
-      descMaxWidth, warnBoxH,
-      0x330000, 0.6
-    );
-    warnBorder.setStrokeStyle(2, 0xff0000, 1);
-    container.add(warnBorder);
-    container.add(warnTitle);
-    container.add(warnDetail);
-    descCursorY += warnBoxH + 10;
-
-    // === STATUS CHECKS (horizontal) ===
-    const statusItems = [
-      { label: contractConfigured ? 'CONTRACT ✓' : 'CONTRACT ✗', ok: contractConfigured },
-      { label: proverHealthy ? 'ZK PROVER ✓' : 'ZK PROVER ✗', ok: proverHealthy },
-      { label: walletConnected ? 'SEP-10 ✓' : 'SEP-10 ✗', ok: walletConnected }
-    ];
-    let statusX = gridPaddingLeft;
-    statusItems.forEach((item) => {
-      const color = item.ok ? '#228b22' : '#8b0000';
-      const statusLine = this.add.text(statusX, descCursorY, item.label, {
-        fontFamily: 'monospace',
-        fontSize: fs(9),
-        color: color,
-        fontStyle: 'bold'
-      }).setOrigin(0, 0);
-      container.add(statusLine);
-      statusX += statusLine.width + 18;
-    });
-    descCursorY += 20;
-
-    // === DIVIDER ===
-    descCursorY += 4;
-    const divider2 = this.add.rectangle(cx, descCursorY, panelW - padding * 2, 1, 0x8b7355, 0.5);
-    container.add(divider2);
-    descCursorY += 10;
-
-    // === CONTROLS AREA (compact 2-column) ===
-    const col1X = gridPaddingLeft;
-    const col2X = gridPaddingLeft + 130;
-    const controlsData = [
-      { key: 'W A S D', val: t('zk_popup.controls_move').split('-').pop().trim() },
-      { key: 'ESC', val: t('zk_popup.controls_menu').split('-').pop().trim() }
-    ];
-    controlsData.forEach((c, i) => {
-      const keyText = this.add.text(col1X, descCursorY + i * 20, c.key, {
-        fontFamily: 'monospace',
-        fontSize: fs(12),
-        color: '#5a4a3a',
-        fontStyle: 'bold'
-      }).setOrigin(0, 0);
-      container.add(keyText);
-      const valText = this.add.text(col2X, descCursorY + i * 20, c.val, {
-        fontFamily: 'monospace',
-        fontSize: fs(12),
-        color: '#5a4a3a'
-      }).setOrigin(0, 0);
-      container.add(valText);
-    });
-    descCursorY += controlsData.length * 20 + 8;
-
-    // Auto-Shoot note (inline)
-    const autoShootText = this.add.text(gridPaddingLeft, descCursorY, t('zk_popup.controls_auto_shoot'), {
-      fontFamily: 'monospace',
-      fontSize: fs(11),
-      color: '#6a5a4a'
-    }).setOrigin(0, 0);
-    container.add(autoShootText);
-
-    // === BUTTONS AREA ===
-    const buttonsBottomPadding = 36;
-    const buttonsTop = panelTop + panelH - buttonsBottomPadding;
-    
-    // Play button (Ranked or Casual) - Primary CTA with consistent pixel art style
-    const playButtonText = isZkMode ? t('zk_popup.play_ranked') : t('zk_popup.play_casual');
-    const playButtonColor = isZkMode ? '#228b22' : '#8b4513';
-    const playButton = this.add.text(cx, buttonsTop, playButtonText, {
-      fontFamily: 'monospace',
-      fontSize: fs(14),
-      color: playButtonColor,
-      fontStyle: 'bold',
-      backgroundColor: '#f5e6c8',
-      padding: {
-        left: 24,
-        right: 24,
-        top: 12,
-        bottom: 12
+  /**
+   * START GAME modal (pixel kit): two mode cards (Casual / Ranked), one status row (contract, prover, wallet,
+   * rank), one rule line with a "?" for the ZK weapon tiers, and Play / Esc in the footer.
+   * Ranked is disabled without a contract or wallet; while gameClient.isRankedVerified() is false its
+   * shield is amber with a one-line tooltip instead of promising a verified run.
+   */
+  showZKStartPopup() {
+    if (this.startRunOpen) return;
+    this.startRunOpen = true;
+    this.menuBlocked = true;
+    const state = this.getStartRunState();
+    const model = startRunModel(state);
+    let mode = model.defaultMode;
+    let starting = false;
+    let helpOv = null;
+    let tipTimer = null;
+    const touch = isTouch();
+    const motion = !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const FOOT = 76;
+    const GAP = 12;
+    const ROW = 30;
+    const pre = overlayMetrics(this, { width: 720, height: 560, footerH: FOOT });
+    const lay = startCardLayout(pre.bodyW / pre.u, pre.bodyH / pre.u);
+    const statusRows = lay.stacked ? 2 : 1;
+    const contentCss = (lay.stacked ? lay.cardH * 2 + GAP : lay.cardH) + 16 + statusRows * ROW + (statusRows - 1) * 8 + 12 + ROW;
+    const ov = createOverlay(this, {
+      title: tt('start_title'),
+      icon: 'gamepad',
+      width: 720,
+      height: fitPanelHeight(pre.u, contentCss * pre.u, FOOT, 560),
+      footerH: FOOT,
+      hide: this.getOverlayHideTargets(),
+      onClose: () => {
+        this.startRunOpen = false;
+        if (!starting) this.menuBlocked = false;
+        tipTimer?.remove?.();
+        if (helpOv && !helpOv.isClosing()) helpOv.close();
+      },
+      onKey: (k, event) => {
+        const back = k === 'arrowleft' || k === 'a' || k === 'arrowup' || k === 'w' || (k === 'tab' && event.shiftKey);
+        const fwd = k === 'arrowright' || k === 'd' || k === 'arrowdown' || k === 's' || k === 'tab';
+        if (back || fwd) { event.preventDefault?.(); step(back ? -1 : 1); return; }
+        if (k === 'enter' || k === ' ') { event.preventDefault?.(); if (!event.repeat) play(); return; }
+        if (k === '?' || k === 'h') openHelp();
       }
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true });
-    container.add(playButton);
+    });
+    const u = ov.u;
+    const P = ov.px;
+    const W = ov.bodyRect.w;
+    const cardH = lay.cardH * u;
+    const cardW = lay.stacked ? W : (W - GAP * u) / 2;
 
-    // Button hover effects (simple color change, no animations)
-    playButton.on('pointerover', () => playButton.setColor('#2e8b57'));
-    playButton.on('pointerout', () => playButton.setColor(playButtonColor));
-
-    // Close function - Only closes this modal, doesn't use ESC
-    const closePopup = () => {
-      container.destroy();
-      this.menuBlocked = false;
-      this.input.keyboard.off('keydown', handleKeydown);
+    // --- Mode cards ---------------------------------------------------------------------------------
+    const MODES = {
+      casual: { name: tt('start_casual'), line: tt('start_casual_line'), icon: 'arrow-right', accent: OV.cyan, family: OV.cyanCss },
+      ranked: { name: tt('start_ranked'), line: tt('start_ranked_line'), icon: 'shield', accent: model.rankedVerified ? OV.violet : OV.amber, family: OV.violetCss }
     };
-
-    // Play function
-    const startGame = () => {
-      if (isZkMode) {
-        // Start ranked game
-        closePopup();
-        this.startRankedGame();
-      } else if (walletConnected) {
-        // Start casual game
-        closePopup();
-        this.startCasualGame();
+    const cards = {};
+    ['casual', 'ranked'].forEach((id, i) => {
+      const m = MODES[id];
+      const disabled = id === 'ranked' && !model.rankedEnabled;
+      const x = lay.stacked ? 0 : i * (cardW + GAP * u);
+      const y = lay.stacked ? i * (cardH + GAP * u) : 0;
+      const holder = this.add.container(x + cardW / 2, y + cardH / 2);
+      const card = glassCard(this, -cardW / 2, -cardH / 2, cardW, cardH, { u, accent: m.accent });
+      holder.add(card.container);
+      const c = card.container;
+      const pad = 14 * u;
+      const tileS = (lay.compact ? 20 : 26) * P;
+      const iconName = disabled ? 'lock' : m.icon;
+      const amberShield = id === 'ranked' && !disabled && !model.rankedVerified;
+      const iconColor = disabled ? OV.dim : amberShield ? OV.amberCss : undefined;
+      let tile; let icon; let name; let line;
+      const lineText = disabled ? tt(model.rankedBlock === 'contract' ? 'start_need_contract' : 'start_need_wallet') : m.line;
+      const lineColor = disabled ? (model.rankedBlock === 'wallet' ? OV.amberCss : OV.dim) : OV.muted;
+      if (lay.compact) {
+        tile = iconTile(this, pad, Math.round((cardH - tileS) / 2 / P) * P, tileS, disabled ? 0x7b86d9 : m.accent, { u });
+        icon = pixelIcon(this, iconName, 32 * u, iconColor, { tint: amberShield }).setPosition(pad + tileS / 2, Math.round((cardH - tileS) / 2 / P) * P + tileS / 2);
+        const tx = pad + tileS + 12 * u;
+        name = ovText(this, tx, cardH / 2 - 11 * u, m.name, { u, size: 18, bold: true, color: disabled ? OV.dim : OV.text }).setOrigin(0, 0.5);
+        line = fitText(ovText(this, tx, cardH / 2 + 13 * u, lineText, { u, size: 13, color: lineColor }).setOrigin(0, 0.5), cardW - tx - pad - 20 * u);
       } else {
-        // No wallet — start casual game anyway
-        closePopup();
-        this.startCasualGame();
+        const ty = 18 * u;
+        tile = iconTile(this, Math.round((cardW / 2 - tileS / 2) / P) * P, ty, tileS, disabled ? 0x7b86d9 : m.accent, { u });
+        icon = pixelIcon(this, iconName, 48 * u, iconColor, { tint: amberShield }).setPosition(Math.round((cardW / 2 - tileS / 2) / P) * P + tileS / 2, ty + tileS / 2);
+        name = ovText(this, cardW / 2, ty + tileS + 22 * u, m.name, { u, size: 22, bold: true, color: disabled ? OV.dim : OV.text }).setOrigin(0.5);
+        line = fitText(ovText(this, cardW / 2, ty + tileS + 50 * u, lineText, { u, size: 14, color: lineColor }).setOrigin(0.5), cardW - pad * 2);
       }
+      c.add([tile, icon, name, line]);
+      const zone = this.add.zone(cardW / 2, cardH / 2, cardW, cardH).setInteractive({ useHandCursor: !disabled });
+      zone.on('pointerup', (ptr) => {
+        if (ov.dragged() || !ov.pointerInBody(ptr)) return;
+        if (disabled) { nudge(id); return; }
+        if (mode === id) play(); else select(id);
+      });
+      if (id === 'ranked') {
+        zone.on('pointerover', () => showTip(true));
+        zone.on('pointerout', () => showTip(false));
+      }
+      c.add(zone);
+      ov.body.add(holder);
+      cards[id] = { holder, card, icon, iconY: icon.y, disabled, x: x + cardW / 2, y: y + cardH / 2 };
+    });
+
+    // Honest ranked tooltip: one amber line straddling the ranked card's bottom edge while runs are not verified.
+    let tip = null;
+    if (model.rankedEnabled && !model.rankedVerified) {
+      const rc = cards.ranked;
+      tip = iconChip(this, pixelIcon(this, 'shield', 16 * u, OV.amberCss, { tint: true }), tt('start_unverified'), { u, size: 12, color: OV.amberCss, h: 26 });
+      // In the window root (not the masked body) so it can overlap the card border.
+      const px = ov.body.x + rc.x - tip.w / 2;
+      const py = ov.body.y + rc.y + cardH / 2;
+      tip.container.setPosition(Math.round(px / P) * P, Math.round(py / P) * P).setVisible(false);
+      ov.container.add(tip.container);
+    }
+    const showTip = (v, ms = 0) => {
+      if (!tip) return;
+      tipTimer?.remove?.();
+      tipTimer = null;
+      tip.container.setVisible(!!v);
+      if (v && ms) tipTimer = this.time.delayedCall(ms, () => { if (tip.container.active) tip.container.setVisible(false); });
     };
 
-    playButton.on('pointerdown', startGame);
-    backdrop.on('pointerdown', closePopup);
-    closeBtn.on('pointerdown', closePopup);
-    closeSymbol.setInteractive({ useHandCursor: true });
-    closeSymbol.on('pointerdown', closePopup);
-
-    // Keyboard handler - ESC no longer closes the popup, only Enter starts game
-    const handleKeydown = (event) => {
-      if (event.code === 'Enter') {
-        startGame();
-      }
+    // --- Status row: contract / prover / wallet chips + current rank ------------------------------------
+    const rowY = (lay.stacked ? cardH * 2 + GAP * u : cardH) + 16 * u + (ROW / 2) * u;
+    const CHIP_ICON = { ok: ['check', OV.greenCss], off: ['close', OV.redCss], pending: ['hourglass', OV.dim] };
+    const chipIcon = (st) => pixelIcon(this, CHIP_ICON[st][0], 16 * u, CHIP_ICON[st][1], { tint: true });
+    const chips = {};
+    let cx0 = 0;
+    model.chips.forEach((ch) => {
+      const chip = iconChip(this, chipIcon(ch.state), tt(`chip_${ch.id}`), { u, size: 13, color: ch.state === 'ok' ? OV.text : OV.dim });
+      chip.container.setPosition(cx0, rowY);
+      ov.body.add(chip.container);
+      chips[ch.id] = chip;
+      cx0 += chip.w + 8 * u;
+    });
+    const setChip = (id, st) => {
+      const chip = chips[id];
+      chip.setIcon(chipIcon(st));
+      chip.setLabel(tt(`chip_${id}`), st === 'ok' ? OV.text : OV.dim);
     };
-    this.input.keyboard.on('keydown', handleKeydown);
+    const rankY = lay.stacked ? rowY + (ROW + 8) * u : rowY;
+    const rankChip = iconChip(this, pixelIcon(this, 'hourglass', 16 * u, OV.dim, { tint: true }), state.wallet ? '…' : tt('start_unranked'), { u, size: 13, color: OV.dim });
+    if (!state.wallet) rankChip.setIcon(pixelIcon(this, 'star', 16 * u, OV.dim, { tint: true }));
+    const placeRank = () => rankChip.container.setPosition(lay.stacked ? 0 : W - rankChip.w, rankY);
+    placeRank();
+    ov.body.add(rankChip.container);
+    const setRank = (rank) => {
+      if (isUnranked(rank)) {
+        rankChip.setIcon(pixelIcon(this, 'star', 16 * u, OV.dim, { tint: true }));
+        rankChip.setLabel(tt('start_unranked'), OV.dim);
+      } else {
+        const key = getRankSprite(rank);
+        const img = key && this.textures.exists(key) ? this.add.image(0, 0, key).setDisplaySize(20 * u, 20 * u) : pixelIcon(this, 'medal-gold', 16 * u);
+        rankChip.setIcon(img);
+        rankChip.setLabel(getRankName(rank), getRankColorCSS(rank));
+      }
+      placeRank();
+    };
+
+    // --- Rule line + "?" (ZK weapon tiers live in a stacked panel, never visible by default) -------------
+    const ruleY = rankY + (ROW / 2 + 12 + ROW / 2) * u;
+    const info = infoBadge(this, 20 * u, { u }).setPosition(10 * u, ruleY);
+    const rule = ovText(this, 28 * u, ruleY, tt('start_rule'), { u, size: 13, color: OV.dim }).setOrigin(0, 0.5);
+    const helpBtn = pillButton(this, '?', () => openHelp(), { u, h: 28, minW: 28 });
+    helpBtn.container.setPosition(W - helpBtn.w / 2, ruleY);
+    fitText(rule, W - helpBtn.w - 40 * u);
+    ov.body.add([info, rule, helpBtn.container]);
+    ov.setScrollable(ruleY + (ROW / 2) * u);
+
+    // --- Footer: [Esc] Back ............ [Enter] [▶ Play] ---------------------------------------------
+    const fw = ov.footerRect.w; const fh = ov.footerRect.h;
+    const playBtn = pillButton(this, { icon: 'arrow-right', text: tt('start_play') }, () => play(), { u, primary: true, minW: 148 });
+    playBtn.container.setPosition(fw - playBtn.w / 2, fh / 2);
+    ov.footer.add(playBtn.container);
+    let backW = 0;
+    if (touch) {
+      // Touch: a real Back button (no keyboard hint), >= 48 css hit area from pillButton.
+      const backBtn = pillButton(this, { icon: 'arrow-left', text: tt('start_back') }, () => ov.close(), { u });
+      backBtn.container.setPosition(backBtn.w / 2, fh / 2);
+      ov.footer.add(backBtn.container);
+      backW = backBtn.w;
+    } else {
+      const escCap = keycap(this, 'Esc', { u });
+      escCap.setPosition(escCap.w / 2, fh / 2);
+      const backTx = ovText(this, escCap.w + 8 * u, fh / 2, tt('start_back'), { u, size: 13, color: OV.muted }).setOrigin(0, 0.5);
+      backW = escCap.w + 8 * u + backTx.width;
+      const backZone = this.add.zone(backW / 2, fh / 2, Math.max(48 * u, backW), 48 * u).setInteractive({ useHandCursor: true });
+      backZone.on('pointerup', () => ov.close());
+      ov.footer.add([escCap, backTx, backZone]);
+      // Enter hint only when it fits between Back and Play.
+      const enterCap = keycap(this, 'Enter', { u });
+      const enterX = fw - playBtn.w - 12 * u - enterCap.w / 2;
+      if (enterX - enterCap.w / 2 > backW + 16 * u) {
+        enterCap.setPosition(enterX, fh / 2);
+        ov.footer.add(enterCap);
+      } else enterCap.destroy();
+    }
+
+    // --- Behaviour --------------------------------------------------------------------------------------
+    const refresh = () => {
+      Object.entries(cards).forEach(([id, c]) => c.card.setSelected(mode === id && !c.disabled, c.disabled));
+    };
+    const select = (id) => {
+      if (id === mode || cards[id]?.disabled) return;
+      mode = id;
+      refresh();
+      Audio.playXPGain();
+      const c = cards[id];
+      ov.reveal(c.y - cardH / 2, cardH);
+      if (motion) {
+        this.tweens.killTweensOf(c.icon);
+        c.icon.y = c.iconY;
+        this.tweens.add({ targets: c.icon, y: c.iconY - 2 * P, duration: 90, yoyo: true, ease: 'Quad.easeOut', onComplete: () => { c.icon.y = c.iconY; } });
+      }
+      if (id === 'ranked') showTip(true, 2600); else showTip(false);
+    };
+    const nudge = (id) => {
+      const h = cards[id].holder;
+      if (!motion) return;
+      this.tweens.killTweensOf(h);
+      h.x = cards[id].x;
+      this.tweens.add({ targets: h, x: cards[id].x + 3 * P, duration: 45, yoyo: true, repeat: 2, onComplete: () => { h.x = cards[id].x; } });
+    };
+    const step = (dir) => {
+      const next = cycleStartMode(mode, dir, model.rankedEnabled);
+      if (next === mode && !model.rankedEnabled) { nudge('ranked'); return; }
+      select(next);
+    };
+    const play = () => {
+      if (starting || ov.isClosing()) return;
+      if (mode === 'ranked' && !model.rankedEnabled) { nudge('ranked'); return; }
+      starting = true;
+      ov.close();
+      if (mode === 'ranked') this.startRankedGame(); else this.startCasualGame();
+    };
+    const openHelp = () => {
+      if (helpOv && !helpOv.isClosing()) return;
+      const rows = this.getZkWeaponTiers();
+      const hpre = overlayMetrics(this, { width: 460, height: 420 });
+      helpOv = createOverlay(this, {
+        title: tt('zk_help_title'),
+        icon: 'chip',
+        width: 460,
+        height: fitPanelHeight(hpre.u, (52 + rows.length * 30) * hpre.u, 0, 420),
+        depth: OV.depth + 20
+      });
+      const hu = helpOv.u;
+      const HW = helpOv.bodyRect.w;
+      const hint = ovText(this, 0, 0, this.getZkWeaponHint(), { u: hu, size: 13, color: OV.muted, wrap: HW });
+      helpOv.body.add(hint);
+      let y = hint.height + 14 * hu;
+      rows.forEach((r) => {
+        const nm = ovText(this, 0, y + 12 * hu, r.name, { u: hu, size: 14, bold: true, color: r.color }).setOrigin(0, 0.5);
+        const val = ovText(this, HW, y + 12 * hu, `${r.threshold}+`, { u: hu, size: 14, color: OV.text }).setOrigin(1, 0.5);
+        helpOv.body.add([nm, val]);
+        y += 30 * hu;
+      });
+      helpOv.setScrollable(y);
+    };
+    refresh();
+    if (mode === 'ranked') showTip(true, 2600);
+
+    // Rank + prover health arrive async; the window is usable meanwhile.
+    this.loadStartRunExtras(state).then(({ rank, proverHealthy }) => {
+      if (ov.isClosing() || !ov.container.active) return;
+      if (state.wallet) setRank(rank);
+      if (state.prover) setChip('prover', proverHealthy ? 'ok' : 'off');
+    }).catch(() => {});
   }
 
   /**
@@ -3538,7 +3202,7 @@ export default class TitleScene extends Phaser.Scene {
    */
   startRankedGame() {
     const gameMode = 'zk_ranked';
-    console.log('[Cosmic Coder] Mode selected: ZK Ranked');
+    logger.log('[Cosmic Coder] Mode selected: ZK Ranked');
     Audio.playLevelUp();
     window.VIBE_CODER.reset();
     SaveManager.clearSave();
@@ -3564,7 +3228,7 @@ export default class TitleScene extends Phaser.Scene {
         }
       } catch (e) {
         const msg = e?.message || String(e);
-        console.warn('SEP-10 login failed on START_GAME:', msg);
+        logger.warn('SEP-10 login failed on START_GAME:', msg);
         if (this.sayQuote) this.sayQuote(t('auth.session_failed') + '\n' + msg);
         if (this.updateWalletButton) this.updateWalletButton();
         if (this.updateConnectionBadge) this.updateConnectionBadge();
@@ -3582,7 +3246,7 @@ export default class TitleScene extends Phaser.Scene {
           const addr = await stellarWallet.getAddress();
           await gameClient.startMatch(addr, (xdr, networkPassphrase) => stellarWallet.signTransaction(xdr, networkPassphrase));
         } catch (e) {
-          console.warn('On-chain start_match failed:', e);
+          logger.warn('On-chain start_match failed:', e);
           this.sayQuote(t('game.start_match_failed'));
         }
       }
@@ -3600,7 +3264,7 @@ export default class TitleScene extends Phaser.Scene {
    */
   startCasualGame() {
     const gameMode = 'casual';
-    console.log('[Cosmic Coder] Mode selected: Casual');
+    logger.log('[Cosmic Coder] Mode selected: Casual');
     Audio.playLevelUp();
     window.VIBE_CODER.reset();
     SaveManager.clearSave();
@@ -3613,324 +3277,349 @@ export default class TitleScene extends Phaser.Scene {
     });
   }
 
+  /** CONTROLS: keycaps on the left (real ArenaScene bindings), touch joystick + tap illustration on the right. */
   showControls() {
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-
-    const boxW = 520;
-    const boxH = 460;
-    const overlayTop = cy - boxH / 2;
-
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
-    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
-
-    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001).setInteractive({ useHandCursor: true });
-
-    let currentY = overlayTop + 44;
-    const title = this.add.text(cx, currentY, t('controls.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${24 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5, 0).setDepth(1002);
-    currentY += title.height + 20;
-
-    const lineHeight = 22 * uiScale;
-    const controls = [
-      t('controls.wasd'),
-      t('controls.space'),
-      t('controls.m'),
-      t('controls.esc_p'),
-      '',
-      t('controls.auto_attack'),
-      t('controls.collect')
+    if (this.controlsOpen) return;
+    this.controlsOpen = true;
+    // Keys match ArenaScene / AbilityController / ShrineManager: WASD + arrows, SPACE ability, E shrine & ZK pickup, ESC/P pause, M music.
+    const ROWS = [
+      { keys: [['W', 'A', 'S', 'D'], ['↑', '←', '↓', '→']], label: tt('c_move') },
+      { keys: [['Space']], label: tt('c_ability') },
+      { keys: [['E']], label: tt('c_interact') },
+      { keys: [['Esc', 'P']], label: tt('c_pause') },
+      { keys: [['M']], label: tt('c_music') }
     ];
-
-    const controlTexts = [];
-    controls.forEach((line) => {
-      if (line.length > 0) {
-        const isCmd = line.includes('npm');
-        const text = this.add.text(cx, currentY, line, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${13 * uiScale}px`,
-          color: isCmd ? '#ffff00' : '#e0e0e0',
-          align: 'center'
-        }).setOrigin(0.5, 0).setDepth(1002);
-        controlTexts.push(text);
+    const pulse = { t: 0 };
+    const pre = overlayMetrics(this, { width: 760, height: 560 });
+    const ov = createOverlay(this, {
+      title: tt('controls_title'),
+      icon: 'gamepad',
+      width: 760,
+      height: fitPanelHeight(pre.u, 300 * pre.u, 0, 560),
+      hide: this.getOverlayHideTargets(),
+      onClose: () => { this.controlsOpen = false; this.tweens.killTweensOf(pulse); },
+      onKey: (k) => {
+        if (k === 'arrowdown' || k === 's') ov.scrollTo(ov.scrollY + 40 * ov.u, true);
+        else if (k === 'arrowup' || k === 'w') ov.scrollTo(ov.scrollY - 40 * ov.u, true);
       }
-      currentY += lineHeight;
     });
+    const u = ov.u;
+    const W = ov.bodyRect.w;
+    const stacked = W / u < 600;
+    const gapCol = 20 * u;
+    const leftW = stacked ? W : Math.floor((W - gapCol) * 0.56);
+    const rightX = stacked ? 0 : leftW + gapCol;
+    const rightW = stacked ? W : W - rightX;
+    const capH = 30;
 
-    const closeHint = this.add.text(cx, overlayTop + boxH - 36, t('prompt.any_key_close'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#00aaff'
-    }).setOrigin(0.5).setDepth(1002).setInteractive({ useHandCursor: true });
+    // Left column: one glass row per action.
+    let y = 0;
+    const rowGap = 8 * u;
+    ROWS.forEach((row) => {
+      const lines = row.keys.length;
+      const rowH = (lines * (capH + 6) + 12) * u;
+      const card = glassCard(this, 0, y, leftW, rowH, { u, radius: 12 });
+      ov.body.add(card.container);
+      let kx = 14 * u;
+      let maxX = kx;
+      row.keys.forEach((group, li) => {
+        let x = kx;
+        const cy = y + (6 + capH / 2 + li * (capH + 6) + 3) * u;
+        group.forEach((label, gi) => {
+          if (gi > 0 && label === 'P') {
+            const slash = ovText(this, x + 2 * u, cy, '/', { u, size: 13, color: OV.dim }).setOrigin(0, 0.5);
+            ov.body.add(slash);
+            x += slash.width + 8 * u;
+          }
+          const cap = keycap(this, label, { u, size: 13, h: capH, color: OV.text });
+          cap.setPosition(x + cap.w / 2, cy);
+          ov.body.add(cap);
+          x += cap.w + 6 * u;
+        });
+        maxX = Math.max(maxX, x);
+      });
+      const label = ovText(this, leftW - 16 * u, y + rowH / 2, row.label, { u, size: 14, bold: true }).setOrigin(1, 0.5);
+      fitText(label, leftW - maxX - 24 * u);
+      ov.body.add(label);
+      y += rowH + rowGap;
+    });
+    const leftH = y - rowGap;
 
-    const closeControls = () => {
-      backdrop.destroy();
-      overlay.destroy();
-      title.destroy();
-      controlTexts.forEach((el) => el.destroy());
-      closeHint.destroy();
-      this.input.keyboard.off('keydown', closeControls);
-      this.input.keyboard.off('keydown-ESC', closeControls);
-    };
+    // Right column: touch illustration (joystick + tap) drawn with graphics.
+    const rTop = stacked ? leftH + 16 * u : 0;
+    const rH = stacked ? 190 * u : leftH;
+    const card = glassCard(this, rightX, rTop, rightW, rH, { u, radius: 14 });
+    ov.body.add(card.container);
+    const g = this.add.graphics();
+    ov.body.add(g);
+    const colW = rightW / 2;
+    const midY = rTop + rH / 2 - 14 * u;
+    const R = Math.min(colW * 0.32, 48 * u);
+    // Joystick base + knob pushed up-right + motion hint.
+    const jx = rightX + colW / 2;
+    pixelDisc(this, jx, midY, R, { u, g, fill: PX.night, line: PX.slate });
+    pixelDisc(this, jx, midY, R * 0.55, { u, g, fill: PX.dusk, line: PX.ink });
+    const kx = jx + R * 0.36; const ky = midY - R * 0.36;
+    pixelDisc(this, kx, ky, R * 0.4, { u, g, fill: PX.cyan, line: PX.ink, light: 0xb0f3ff });
+    // Tap: ability button with a ring and a fingertip.
+    const tx = rightX + colW * 1.5;
+    pixelDisc(this, tx, midY, R * 0.86, { u, g, fill: PX.night, line: PX.violetD });
+    pixelDisc(this, tx, midY, R * 0.6, { u, g, fill: PX.violet, line: PX.ink, light: 0xd4b8ff });
+    const bolt = pixelIcon(this, 'bolt', 32 * u).setPosition(tx, midY);
+    ov.body.add(bolt);
+    const tip = pixelDisc(this, tx + R * 0.48, midY + R * 0.48, R * 0.18, { u, fill: PX.white, line: PX.ink });
+    ov.body.add(tip);
+    const capY = midY + R + 16 * u;
+    [[jx, tt('c_drag')], [tx, tt('c_tap')]].forEach(([x, str]) => {
+      const l = ovText(this, x, capY, str, { u, size: 13, color: OV.muted, align: 'center', wrap: colW - 12 * u }).setOrigin(0.5, 0);
+      ov.body.add(l);
+    });
+    // Gentle knob drift so the joystick reads as "drag" (skipped with reduced motion).
+    if (!window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+      const knobPulse = this.add.graphics();
+      ov.body.add(knobPulse);
+      const o = pulse;
+      this.tweens.add({
+        targets: o, t: 1, duration: 1400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut',
+        onUpdate: () => {
+          if (!knobPulse.scene) return;
+          knobPulse.clear();
+          // Pixel ring: one art pixel per step around the circle, snapped to the art grid.
+          const P = ov.px; const rr = R * (0.6 + 0.45 * o.t); const n = Math.ceil((2 * Math.PI * rr) / P);
+          knobPulse.fillStyle(OV.violet, 0.6 * (1 - o.t));
+          for (let i = 0; i < n; i++) {
+            const a = (i / n) * Math.PI * 2;
+            knobPulse.fillRect(tx + Math.round((Math.cos(a) * rr) / P) * P - P / 2, midY + Math.round((Math.sin(a) * rr) / P) * P - P / 2, P, P);
+          }
+        }
+      });
+    }
 
-    backdrop.on('pointerdown', closeControls);
-    overlay.on('pointerdown', closeControls);
-    closeHint.on('pointerdown', closeControls);
-    this.input.keyboard.on('keydown', closeControls);
-    this.input.keyboard.on('keydown-ESC', closeControls);
+    ov.setScrollable(stacked ? rTop + rH : Math.max(leftH, rH));
   }
 
+  /**
+   * SETTINGS: icon + name + control rows (toggle / slider / segmented), saved immediately through
+   * window.VIBE_SETTINGS. Language and fullscreen live here (no longer in the title corners).
+   */
   showSettings() {
+    if (this.settingsMenuOpen) return;
     this.settingsMenuOpen = true;
-    this.settingsSelectedIndex = 0;
-
-    const settings = window.VIBE_SETTINGS;
-    const isElectron = window.electronAPI?.isElectron;
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
-    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
-
-    const boxW = 600;
-    const boxH = 560;
-    const overlayLeft = cx - boxW / 2;
-    const overlayTop = cy - boxH / 2;
-    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001).setInteractive({ useHandCursor: true });
-
-    const titleY = overlayTop + 40;
-    const title = this.add.text(cx, titleY, t('settings.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${28 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
-
-    const settingsData = [
-      { key: 'playerName', labelKey: 'settings.NAME', type: 'input', getValue: () => settings.playerName || t('settings.NOT_SET') },
-      { key: 'language', labelKey: 'settings.LANGUAGE', type: 'select', options: ['en', 'es'], optionLabels: [t('settings.lang_en'), t('settings.lang_es')], getValue: () => settings.language || 'en', setValue: (v) => { setLanguage(v); close(); this.scene.start('TitleScene'); } },
-      { key: 'music', labelKey: 'settings.MUSIC', type: 'toggle', getValue: () => settings.musicEnabled, toggle: () => { settings.toggle('musicEnabled'); Audio.toggleMusic(); } },
-      { key: 'sfx', labelKey: 'settings.SOUND_FX', type: 'toggle', getValue: () => settings.sfxEnabled, toggle: () => settings.toggle('sfxEnabled') },
-      { key: 'masterVol', labelKey: 'settings.MASTER_VOL', type: 'slider', getValue: () => settings.masterVolume, setValue: (v) => settings.setVolume('master', v) },
-      { key: 'menuMusicVol', labelKey: 'settings.MENU_MUSIC_VOL', type: 'slider', getValue: () => settings.menuMusicVolume, setValue: (v) => { settings.setVolume('menuMusic', v); Audio.updateMenuMusicVolume(); } },
-      { key: 'gameplayMusicVol', labelKey: 'settings.GAMEPLAY_MUSIC_VOL', type: 'slider', getValue: () => settings.gameplayMusicVolume, setValue: (v) => { settings.setVolume('gameplayMusic', v); Audio.updateGameplayMusicVolume(); } }
-    ];
-
+    const S = window.VIBE_SETTINGS;
+    const isElectron = !!window.electronAPI?.isElectron;
     const electronCache = { windowMode: 'floating', alwaysOnTop: false };
+    const WINDOW_MODES = ['floating', 'cornerSnap', 'desktopWidget', 'miniHud'];
+    const setMusic = (on) => {
+      if (!!S.musicEnabled !== on) S.toggle('musicEnabled');
+      try {
+        Audio.initAudio();
+        if (on) { if (!Audio.isMenuMusicPlaying()) Audio.startMenuMusic(); } else Audio.stopMenuMusic();
+      } catch (_) { /* audio not ready */ }
+    };
+    // Requested fullscreen state until the browser confirms (fullscreenchange) or refuses (timeout).
+    let fsWant = null;
+    let fsTimer = null;
+    const requestFullscreen = (on) => {
+      if (on === this.isFullscreen()) return;
+      fsWant = on;
+      this.toggleFullscreen();
+      fsTimer?.remove(false);
+      fsTimer = this.time.delayedCall(1500, () => { fsWant = null; this._settingsFsToggle?.(); });
+    };
+    const ROWS = [
+      { id: 'name', icon: 'user', label: tt('set_name'), type: 'name' },
+      { id: 'language', icon: 'globe', label: tt('set_language'), type: 'segment', options: [{ id: 'en', label: 'EN' }, { id: 'es', label: 'ES' }], get: () => (S.language === 'es' ? 1 : 0), set: (id) => this.applyTitleLanguage(id) },
+      { id: 'fullscreen', icon: 'expand', label: tt('set_fullscreen'), type: 'toggle', get: () => fsWant ?? this.isFullscreen(), set: (on) => requestFullscreen(on) },
+      { id: 'music', icon: 'note', label: tt('set_music'), type: 'toggleSlider', get: () => !!S.musicEnabled, set: setMusic, getV: () => S.menuMusicVolume, setV: (v) => { S.setVolume('menuMusic', v); Audio.updateMenuMusicVolume(); } },
+      { id: 'gameMusic', icon: 'note', iconColor: 0x67e8f9, label: tt('set_game_music'), type: 'slider', getV: () => S.gameplayMusicVolume, setV: (v) => { S.setVolume('gameplayMusic', v); Audio.updateGameplayMusicVolume(); } },
+      { id: 'sfx', icon: 'burst', label: tt('set_sfx'), type: 'toggleSlider', get: () => !!S.sfxEnabled, set: (on) => { if (!!S.sfxEnabled !== on) S.toggle('sfxEnabled'); if (on) Audio.playHit(); }, getV: () => S.sfxVolume, setV: (v) => S.setVolume('sfx', v), preview: () => Audio.playHit() },
+      { id: 'master', icon: 'speaker', label: tt('set_master'), type: 'slider', getV: () => S.masterVolume, setV: (v) => { S.setVolume('master', v); Audio.updateMenuMusicVolume(); }, preview: () => Audio.playHit() },
+      { id: 'autoMove', icon: 'chevrons', label: tt('set_automove'), type: 'toggle', get: () => S.autoMove !== false, set: (on) => { if ((S.autoMove !== false) !== on) S.toggle('autoMove'); } }
+    ];
     if (isElectron) {
-      settingsData.push(
-        { key: 'divider1', labelKey: 'settings.DESKTOP_APP', type: 'divider' },
-        { key: 'windowMode', labelKey: 'settings.WINDOW_MODE', type: 'select', options: ['floating', 'cornerSnap', 'desktopWidget', 'miniHud'], optionLabels: [t('settings.windowMode_floating'), t('settings.windowMode_cornerSnap'), t('settings.windowMode_desktopWidget'), t('settings.windowMode_miniHud')], getValue: () => electronCache.windowMode, setValue: (v) => { window.electronAPI?.setSetting?.('windowMode', v); electronCache.windowMode = v; } },
-        { key: 'alwaysOnTop', labelKey: 'settings.ALWAYS_ON_TOP', type: 'toggle', getValue: () => electronCache.alwaysOnTop, toggle: async () => { try { const c = await window.electronAPI.getSetting('alwaysOnTop'); electronCache.alwaysOnTop = !c; window.electronAPI.setSetting('alwaysOnTop', electronCache.alwaysOnTop); updateVisuals(); } catch (_) {} } }
+      ROWS.push(
+        { id: 'windowMode', icon: 'expand', iconColor: 0xfbbf24, label: tt('set_window'), type: 'cycle', options: WINDOW_MODES, labelOf: (m) => t(`settings.windowMode_${m}`), get: () => electronCache.windowMode, set: (m) => { window.electronAPI?.setSetting?.('windowMode', m); electronCache.windowMode = m; } },
+        { id: 'alwaysOnTop', icon: 'crown', iconColor: 0xfbbf24, label: tt('set_on_top'), type: 'toggle', get: () => electronCache.alwaysOnTop, set: (on) => { electronCache.alwaysOnTop = on; try { window.electronAPI.setSetting('alwaysOnTop', on); } catch (_) {} } }
       );
     }
 
-    const listX = overlayLeft + 36;
-    const listTop = overlayTop + 80;
-    const spacing = 38 * uiScale;
-    const settingTexts = [];
-
-    const getVal = (s) => {
-      if (s.type === 'divider') return '';
-      if (typeof s.getValue === 'function') return s.getValue();
-      return s.type === 'toggle' ? false : s.type === 'slider' ? 0.5 : '';
-    };
-
-    const formatVal = (s) => {
-      if (s.type === 'divider') return '';
-      if (s.type === 'action') return typeof getVal(s) === 'string' ? getVal(s) : '';
-      if (s.type === 'toggle') return getVal(s) ? t('settings.on') : t('settings.off');
-      if (s.type === 'slider') {
-        const v = Math.round((getVal(s) || 0.5) * 100);
-        const b = Math.round(v / 10);
-        return '█'.repeat(b) + '░'.repeat(10 - b) + '  ' + v + '%';
+    let sel = Phaser.Math.Clamp(this.settingsSelectedIndex || 0, 0, ROWS.length - 1);
+    const pre = overlayMetrics(this, { width: 640, height: 600 });
+    const compact = pre.bodyH / pre.u < 320;
+    const ROW_H = (compact ? 52 : 58) * pre.u;
+    const GAP = 8 * pre.u;
+    const ov = createOverlay(this, {
+      title: tt('settings_title'),
+      icon: 'gear',
+      width: 640,
+      height: fitPanelHeight(pre.u, ROWS.length * (ROW_H + GAP) - GAP, 0),
+      hide: this.getOverlayHideTargets(),
+      blockKeys: () => !!this.nameInputOpen,
+      onClose: () => {
+        this.settingsMenuOpen = false;
+        this.settingsSelectedIndex = sel;
+        this._settingsFsToggle = null;
+        fsTimer?.remove(false);
+      },
+      onKey: (k, event) => {
+        if (k === 'arrowup' || k === 'w') { select(wrapIndex(sel - 1, ROWS.length)); return; }
+        if (k === 'arrowdown' || k === 's') { select(wrapIndex(sel + 1, ROWS.length)); return; }
+        if (k === 'arrowleft' || k === 'a') { adjust(-1); return; }
+        if (k === 'arrowright' || k === 'd') { adjust(1); return; }
+        if (k === 'enter' || k === ' ') { event.preventDefault?.(); activate(); }
       }
-      if (s.type === 'input') return String(getVal(s) || '');
-      if (s.type === 'select') {
-        const v = getVal(s);
-        const i = (s.options || []).indexOf(v);
-        const idx = i >= 0 ? i : 0;
-        return '< ' + (s.optionLabels?.[idx] ?? s.options?.[idx] ?? v) + ' >';
-      }
-      return '';
-    };
+    });
+    const u = ov.u;
+    const W = ov.bodyRect.w;
+    const pad = 12 * u;
+    const tileS = 18 * ov.px;
+    const ctrlRight = W - 16 * u;
 
-    settingsData.forEach((s, i) => {
-      const lbl = s.labelKey ? t(s.labelKey) : (s.label || '');
-      const txt = this.add.text(listX, listTop + i * spacing, s.type === 'divider' ? lbl : `${lbl}\n${formatVal(s)}`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: s.type === 'divider' ? `${12 * uiScale}px` : `${14 * uiScale}px`,
-        color: s.type === 'divider' ? '#666666' : (i === this.settingsSelectedIndex ? '#ffffff' : '#aaaaaa'),
-        align: 'left',
-        lineSpacing: 2
-      }).setOrigin(0, 0.5).setDepth(1002);
+    const rows = ROWS.map((row, i) => {
+      const y = i * (ROW_H + GAP);
+      const card = glassCard(this, 0, y, W, ROW_H, { u, radius: 12 });
+      ov.body.add(card.container);
+      const c = card.container;
+      const color = row.iconColor ?? 0xc4b5fd;
+      const tile = iconTile(this, pad, Math.round((ROW_H - tileS) / 2 / ov.px) * ov.px, tileS, color, { u });
+      const icon = pixelIcon(this, row.icon, 24 * u).setPosition(pad + tileS / 2, tile.y + tileS / 2);
+      const label = ovText(this, pad + tileS + 12 * u, ROW_H / 2, row.label, { u, size: 14, bold: true }).setOrigin(0, 0.5);
+      c.add([tile, icon, label]);
+      const it = { row, card, c, y, label };
+      let left = ctrlRight; // x where the controls start (right-aligned group)
 
-      if (s.type !== 'divider') {
-        txt.setInteractive({ useHandCursor: true });
-        txt.on('pointerover', () => { this.settingsSelectedIndex = i; updateVisuals(); });
-        txt.on('pointerdown', (ptr) => {
-          if (s.type === 'toggle') {
-            if (typeof s.toggle === 'function') { s.toggle(); updateVisuals(); Audio.playHit(); }
-          } else if (s.type === 'slider') {
-            const b = txt.getBounds();
-            const x = Math.max(0, Math.min(1, (ptr.x - b.left) / (b.width || 1)));
-            s.setValue(x);
-            updateVisuals();
-            Audio.playXPGain();
-          } else if (s.type === 'select') {
-            const v = getVal(s);
-            const idx = ((s.options || []).indexOf(v) + 1) % (s.options?.length || 1);
-            s.setValue(s.options[idx]);
-            updateVisuals();
-            Audio.playXPGain();
-          } else if (s.type === 'input') {
-            this.showNameInput(false, () => { updateVisuals(); });
-          } else if (s.type === 'action' && typeof s.action === 'function') {
-            s.action();
-            Audio.playHit();
-          }
-        });
+      if (row.type === 'toggle' || row.type === 'toggleSlider') {
+        it.toggle = toggle(this, row.get(), (v) => { sel = i; refreshSel(); row.set(v); syncRow(it); Audio.playXPGain(); }, { u });
+        it.toggle.container.setPosition(ctrlRight - 22 * u, ROW_H / 2);
+        c.add(it.toggle.container);
+        left = ctrlRight - 44 * u;
       }
-      settingTexts.push({ text: txt, setting: s, index: i });
+      if (row.type === 'slider' || row.type === 'toggleSlider') {
+        const labelEnd = label.x + label.width + 16 * u;
+        const room = (left - (row.type === 'toggleSlider' ? 18 * u : 0)) - Math.max(labelEnd, W * 0.45);
+        const sw = Phaser.Math.Clamp(room / u, 80, 180);
+        it.slider = slider(this, row.getV(), (v) => { sel = i; refreshSel(); row.setV(v); }, { u, w: sw });
+        const sx = left - (row.type === 'toggleSlider' ? 18 * u : 0) - sw * u;
+        it.slider.container.setPosition(sx, ROW_H / 2);
+        c.add(it.slider.container);
+        left = sx;
+      }
+      if (row.type === 'segment') {
+        it.segment = segmented(this, row.options, row.get(), (id) => { sel = i; refreshSel(); row.set(id); }, { u });
+        it.segment.container.setPosition(ctrlRight - it.segment.w / 2, ROW_H / 2);
+        c.add(it.segment.container);
+        left = ctrlRight - it.segment.w;
+      }
+      if (row.type === 'cycle') {
+        it.pill = pillButton(this, '', () => { sel = i; refreshSel(); cycle(it, 1); }, { u, h: 34 });
+        c.add(it.pill.container);
+      }
+      if (row.type === 'name') {
+        it.value = ovText(this, 0, ROW_H / 2, '', { u, size: 14, color: OV.muted }).setOrigin(1, 0.5);
+        it.pill = pillButton(this, tt('set_edit'), () => { sel = i; refreshSel(); editName(); }, { u, h: 34 });
+        c.add([it.value, it.pill.container]);
+      }
+      // Whole-row tap selects (controls keep their own hit zones on top).
+      const zone = this.add.zone(W / 2, ROW_H / 2, W, ROW_H).setInteractive();
+      zone.on('pointerup', (ptr) => { if (!ov.dragged() && ov.pointerInBody(ptr)) { sel = i; refreshSel(); } });
+      c.addAt(zone, 1);
+      it.left = left;
+      return it;
     });
 
-    const selector = this.add.text(listX - 20, listTop, '>', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${18 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
-
-    const footerTop = overlayTop + boxH - 50;
-    const instructions = this.add.text(cx, footerTop, t('prompt.up_down_adjust'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#666666'
-    }).setOrigin(0.5).setDepth(1002);
-
-    const updateVisuals = () => {
-      settingTexts.forEach((it, i) => {
-        const s = it.setting;
-        const lbl = s.labelKey ? t(s.labelKey) : (s.label || '');
-        it.text.setText(s.type === 'divider' ? lbl : `${lbl}\n${formatVal(s)}`);
-        it.text.setColor(s.type === 'divider' ? '#666666' : (i === this.settingsSelectedIndex ? '#ffffff' : '#aaaaaa'));
-      });
-      const cur = settingsData[this.settingsSelectedIndex];
-      const showSel = cur && cur.type !== 'divider';
-      selector.setVisible(showSel);
-      if (showSel) selector.setY(listTop + this.settingsSelectedIndex * spacing);
+    const syncRow = (it) => {
+      const { row } = it;
+      if (it.toggle) it.toggle.set(row.get());
+      if (it.slider) {
+        it.slider.set(row.getV() ?? 0);
+        const on = row.type !== 'toggleSlider' || row.get();
+        it.slider.container.setAlpha(on ? 1 : 0.4);
+      }
+      if (it.segment) it.segment.set(row.get());
+      if (row.type === 'cycle') {
+        it.pill.setLabel(row.labelOf(row.get()));
+        it.pill.container.setPosition(ctrlRight - it.pill.w / 2, ROW_H / 2);
+      }
+      if (row.type === 'name') {
+        it.pill.container.setPosition(ctrlRight - it.pill.w / 2, ROW_H / 2);
+        const vx = ctrlRight - it.pill.w - 12 * u;
+        it.value.setText(S.playerName || t('settings.NOT_SET')).setX(vx);
+        fitText(it.value, vx - (it.label.x + it.label.width + 16 * u));
+      }
     };
+    const refreshSel = () => rows.forEach((it, i) => it.card.setSelected(i === sel));
+    const select = (i) => {
+      sel = i;
+      refreshSel();
+      ov.reveal(rows[sel].y, ROW_H);
+      Audio.playShoot();
+    };
+    const cycle = (it, dir) => {
+      const opts = it.row.options;
+      const cur = Math.max(0, opts.indexOf(it.row.get()));
+      it.row.set(opts[wrapIndex(cur + dir, opts.length)]);
+      syncRow(it);
+      Audio.playXPGain();
+    };
+    const editName = () => this.showNameInput(false, () => rows.forEach(syncRow));
+    const adjust = (dir) => {
+      const it = rows[sel];
+      const { row } = it;
+      if (it.slider) {
+        row.setV(nudgeUnit(row.getV(), dir * 0.05));
+        syncRow(it);
+        row.preview?.();
+      } else if (row.type === 'segment') {
+        const next = Phaser.Math.Clamp(row.get() + dir, 0, row.options.length - 1);
+        if (next !== row.get()) row.set(row.options[next].id);
+      } else if (row.type === 'cycle') {
+        cycle(it, dir);
+      } else if (row.type === 'toggle') {
+        const want = dir > 0;
+        if (row.get() !== want) { row.set(want); it.toggle.set(want); Audio.playXPGain(); }
+      }
+    };
+    const activate = () => {
+      const it = rows[sel];
+      const { row } = it;
+      if (row.type === 'toggle' || row.type === 'toggleSlider') {
+        const next = !row.get();
+        row.set(next);
+        it.toggle.set(next);
+        syncRow(it);
+        Audio.playXPGain();
+      } else if (row.type === 'segment') {
+        row.set(row.options[wrapIndex(row.get() + 1, row.options.length)].id);
+      } else if (row.type === 'cycle') {
+        cycle(it, 1);
+      } else if (row.type === 'name') {
+        editName();
+      }
+    };
+
+    // Fullscreen can be left with the browser's own Esc: keep the switch honest.
+    const fsRow = rows.find((it) => it.row.id === 'fullscreen');
+    this._settingsFsToggle = fsRow ? () => { if (fsWant === this.isFullscreen()) fsWant = null; if (!ov.isClosing()) syncRow(fsRow); } : null;
+
+    rows.forEach(syncRow);
+    refreshSel();
+    ov.setScrollable(ROWS.length * (ROW_H + GAP) - GAP);
+    ov.reveal(rows[sel].y, ROW_H);
 
     if (isElectron) {
       Promise.all([
-        window.electronAPI.getSetting('windowMode').then(v => { electronCache.windowMode = v || 'floating'; }).catch(() => {}),
-        window.electronAPI.getSetting('alwaysOnTop').then(v => { electronCache.alwaysOnTop = !!v; }).catch(() => {})
-      ]).then(updateVisuals).catch(() => {});
+        window.electronAPI.getSetting('windowMode').then((v) => { electronCache.windowMode = v || 'floating'; }).catch(() => {}),
+        window.electronAPI.getSetting('alwaysOnTop').then((v) => { electronCache.alwaysOnTop = !!v; }).catch(() => {})
+      ]).then(() => { if (!ov.isClosing()) rows.forEach(syncRow); }).catch(() => {});
     }
+  }
 
-    const moveUp = () => {
-      do {
-        this.settingsSelectedIndex--;
-        if (this.settingsSelectedIndex < 0) this.settingsSelectedIndex = settingsData.length - 1;
-      } while (settingsData[this.settingsSelectedIndex]?.type === 'divider');
-      updateVisuals();
-      Audio.playXPGain();
-    };
-
-    const moveDown = () => {
-      do {
-        this.settingsSelectedIndex++;
-        if (this.settingsSelectedIndex >= settingsData.length) this.settingsSelectedIndex = 0;
-      } while (settingsData[this.settingsSelectedIndex]?.type === 'divider');
-      updateVisuals();
-      Audio.playXPGain();
-    };
-
-    const adjustLeft = () => {
-      const s = settingsData[this.settingsSelectedIndex];
-      if (!s || s.type === 'divider') return;
-      if (s.type === 'slider') {
-        s.setValue(Math.max(0, (getVal(s) || 0.5) - 0.1));
-      } else if (s.type === 'select') {
-        const v = getVal(s);
-        const arr = s.options || [];
-        const idx = Math.max(0, arr.indexOf(v) - 1);
-        const newIdx = idx < 0 ? arr.length - 1 : idx;
-        s.setValue(arr[newIdx]);
-        Audio.playXPGain();
-      }
-      updateVisuals();
-    };
-
-    const adjustRight = () => {
-      const s = settingsData[this.settingsSelectedIndex];
-      if (!s || s.type === 'divider') return;
-      if (s.type === 'slider') {
-        s.setValue(Math.min(1, (getVal(s) || 0.5) + 0.1));
-      } else if (s.type === 'select') {
-        const v = getVal(s);
-        const arr = s.options || [];
-        const idx = (arr.indexOf(v) + 1) % arr.length;
-        s.setValue(arr[idx]);
-        Audio.playXPGain();
-      }
-      updateVisuals();
-    };
-
-    const select = () => {
-      const s = settingsData[this.settingsSelectedIndex];
-      if (!s || s.type === 'divider') return;
-      if (s.type === 'toggle') {
-        s.toggle?.();
-        updateVisuals();
-        Audio.playHit();
-      } else if (s.type === 'input') {
-        // Don't close settings: open name modal on top, then refresh NAME row when confirmed
-        this.showNameInput(false, () => {
-          updateVisuals();
-        });
-      }
-    };
-
-    const onSettingsKeyDown = (e) => {
-      const k = (e.key || '').toLowerCase();
-      if (k === 'escape') { e.preventDefault(); close(); return; }
-      if (k === 'arrowup' || k === 'up' || k === 'w') { e.preventDefault(); moveUp(); return; }
-      if (k === 'arrowdown' || k === 'down' || k === 's') { e.preventDefault(); moveDown(); return; }
-      if (k === 'arrowleft' || k === 'left' || k === 'a') { e.preventDefault(); adjustLeft(); return; }
-      if (k === 'arrowright' || k === 'right' || k === 'd') { e.preventDefault(); adjustRight(); return; }
-      if (k === 'enter' || k === ' ') { e.preventDefault(); select(); return; }
-    };
-
-    const close = () => {
-      if (!this.settingsMenuOpen) return;
-      this.settingsMenuOpen = false;
-      this.input.keyboard.off('keydown', onSettingsKeyDown);
-      backdrop.destroy();
-      overlay.destroy();
-      title.destroy();
-      selector.destroy();
-      instructions.destroy();
-      settingTexts.forEach(it => it.text.destroy());
-    };
-
-    this.input.keyboard.on('keydown', onSettingsKeyDown);
-    backdrop.on('pointerdown', close);
-    overlay.on('pointerdown', close);
+  /** Switch EN/ES: save, restart the title so every string re-renders, and reopen SETTINGS. */
+  applyTitleLanguage(lang) {
+    if (lang !== 'en' && lang !== 'es') return;
+    if ((window.VIBE_SETTINGS?.language || 'en') === lang) return;
+    setLanguage(lang);
+    this.time.delayedCall(120, () => this.scene.start('TitleScene', { reopen: 'SETTINGS' }));
   }
 
   showNameInput(isFirstTime = false, callback = null) {
@@ -4016,6 +3705,7 @@ export default class TitleScene extends Phaser.Scene {
     }
 
     const updateNameDisplay = () => {
+      if (!nameText.scene || !counterText.scene) return; // destroyed (scene shut down / input closed)
       const cursor = cursorVisible ? '_' : ' ';
       nameText.setText(currentName + cursor);
       counterText.setText(`${currentName.length}/${maxLength}`);
@@ -4058,14 +3748,18 @@ export default class TitleScene extends Phaser.Scene {
       if (isFirstTime && this.idlePlayer) this.sayQuote(`Welcome,\n${name}!`);
     };
 
+    let unbindKeys = null;
     const closeInput = () => {
-      window.removeEventListener('keydown', keyHandler);
-      cursorBlink.destroy();
-      container.destroy();
-      this.nameInputOpen = false;
+      if (unbindKeys) unbindKeys();
     };
 
-    window.addEventListener('keydown', keyHandler);
+    // Scene-scoped: if the scene shuts down while the input is open (e.g. a run starts),
+    // the window listener must not keep writing into destroyed Text objects.
+    unbindKeys = bindDomListenerToScene(this, window, 'keydown', keyHandler, () => {
+      cursorBlink.destroy();
+      if (container.scene) container.destroy();
+      this.nameInputOpen = false;
+    });
     updateNameDisplay();
 
     if (!isFirstTime && authApi.getStoredToken()) {
@@ -4078,1304 +3772,687 @@ export default class TitleScene extends Phaser.Scene {
     }
   }
 
+  // ——— Submenus (UPGRADES / WEAPONS / CHARACTER): glass overlays built with title/overlayKit.js ———
+
+  /** Title-screen objects faded out behind a submenu's glass (logo + main menu). */
+  getOverlayHideTargets() {
+    return [this.uiLayout].filter(Boolean);
+  }
+
+  /** Right-aligned header chip (icon + value) ending at the overlay's header extras edge. */
+  addOverlayChip(ov, drawIcon, value, color) {
+    const u = ov.u;
+    const c = this.add.container(0, ov.headerH / 2);
+    const txt = ovText(this, 0, 0, value, { u, size: 15, bold: true, color }).setOrigin(1, 0.5);
+    const icon = drawIcon(16 * u);
+    c.add([icon, txt]);
+    const layout = () => {
+      txt.setPosition(0, 0);
+      icon.setPosition(-txt.width - 14 * u, 0);
+      c.setX(ov.headerRightX - 6 * u);
+    };
+    layout();
+    ov.header.add(c);
+    return { container: c, text: txt, icon, set: (v) => { txt.setText(v); layout(); } };
+  }
+
   showUpgrades() {
-    // Pause main menu interaction
     this.upgradeMenuOpen = true;
-    this.upgradeSelectedIndex = 0;
-
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-
-    // Backdrop (como Settings)
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
-    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
-
-    const boxW = Math.min(800, w - 32);
-    const boxH = Math.min(720, h - 32);
-    const overlayLeft = cx - boxW / 2;
-    const overlayTop = cy - boxH / 2;
-    const overlay = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001).setInteractive({ useHandCursor: false });
-
-    const padding = 32;
-    const titleY = overlayTop + 44;
-    const title = this.add.text(cx, titleY, t('upgrades.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${22 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5, 0).setDepth(1002);
-
-    const currencyText = this.add.text(overlayLeft + boxW - padding, titleY + 2, `${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${13 * uiScale}px`,
-      color: '#ffd700'
-    }).setOrigin(1, 0).setDepth(1002);
-
-    const upgradeKeys = Object.keys(window.VIBE_UPGRADES.upgrades);
-    const upgradeTexts = [];
-    const listX = overlayLeft + padding;
-    const listMaxWidth = boxW - padding * 2 - 16;
-    const startY = overlayTop + 125;
-    const spacing = 54 * uiScale;
-    const namePadLen = 14;
-    const BAR_LENGTH = 28;
-    const instructionsY = overlayTop + boxH - 42;
-
-    const buildLevelBar = (level, maxLevel) => {
-      const filled = maxLevel <= 0 ? 0 : Math.round((level / maxLevel) * BAR_LENGTH);
-      return '█'.repeat(filled) + '░'.repeat(BAR_LENGTH - filled);
-    };
-
-    upgradeKeys.forEach((key, index) => {
-      const upgrade = window.VIBE_UPGRADES.upgrades[key];
-      const level = window.VIBE_UPGRADES.levels[key] || 0;
-      const cost = window.VIBE_UPGRADES.getCost(key);
-      const maxed = level >= upgrade.maxLevel;
-
-      const levelBar = buildLevelBar(level, upgrade.maxLevel);
-      const costStr = maxed ? t('upgrades.maxed') : `${cost} ${t('upgrades.bits')}`;
-      const canAfford = window.VIBE_UPGRADES.currency >= cost && !maxed;
-      const name = t('upgrade_names.' + key);
-      const desc = t('upgrade_descs.' + key);
-      const paddedName = name.padEnd(namePadLen, ' ');
-
-      const text = this.add.text(listX, startY + index * spacing,
-        `${paddedName} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`, {
-        fontFamily: '"Consolas", "Monaco", monospace',
-        fontSize: `${11 * uiScale}px`,
-        color: index === 0 ? '#00ffff' : '#888888',
-        align: 'left',
-        lineSpacing: 3,
-        wordWrap: { width: listMaxWidth }
-      }).setOrigin(0, 0.5).setDepth(1002);
-
-      if (!canAfford && !maxed) {
-        text.setColor(index === 0 ? '#ff6666' : '#666666');
+    const U = window.VIBE_UPGRADES;
+    const keys = Object.keys(U.upgrades);
+    let sel = Phaser.Math.Clamp(this.upgradeSelectedIndex || 0, 0, Math.max(0, keys.length - 1));
+    const touch = isTouch();
+    // Size the panel to the grid (no empty glass below the cards).
+    const pre = overlayMetrics(this, { width: 880, height: 600, footerH: 84 });
+    const compact = pre.bodyH / pre.u < 300;
+    const cardH = (compact ? 88 : 100) * pre.u;
+    const gridSpec = { count: keys.length, cellMin: (compact ? 176 : 186) * pre.u, gap: 12 * pre.u, cellH: cardH };
+    const ov = createOverlay(this, {
+      title: tt('upgrades_title'),
+      icon: 'star',
+      width: 880,
+      height: fitPanelHeight(pre.u, gridLayout({ width: pre.bodyW, ...gridSpec }).contentH, 84),
+      footerH: 84,
+      hide: this.getOverlayHideTargets(),
+      onClose: () => { this.upgradeMenuOpen = false; this.upgradeSelectedIndex = sel; this.updateBitsDisplay?.(); },
+      onKey: (k, event) => {
+        const dir = { arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right', arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down' }[k];
+        if (dir) { select(gridMove(sel, dir, grid.cols, keys.length)); return; }
+        if (k === 'enter' || k === ' ') { event.preventDefault?.(); purchase(); }
       }
-
-      upgradeTexts.push({ text, key, canAfford, maxed });
     });
+    const u = ov.u;
+    const bits = this.addOverlayChip(ov, (s) => gemIcon(this, s, OV.amber), compactNumber(U.currency), OV.amberCss);
 
-    const selector = this.add.text(listX - 16, startY, '>', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${16 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
+    const grid = gridLayout({ width: ov.bodyRect.w, ...gridSpec });
+    const ICON_COLORS = { damage: 0xf87171, health: 0xfb7185, speed: 0x22d3ee, attackRate: 0xf59e0b, xpGain: 0xa78bfa, critChance: 0xf472b6, weaponDuration: 0x34d399 };
 
-    const instructions = this.add.text(cx, instructionsY, t('prompt.up_down_purchase'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${10 * uiScale}px`,
-      color: '#666666',
-      wordWrap: { width: boxW - padding * 2 }
-    }).setOrigin(0.5, 0.5).setDepth(1002);
-
-    // Update visuals function
-    const updateVisuals = () => {
-      upgradeTexts.forEach((item, index) => {
-        const upgrade = window.VIBE_UPGRADES.upgrades[item.key];
-        const level = window.VIBE_UPGRADES.levels[item.key] || 0;
-        const cost = window.VIBE_UPGRADES.getCost(item.key);
-        const maxed = level >= upgrade.maxLevel;
-        item.canAfford = window.VIBE_UPGRADES.currency >= cost && !maxed;
-        item.maxed = maxed;
-
-        const levelBar = buildLevelBar(level, upgrade.maxLevel);
-        const costStr = maxed ? t('upgrades.maxed') : `${cost} ${t('upgrades.bits')}`;
-        const name = t('upgrade_names.' + item.key);
-        const desc = t('upgrade_descs.' + item.key);
-        const paddedName = name.padEnd(namePadLen, ' ');
-
-        item.text.setText(`${paddedName} [${levelBar}]\n${desc}\n${t('upgrades.cost')}: ${costStr}`);
-
-        if (index === this.upgradeSelectedIndex) {
-          item.text.setColor(item.canAfford || maxed ? '#00ffff' : '#ff6666');
-        } else {
-          item.text.setColor(item.canAfford || maxed ? '#888888' : '#555555');
-        }
+    const cards = keys.map((key, i) => {
+      const cell = grid.cell(i);
+      const holder = this.add.container(cell.x + cell.w / 2, cell.y + cell.h / 2);
+      const card = glassCard(this, -cell.w / 2, -cell.h / 2, cell.w, cell.h, { u });
+      holder.add(card.container);
+      const c = card.container;
+      const pad = 12 * u;
+      const tileS = (compact ? 16 : 19) * ov.px;
+      const color = ICON_COLORS[key] ?? OV.cyan;
+      const tile = iconTile(this, pad, pad, tileS, color, { u });
+      const icon = pixelIcon(this, upgradeIconKind(key), 24 * u).setPosition(pad + tileS / 2, pad + tileS / 2);
+      const nameX = pad + tileS + 10 * u;
+      const name = fitText(ovText(this, nameX, pad + tileS / 2 - 9 * u, t('upgrade_names.' + key), { u, size: 14, bold: true }).setOrigin(0, 0.5), cell.w - nameX - pad);
+      const dots = dotsLevel(this, 0, U.upgrades[key].maxLevel, { u, color, size: compact ? 5 : 6, gap: 3 });
+      dots.container.setPosition(nameX, pad + tileS / 2 + 10 * u);
+      const costY = cell.h - pad - 8 * u;
+      const gem = gemIcon(this, 12 * u, OV.amber).setPosition(pad + 6 * u, costY);
+      const cost = ovText(this, pad + 18 * u, costY, '', { u, size: 13, bold: true, color: OV.amberCss }).setOrigin(0, 0.5);
+      const lvl = ovText(this, cell.w - pad, costY, '', { u, size: 12, color: OV.dim }).setOrigin(1, 0.5);
+      c.add([tile, icon, name, dots.container, gem, cost, lvl]);
+      const zone = this.add.zone(cell.w / 2, cell.h / 2, cell.w, cell.h).setInteractive({ useHandCursor: true });
+      zone.on('pointerup', (ptr) => {
+        if (ov.dragged() || !ov.pointerInBody(ptr)) return;
+        if (i === sel) purchase(); else select(i);
       });
+      c.add(zone);
+      ov.body.add(holder);
+      return { key, holder, card, dots, gem, cost, lvl, cell };
+    });
+    ov.setScrollable(grid.contentH);
 
-      selector.setY(startY + this.upgradeSelectedIndex * spacing);
-      currencyText.setText(`${t('upgrades.bits')}: ${window.VIBE_UPGRADES.currency}`);
+    // Footer: selected upgrade (name + 1 line) on the left, Buy on the right.
+    const fw = ov.footerRect.w; const fh = ov.footerRect.h;
+    const buy = pillButton(this, '', () => purchase(), { u, primary: true, minW: 132 });
+    buy.container.setPosition(fw - buy.w / 2, fh / 2);
+    const enterCap = touch ? null : keycap(this, 'Enter', { u });
+    const detailName = ovText(this, 0, fh / 2 - 11 * u, '', { u, size: 16, bold: true }).setOrigin(0, 0.5);
+    const detailDesc = ovText(this, 0, fh / 2 + 13 * u, '', { u, size: 13, color: OV.muted }).setOrigin(0, 0.5);
+    ov.footer.add([detailName, detailDesc, buy.container]);
+    if (enterCap) ov.footer.add(enterCap);
+
+    const refresh = () => {
+      cards.forEach((it, i) => {
+        const up = U.upgrades[it.key];
+        const level = U.levels[it.key] || 0;
+        const cost = U.getCost(it.key);
+        const maxed = level >= up.maxLevel;
+        const afford = canPurchase(U.currency, cost, level, up.maxLevel);
+        it.card.setSelected(i === sel, !afford && !maxed);
+        it.dots.set(level, up.maxLevel);
+        it.gem.setVisible(!maxed);
+        it.cost.setX(maxed ? 12 * u : 30 * u);
+        it.cost.setText(maxed ? tt('maxed') : formatCost(cost));
+        it.cost.setColor(maxed ? OV.cyanCss : afford ? OV.amberCss : OV.redCss);
+        it.cost.setAlpha(maxed || afford ? 1 : 0.75);
+        it.lvl.setText(`${level}/${up.maxLevel}`);
+      });
+      const key = keys[sel];
+      const up = U.upgrades[key];
+      const level = U.levels[key] || 0;
+      const cost = U.getCost(key);
+      const maxed = level >= up.maxLevel;
+      const afford = canPurchase(U.currency, cost, level, up.maxLevel);
+      buy.setLabel(maxed ? { text: tt('maxed') } : { text: `${tt('buy')}  ${formatCost(cost)}`, gem: true });
+      buy.setEnabled(afford);
+      buy.container.setX(fw - buy.w / 2);
+      if (enterCap) enterCap.setPosition(fw - buy.w - 12 * u - enterCap.w / 2, fh / 2).setAlpha(afford ? 1 : 0.35);
+      const textMax = fw - buy.w - (enterCap ? enterCap.w + 28 * u : 16 * u);
+      detailName.setText(t('upgrade_names.' + key)); fitText(detailName, textMax);
+      detailDesc.setText(t('upgrade_descs.' + key)); fitText(detailDesc, textMax);
+      bits.set(compactNumber(U.currency));
     };
 
-    // Input handlers
-    const moveUp = () => {
-      this.upgradeSelectedIndex--;
-      if (this.upgradeSelectedIndex < 0) this.upgradeSelectedIndex = upgradeKeys.length - 1;
-      updateVisuals();
-      Audio.playXPGain();
-    };
-
-    const moveDown = () => {
-      this.upgradeSelectedIndex++;
-      if (this.upgradeSelectedIndex >= upgradeKeys.length) this.upgradeSelectedIndex = 0;
-      updateVisuals();
+    const select = (i) => {
+      if (i === sel) return;
+      sel = i;
+      refresh();
+      const c = cards[sel].cell;
+      ov.reveal(c.y, c.h);
       Audio.playXPGain();
     };
 
     const purchase = () => {
-      const item = upgradeTexts[this.upgradeSelectedIndex];
-      if (item.canAfford) {
-        window.VIBE_UPGRADES.purchase(item.key);
+      const it = cards[sel];
+      const up = U.upgrades[it.key];
+      const level = U.levels[it.key] || 0;
+      if (canPurchase(U.currency, U.getCost(it.key), level, up.maxLevel) && U.purchase(it.key)) {
         Audio.playLevelUp();
-        updateVisuals();
+        refresh();
+        this.tweens.killTweensOf(it.holder);
+        it.holder.setScale(1);
+        this.tweens.add({ targets: it.holder, scale: 1.06, duration: 110, yoyo: true, ease: 'Quad.easeOut' });
+        this.tweens.add({ targets: bits.container, scale: { from: 1.18, to: 1 }, duration: 260, ease: 'Back.easeOut' });
+        const spark = pixelIcon(this, 'star', 14 * u, 0xfde68a).setPosition(it.cell.x + it.cell.w - 22 * u, it.cell.y + 22 * u);
+        ov.body.add(spark);
+        this.tweens.add({ targets: spark, y: spark.y - 26 * u, alpha: 0, duration: 520, ease: 'Quad.easeOut', onComplete: () => spark.destroy() });
       } else {
-        // Flash red on failed purchase
-        const originalColor = item.text.style.color;
-        item.text.setColor('#ff0000');
-        this.time.delayedCall(100, () => {
-          updateVisuals();
-        });
+        // Not enough BITS (or maxed): short horizontal shake on the card.
+        this.tweens.killTweensOf(it.holder);
+        const x0 = it.cell.x + it.cell.w / 2;
+        it.holder.setX(x0);
+        this.tweens.add({ targets: it.holder, x: x0 + 5 * u, duration: 45, yoyo: true, repeat: 2, onComplete: () => it.holder.setX(x0) });
       }
     };
 
-    const onUpgradesKeyDown = (event) => {
-      const k = event.key?.toLowerCase?.() || event.key;
-      if (k === 'escape') close();
-      else if (k === 'arrowup' || k === 'up' || k === 'w') moveUp();
-      else if (k === 'arrowdown' || k === 'down' || k === 's') moveDown();
-      else if (k === 'enter' || k === ' ') { event.preventDefault(); purchase(); }
-    };
+    refresh();
+    ov.reveal(cards[sel].cell.y, cards[sel].cell.h);
+  }
 
-    const close = () => {
-      this.input.keyboard.off('keydown', onUpgradesKeyDown);
-
-      backdrop.destroy();
-      overlay.destroy();
-      title.destroy();
-      currencyText.destroy();
-      selector.destroy();
-      instructions.destroy();
-      upgradeTexts.forEach(item => item.text.destroy());
-
-      this.upgradeMenuOpen = false;
-      this.updateBitsDisplay?.();
-    };
-
-    this.input.keyboard.on('keydown', onUpgradesKeyDown);
-    backdrop.on('pointerdown', close);
+  /** Items of a WEAPONS tab (sync tabs). ZK is built asynchronously in showWeapons. */
+  getWeaponTabItems(tab) {
+    const hex = (s) => colorInt(s);
+    if (tab === 'legendary') {
+      const L = window.VIBE_LEGENDARIES;
+      if (!L?.weapons) return [];
+      return Object.keys(L.weapons).map((key) => {
+        const w = L.weapons[key];
+        const unlocked = L.hasUnlocked(key);
+        return {
+          key, name: w.name || '???', color: OV.amber, texture: `legendary-${key}`, glyph: 'crown',
+          locked: !unlocked,
+          badge: unlocked ? null : `${+(w.dropRate * 100).toFixed(2)}%`,
+          line: unlocked ? w.desc : tt('legendary_locked').replace('{rate}', `${+(w.dropRate * 100).toFixed(2)}%`),
+          equipped: L.equipped === key,
+          action: unlocked ? 'equip' : null
+        };
+      });
+    }
+    if (tab === 'melee') {
+      const M = window.VIBE_MELEE || {};
+      return Object.keys(M).map((key) => {
+        const w = M[key];
+        const c = w.color === 0x2f2f2f ? 0x94a3b8 : w.color;
+        return { key, name: w.name, color: c, texture: `melee-${key}`, glyph: 'sword', locked: false, line: tt('melee_line').replace('{dmg}', w.damage).replace('{range}', w.range) };
+      });
+    }
+    // ranged
+    const RANGED = [
+      ['basic', 'SYNTAX SHOT', 'Basic projectile. Fires straight ahead.', '#00ffff'],
+      ['spread', 'SPREAD SHOT', 'Fires 3 projectiles in a spread pattern.', '#00ff00'],
+      ['pierce', 'PIERCE SHOT', 'Pierces through multiple enemies.', '#ff00ff'],
+      ['rapid', 'RAPID FIRE', 'High fire rate, lower damage.', '#ffff00'],
+      ['orbital', 'ORBITAL', 'Spinning shields orbit around you.', '#ff6600'],
+      ['homing', 'HOMING', 'Projectiles seek nearest enemy.', '#ff0066'],
+      ['bounce', 'BOUNCE', 'Projectiles bounce off screen edges.', '#66ff66'],
+      ['aoe', 'EXPLOSION', 'Projectiles explode on impact.', '#ff3300'],
+      ['freeze', 'FREEZE RAY', 'Slows enemies on hit.', '#66ffff'],
+      ['laserbeam', 'LASER BEAM', 'Evolved RAPID + PIERCE. Continuous beam.', '#ff00ff'],
+      ['plasmaorb', 'PLASMA ORB', 'Evolved ORBITAL + AOE. Explosive shields.', '#ff6600'],
+      ['chainlightning', 'CHAIN LIGHTNING', 'Evolved HOMING + SPREAD. Chains to enemies.', '#00ffff'],
+      ['bullethell', 'BULLET HELL', 'Evolved SPREAD + RAPID. Massive spray.', '#ffff00'],
+      ['ringoffire', 'RING OF FIRE', 'Evolved ORBITAL + RAPID. Fire ring.', '#ff3300'],
+      ['seekingmissile', 'SEEKING MISSILE', 'Evolved HOMING + AOE. Explosive homing.', '#ff0066'],
+      ['chaosbounce', 'CHAOS BOUNCE', 'Evolved BOUNCE + SPREAD. Multi-bounce.', '#66ff66'],
+      ['deathaura', 'DEATH AURA', 'Evolved ORBITAL + FREEZE. Slowing ring.', '#9900ff'],
+      ['icelance', 'ICE LANCE', 'Evolved FREEZE + PIERCE. Freezing pierce.', '#00ffff'],
+      ['blizzard', 'BLIZZARD', 'Evolved FREEZE + SPREAD. Area slow.', '#aaddff'],
+      ['swarm', 'SWARM', 'Evolved HOMING + RAPID. Swarm of seekers.', '#88ff88'],
+      ['rmrf', 'RM-RF', 'Clears all enemies.', '#ff3300'],
+      ['sudo', 'SUDO', 'God mode damage.', '#ffd700'],
+      ['forkbomb', 'FORK BOMB', 'Multi-projectile burst.', '#ff00ff']
+    ];
+    const DROP = { basic: 'drop_starter', orbital: 'drop_uncommon', aoe: 'drop_uncommon', freeze: 'drop_uncommon', rmrf: 'drop_boss', sudo: 'drop_boss', forkbomb: 'drop_boss' };
+    const TEX = { laserbeam: 'weapon-laser', plasmaorb: 'weapon-plasma', chainlightning: 'weapon-chain' };
+    return RANGED.map(([key, name, desc, color], i) => ({
+      key, name, color: hex(color), texture: TEX[key] || `weapon-${key}`, glyph: 'bullet', locked: false,
+      line: desc, tag: t('weapons.' + (DROP[key] || (i >= 9 && i < 20 ? 'drop_evolved' : 'drop_common')))
+    }));
   }
 
   showWeapons() {
     this.weaponMenuOpen = true;
-    this.weaponSelectedIndex = 0;
-    this.weaponTab = 'web3';
-    this.weaponScrollOffset = 0;
-
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-    const cx = w / 2;
-    const cy = h / 2;
-
-    const overlayW = Math.min(820, w - 48);
-    const overlayH = Math.min(620, h - 48);
-    const overlayLeft = cx - overlayW / 2;
-    const overlayTop = cy - overlayH / 2;
-    const headerTitleY = overlayTop + 28;
-    const tabRowY = overlayTop + 78;
-    const contentTop = overlayTop + 108;
-    const contentHeight = overlayH - 108 - 96;
-    const footerY = overlayTop + overlayH - 64;
-    const instructionsY = overlayTop + overlayH - 22;
-    const iconColCenter = overlayLeft + 54;
-    const textColLeft = overlayLeft + 92;
-    const dropColCenter = overlayLeft + overlayW - 58;
-    const textColWidth = dropColCenter - textColLeft - 24;
-
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
-    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
-
-    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001);
-
-    const title = this.add.text(overlayLeft + overlayW / 2, headerTitleY, t('weapons.gallery'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${22 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
-
-    const tabs = ['LEGENDARY', 'MELEE', 'RANGED', 'WEB3'];
-    const tabTexts = [];
-    const tabSpacing = (overlayW - 80) / 4;
-    const tabFirstCenter = overlayLeft + 40 + tabSpacing / 2;
-
-    const defaultTabIndex = 3;
-    tabs.forEach((tab, index) => {
-      const label = tab === 'WEB3' ? t('weapons.ZK_BUFF') : t('weapons.' + tab);
-      const tabX = tabFirstCenter + index * tabSpacing;
-      const tabText = this.add.text(tabX, tabRowY, label, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${11 * uiScale}px`,
-        color: index === defaultTabIndex ? '#ffd700' : '#666666',
-        fontStyle: index === defaultTabIndex ? 'bold' : 'normal'
-      }).setOrigin(0.5).setDepth(1002);
-      tabText.setInteractive({ useHandCursor: true });
-      tabTexts.push(tabText);
-    });
-
-    // Content container
-    const contentElements = [];
-
-    // Get weapon data
-    const legendaries = window.VIBE_LEGENDARIES;
-    const melee = window.VIBE_MELEE;
-
-    // Ranged weapons from ArenaScene weaponTypes
-    const rangedWeapons = {
-      basic: { name: 'SYNTAX SHOT', desc: 'Basic projectile. Fires straight ahead.', color: '#00ffff' },
-      spread: { name: 'SPREAD SHOT', desc: 'Fires 3 projectiles in a spread pattern.', color: '#00ff00' },
-      pierce: { name: 'PIERCE SHOT', desc: 'Pierces through multiple enemies.', color: '#ff00ff' },
-      rapid: { name: 'RAPID FIRE', desc: 'High fire rate, lower damage.', color: '#ffff00' },
-      orbital: { name: 'ORBITAL', desc: 'Spinning shields orbit around you.', color: '#ff6600' },
-      homing: { name: 'HOMING', desc: 'Projectiles seek nearest enemy.', color: '#ff0066' },
-      bounce: { name: 'BOUNCE', desc: 'Projectiles bounce off screen edges.', color: '#66ff66' },
-      aoe: { name: 'EXPLOSION', desc: 'Projectiles explode on impact.', color: '#ff3300' },
-      freeze: { name: 'FREEZE RAY', desc: 'Slows enemies on hit.', color: '#66ffff' }
-    };
-
-    // Evolved weapons
-    const evolvedWeapons = {
-      laserbeam: { name: 'LASER BEAM', desc: 'Evolved RAPID + PIERCE. Continuous beam.', color: '#ff00ff', rare: true },
-      plasmaorb: { name: 'PLASMA ORB', desc: 'Evolved ORBITAL + AOE. Explosive shields.', color: '#ff6600', rare: true },
-      chainlightning: { name: 'CHAIN LIGHTNING', desc: 'Evolved HOMING + SPREAD. Chains to enemies.', color: '#00ffff', rare: true },
-      bullethell: { name: 'BULLET HELL', desc: 'Evolved SPREAD + RAPID. Massive spray.', color: '#ffff00', rare: true },
-      ringoffire: { name: 'RING OF FIRE', desc: 'Evolved ORBITAL + RAPID. Fire ring.', color: '#ff3300', rare: true },
-      seekingmissile: { name: 'SEEKING MISSILE', desc: 'Evolved HOMING + AOE. Explosive homing.', color: '#ff0066', rare: true },
-      chaosbounce: { name: 'CHAOS BOUNCE', desc: 'Evolved BOUNCE + SPREAD. Multi-bounce.', color: '#66ff66', rare: true },
-      deathaura: { name: 'DEATH AURA', desc: 'Evolved ORBITAL + FREEZE. Slowing ring.', color: '#9900ff', rare: true },
-      icelance: { name: 'ICE LANCE', desc: 'Evolved FREEZE + PIERCE. Freezing pierce.', color: '#00ffff', rare: true },
-      blizzard: { name: 'BLIZZARD', desc: 'Evolved FREEZE + SPREAD. Area slow.', color: '#aaddff', rare: true }
-    };
-
-    const contentDepth = 1002;
-    const renderLegendary = () => {
-      clearContent();
-      if (!legendaries || !legendaries.weapons) return;
-      const rowHeight = 88;
-      const startY = contentTop;
-      const legendaryKeys = Object.keys(legendaries.weapons);
-      const total = legendaryKeys.length;
-      const maxVisible = Math.max(1, Math.floor(contentHeight / rowHeight));
-      const scrollOffset = Math.min(this.weaponScrollOffset, Math.max(0, total - maxVisible));
-      this.weaponScrollOffset = scrollOffset;
-      this.weaponTotalRows = total;
-      this.weaponMaxVisible = maxVisible;
-
-      const from = scrollOffset;
-      const to = Math.min(scrollOffset + maxVisible, total);
-      for (let idx = from; idx < to; idx++) {
-        const key = legendaryKeys[idx];
-        const weapon = legendaries.weapons[key];
-        const unlocked = legendaries.hasUnlocked(key);
-        const equipped = legendaries.equipped === key;
-        const rowTop = startY + (idx - from) * rowHeight;
-        const boxY = rowTop + rowHeight / 2;
-
-        const box = this.add.rectangle(iconColCenter, boxY, 56, 56, unlocked ? 0x1a1a22 : 0x121218);
-        box.setStrokeStyle(2, unlocked ? 0xffd700 : 0x333333).setDepth(contentDepth);
-        contentElements.push(box);
-
-        if (this.textures.exists(`legendary-${key}`)) {
-          const sprite = this.add.sprite(iconColCenter, boxY, `legendary-${key}`);
-          sprite.setScale(1.0).setDepth(contentDepth);
-          if (!unlocked) {
-            sprite.setAlpha(0.5);
-            sprite.setTint(0x666666);
-          }
-          contentElements.push(sprite);
-        } else {
-          const lock = this.add.text(iconColCenter, boxY, '🔒', {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '20px',
-            color: '#555555'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          contentElements.push(lock);
-        }
-
-        const nameColor = equipped ? '#ffd700' : (unlocked ? '#ffffff' : '#888888');
-        const name = this.add.text(textColLeft, rowTop + 10, weapon.name || '???', {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '14px',
-          color: nameColor,
-          fontStyle: equipped ? 'bold' : 'normal',
-          wordWrap: { width: textColWidth }
-        }).setDepth(contentDepth);
-        contentElements.push(name);
-
-        const desc = this.add.text(textColLeft, rowTop + 30, unlocked ? weapon.desc : t('weapons.locked'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '11px',
-          color: unlocked ? '#aaaaaa' : '#666666',
-          wordWrap: { width: textColWidth }
-        }).setDepth(contentDepth);
-        contentElements.push(desc);
-
-        if (unlocked) {
-          const stats = this.add.text(textColLeft, rowTop + 50, `DMG: ${weapon.damage} | RADIUS: ${weapon.radius} | COUNT: ${weapon.orbitalCount}`, {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '10px',
-            color: '#666666',
-            wordWrap: { width: textColWidth }
-          }).setDepth(contentDepth);
-          contentElements.push(stats);
-
-          const equipBtn = this.add.text(dropColCenter, boxY, equipped ? t('weapons.equipped') : t('weapons.equip'), {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '11px',
-            color: equipped ? '#ffd700' : '#00ffff',
-            fontStyle: 'bold'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          equipBtn.setInteractive({ useHandCursor: true });
-          equipBtn.on('pointerover', () => equipBtn.setColor('#ffffff'));
-          equipBtn.on('pointerout', () => equipBtn.setColor(equipped ? '#ffd700' : '#00ffff'));
-          equipBtn.on('pointerdown', () => {
-            if (equipped) legendaries.unequip();
-            else legendaries.equip(key);
-            renderLegendary();
-            Audio.playLevelUp();
-          });
-          contentElements.push(equipBtn);
-        } else {
-          const dropRate = this.add.text(dropColCenter, boxY, `${(weapon.dropRate * 100).toFixed(2)}${t('weapons.drop')}`, {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '11px',
-            color: '#ff6666'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          contentElements.push(dropRate);
-        }
-      }
-
-      if (total > maxVisible) {
-        const scrollHint = this.add.text(overlayLeft + overlayW - 60, footerY, t('weapons.scroll_more'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${10 * uiScale}px`,
-          color: '#888888'
-        }).setOrigin(0.5).setDepth(contentDepth);
-        contentElements.push(scrollHint);
-      }
-      const info = this.add.text(overlayLeft + overlayW / 2, footerY, t('weapons.legendary_info'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${11 * uiScale}px`,
-        color: '#ffd700'
-      }).setOrigin(0.5).setDepth(contentDepth);
-      contentElements.push(info);
-    };
-
-    const renderMelee = () => {
-      clearContent();
-      if (!melee) return;
-      const rowHeight = 88;
-      const startY = contentTop;
-      const meleeKeys = Object.keys(melee);
-      const total = meleeKeys.length;
-      const maxVisible = Math.max(1, Math.floor(contentHeight / rowHeight));
-      const scrollOffset = Math.min(this.weaponScrollOffset, Math.max(0, total - maxVisible));
-      this.weaponScrollOffset = scrollOffset;
-      this.weaponTotalRows = total;
-      this.weaponMaxVisible = maxVisible;
-
-      const from = scrollOffset;
-      const to = Math.min(scrollOffset + maxVisible, total);
-      for (let idx = from; idx < to; idx++) {
-        const key = meleeKeys[idx];
-        const weapon = melee[key];
-        const rowTop = startY + (idx - from) * rowHeight;
-        const boxY = rowTop + rowHeight / 2;
-
-        const box = this.add.rectangle(iconColCenter, boxY, 56, 56, 0x1a1a22);
-        box.setStrokeStyle(2, weapon.color).setDepth(contentDepth);
-        contentElements.push(box);
-
-        if (this.textures.exists(`melee-${key}`)) {
-          const sprite = this.add.sprite(iconColCenter, boxY, `melee-${key}`);
-          sprite.setScale(1.0).setDepth(contentDepth);
-          contentElements.push(sprite);
-        }
-
-        const name = this.add.text(textColLeft, rowTop + 14, weapon.name, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '14px',
-          color: '#ffffff',
-          wordWrap: { width: textColWidth }
-        }).setDepth(contentDepth);
-        contentElements.push(name);
-
-        const stats = this.add.text(textColLeft, rowTop + 36, `DMG: ${weapon.damage} | RATE: ${weapon.attackRate} | RANGE: ${weapon.range}`, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '11px',
-          color: '#888888',
-          wordWrap: { width: textColWidth }
-        }).setDepth(contentDepth);
-        contentElements.push(stats);
-
-        const typeText = this.add.text(dropColCenter, boxY, weapon.type.toUpperCase(), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '11px',
-          color: Phaser.Display.Color.IntegerToColor(weapon.color).rgba
-        }).setOrigin(0.5).setDepth(contentDepth);
-        contentElements.push(typeText);
-      }
-
-      if (total > maxVisible) {
-        const scrollHint = this.add.text(overlayLeft + overlayW - 60, footerY, t('weapons.scroll_more'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${10 * uiScale}px`,
-          color: '#888888'
-        }).setOrigin(0.5).setDepth(contentDepth);
-        contentElements.push(scrollHint);
-      }
-      const info = this.add.text(overlayLeft + overlayW / 2, footerY, t('weapons.melee_info'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${11 * uiScale}px`,
-        color: '#00ffff'
-      }).setOrigin(0.5).setDepth(contentDepth);
-      contentElements.push(info);
-    };
-
-    // Ranged: single ordered list with icon, name, desc, drop. Scroll when many.
-    const RANGED_ORDER = [
-      'basic', 'spread', 'pierce', 'rapid', 'orbital', 'homing', 'bounce', 'aoe', 'freeze',
-      'laserbeam', 'plasmaorb', 'chainlightning', 'bullethell', 'ringoffire', 'seekingmissile', 'chaosbounce', 'deathaura', 'icelance', 'blizzard', 'swarm',
-      'rmrf', 'sudo', 'forkbomb'
+    const TABS = [
+      { id: 'legendary', icon: 'crown', label: tt('tab_legendary') },
+      { id: 'melee', icon: 'sword', label: tt('tab_melee') },
+      { id: 'ranged', icon: 'bullet', label: tt('tab_ranged') },
+      { id: 'zk', icon: 'shield', label: tt('tab_zk') }
     ];
-    const DROP_LABELS = {
-      basic: 'drop_starter',
-      spread: 'drop_common', pierce: 'drop_common', rapid: 'drop_common', homing: 'drop_common', bounce: 'drop_common',
-      orbital: 'drop_uncommon', aoe: 'drop_uncommon', freeze: 'drop_uncommon',
-      laserbeam: 'drop_evolved', plasmaorb: 'drop_evolved', chainlightning: 'drop_evolved', bullethell: 'drop_evolved', ringoffire: 'drop_evolved',
-      seekingmissile: 'drop_evolved', chaosbounce: 'drop_evolved', deathaura: 'drop_evolved', icelance: 'drop_evolved', blizzard: 'drop_evolved', swarm: 'drop_evolved',
-      rmrf: 'drop_boss', sudo: 'drop_boss', forkbomb: 'drop_boss'
-    };
-    const evolvedWeaponsSwarm = { ...evolvedWeapons, swarm: { name: 'SWARM', desc: 'Evolved HOMING + RAPID. Swarm of seekers.', color: '#88ff88', rare: true } };
-
-    const renderRanged = () => {
-      clearContent();
-      const rowHeight = 56;
-      const startY = contentTop;
-      const maxVisible = Math.max(1, Math.floor(contentHeight / rowHeight));
-      const list = [];
-      RANGED_ORDER.forEach(key => {
-        const fromBase = rangedWeapons[key];
-        const fromEvolved = evolvedWeaponsSwarm[key];
-        const rareNames = { rmrf: 'RM-RF', sudo: 'SUDO', forkbomb: 'FORK BOMB' };
-        if (fromBase) {
-          list.push({ key, name: fromBase.name, desc: fromBase.desc, color: fromBase.color, dropKey: DROP_LABELS[key] || 'drop_common', textureKey: `weapon-${key}` });
-        } else if (fromEvolved) {
-          list.push({ key, name: fromEvolved.name, desc: fromEvolved.desc, color: fromEvolved.color, dropKey: 'drop_evolved', textureKey: `weapon-${key}` });
-        } else if (rareNames[key]) {
-          const color = key === 'rmrf' ? '#ff3300' : key === 'sudo' ? '#ffd700' : '#ff00ff';
-          const desc = key === 'rmrf' ? 'Clears all enemies.' : key === 'sudo' ? 'God mode damage.' : 'Multi-projectile burst.';
-          list.push({ key, name: rareNames[key], desc, color, dropKey: 'drop_boss', textureKey: `weapon-${key}` });
+    // Remember the last tab; first open: ZK unlocks with a wallet, otherwise the ranged pool.
+    let tabIndex = TABS.findIndex((tb) => tb.id === this.weaponTab);
+    if (tabIndex < 0) tabIndex = stellarWallet.isConnected() ? 3 : 2;
+    let items = [];
+    let sel = 0;
+    let grid = null;
+    let cells = [];
+    let loadToken = 0;
+    const touch = isTouch();
+    // One panel height for every tab: sized for the largest pool.
+    const pre = overlayMetrics(this, { width: 880, height: 600, footerH: 84 });
+    const compactGrid = pre.bodyH / pre.u < 300;
+    const cellSpec = (u) => ({ cellMin: (compactGrid ? 76 : 92) * u, cellMax: (compactGrid ? 76 : 92) * u * 1.2, gap: 8 * u, cellH: (compactGrid ? 76 : 92) * u });
+    const maxCount = Math.max(5, ...['legendary', 'melee', 'ranged'].map((tb) => this.getWeaponTabItems(tb).length));
+    const ov = createOverlay(this, {
+      title: tt('weapons_title'),
+      icon: 'sword',
+      width: 880,
+      height: fitPanelHeight(pre.u, gridLayout({ width: pre.bodyW, count: maxCount, ...cellSpec(pre.u) }).contentH + 8 * pre.u, 84),
+      footerH: 84,
+      hide: this.getOverlayHideTargets(),
+      onClose: () => { this.weaponMenuOpen = false; this.weaponTab = TABS[tabIndex].id; },
+      onKey: (k, event) => {
+        if (k === 'tab' || k === 'q' || k === 'e' || k === 'pageup' || k === 'pagedown') {
+          event.preventDefault?.();
+          const back = k === 'q' || k === 'pageup' || (k === 'tab' && event.shiftKey);
+          switchTab(wrapIndex(tabIndex + (back ? -1 : 1), TABS.length));
+          return;
         }
-      });
-
-      const total = list.length;
-      const scrollOffset = Math.min(this.weaponScrollOffset, Math.max(0, total - maxVisible));
-      this.weaponScrollOffset = scrollOffset;
-      this.weaponTotalRows = total;
-      this.weaponMaxVisible = maxVisible;
-
-      const from = scrollOffset;
-      const to = Math.min(scrollOffset + maxVisible, total);
-      const iconSize = 44;
-
-      for (let idx = from; idx < to; idx++) {
-        const item = list[idx];
-        const rowTop = startY + (idx - from) * rowHeight;
-        const rowY = rowTop + rowHeight / 2;
-
-        const box = this.add.rectangle(iconColCenter, rowY, 48, 44, 0x1a1a22);
-        box.setStrokeStyle(2, 0x333344).setDepth(contentDepth);
-        contentElements.push(box);
-        if (this.textures.exists(item.textureKey)) {
-          const sprite = this.add.sprite(iconColCenter, rowY, item.textureKey);
-          sprite.setDisplaySize(40, 36).setDepth(contentDepth);
-          contentElements.push(sprite);
-        }
-
-        const nameText = this.add.text(textColLeft, rowTop + 6, item.name, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${12 * uiScale}px`,
-          color: item.color,
-          fontStyle: 'bold',
-          wordWrap: { width: textColWidth }
-        }).setDepth(contentDepth);
-        contentElements.push(nameText);
-
-        const descText = this.add.text(textColLeft, rowTop + 24, item.desc, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '10px',
-          color: '#888888',
-          wordWrap: { width: textColWidth }
-        }).setDepth(contentDepth);
-        contentElements.push(descText);
-
-        const dropText = this.add.text(dropColCenter, rowY, t('weapons.' + item.dropKey), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '9px',
-          color: '#00aaaa'
-        }).setOrigin(0.5).setDepth(contentDepth);
-        contentElements.push(dropText);
+        if (/^[1-4]$/.test(k)) { switchTab(Number(k) - 1); return; }
+        const dir = { arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right', arrowup: 'up', w: 'up', arrowdown: 'down', s: 'down' }[k];
+        if (dir && items.length) { select(gridMove(sel, dir, grid.cols, items.length)); return; }
+        if (k === 'enter' || k === ' ') { event.preventDefault?.(); act(); }
       }
-
-      if (total > maxVisible) {
-        const scrollHint = this.add.text(overlayLeft + overlayW - 60, footerY, t('weapons.scroll_more'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${10 * uiScale}px`,
-          color: '#888888'
-        }).setOrigin(0.5).setDepth(contentDepth);
-        contentElements.push(scrollHint);
-      }
-      const info = this.add.text(overlayLeft + overlayW / 2, footerY, t('weapons.ranged_info'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${11 * uiScale}px`,
-        color: '#00ffff'
-      }).setOrigin(0.5).setDepth(contentDepth);
-      contentElements.push(info);
-    };
-
-    const renderWeb3 = async () => {
-      clearContent();
-      this.weaponTotalRows = 0;
-      this.weaponMaxVisible = 1;
-
-      const zkStartY = contentTop;
-      const addr = await stellarWallet.getAddress();
-      if (!backdrop.active || !overlay.scene) return;
-
-      if (!addr) {
-        const connectText = this.add.text(overlayLeft + overlayW / 2, zkStartY + 60, t('weapons.zk_connect'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${14 * uiScale}px`,
-          color: '#888888'
-        }).setOrigin(0.5).setDepth(contentDepth);
-        contentElements.push(connectText);
-        const infoText = this.add.text(overlayLeft + overlayW / 2, overlayTop + overlayH - 44, t('weapons.zk_info'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${11 * uiScale}px`,
-          color: '#666666',
-          wordWrap: { width: overlayW - 56 }
-        }).setOrigin(0.5, 0.5).setDepth(contentDepth);
-        contentElements.push(infoText);
-        return;
-      }
-
-      let playerStats = { gamesPlayed: 0, bestScore: 0, tier: 1, rank: 0, canStartMatch: false };
-      let unlockedWeapons = [1];
-      
-      try {
-        playerStats = await weaponClient.getPlayerStats(addr);
-        unlockedWeapons = await weaponClient.getUnlockedWeapons(addr);
-        if (!Array.isArray(unlockedWeapons)) unlockedWeapons = [1];
-      } catch (e) {
-        console.warn('[TitleScene] Failed to load Web3 weapon data:', e);
-      }
-      try {
-        const apiEntries = await LeaderboardManager.fetchOnChain();
-        const normAddr = (a) => (a || '').toLowerCase().trim();
-        const myEntry = apiEntries.find((e) => e.address && normAddr(e.address) === normAddr(addr));
-        if (myEntry && (myEntry.gamesPlayed ?? 0) > (playerStats.gamesPlayed ?? 0)) {
-          playerStats.gamesPlayed = myEntry.gamesPlayed;
-        }
-      } catch (_) {}
-      if (!backdrop.active || !overlay.scene) return;
-
-      const displayScore = (playerStats.bestScore != null && playerStats.bestScore > 0) ? playerStats.bestScore : (progressStore.highScore ?? 0);
-      const localGames = LeaderboardManager.getLocalGamesPlayed(addr) ?? 0;
-      const displayGames = Math.max(0, playerStats.gamesPlayed ?? 0, localGames);
-      if (displayScore >= 10 && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
-
-      const displayWave = (playerStats.bestWave != null && playerStats.bestWave > 0) ? playerStats.bestWave : (progressStore.highWave ?? 0);
-      const apiRank = playerStats.rank !== undefined ? playerStats.rank : playerStats.tier;
-      const playerRank = (apiRank != null && apiRank > 0) ? apiRank : getRankIdFromScore(displayScore, displayWave);
-      const rankData = getRankById(playerRank);
-
-      const rankSectionY = zkStartY + 56;
-      
-      if (!isUnranked(playerRank)) {
-        const emojiSuffix = getRankEmoji(playerRank) ? ' ' + getRankEmoji(playerRank) : '';
-        const rankNameText = this.add.text(overlayLeft + 24, rankSectionY - 12, rankData.name + emojiSuffix, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${18 * uiScale}px`,
-          color: getRankColorCSS(playerRank),
-          fontStyle: 'bold'
-        }).setOrigin(0, 0.5).setDepth(contentDepth);
-        contentElements.push(rankNameText);
-
-        const bonusText = this.add.text(overlayLeft + 24, rankSectionY + 12, `${t('ranks.bonus_label')}: ${getRankBonusPercent(playerRank)}`, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${12 * uiScale}px`,
-          color: '#00ff88'
-        }).setOrigin(0, 0.5).setDepth(contentDepth);
-        contentElements.push(bonusText);
-      } else {
-        const unrankedText = this.add.text(overlayLeft + 24, rankSectionY - 8, t('ranks.unranked'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${15 * uiScale}px`,
-          color: '#888888',
-          fontStyle: 'bold'
-        }).setDepth(contentDepth);
-        contentElements.push(unrankedText);
-
-        const unrankedDesc = this.add.text(overlayLeft + 24, rankSectionY + 12, t('ranks.unranked_desc'), {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${11 * uiScale}px`,
-          color: '#666666'
-        }).setDepth(contentDepth);
-        contentElements.push(unrankedDesc);
-      }
-
-      const statsY = rankSectionY + 58;
-      const statsText = this.add.text(overlayLeft + overlayW / 2, statsY, `${t('ranks.best_score')}: ${displayScore} | ${t('ranks.games_played')}: ${displayGames}`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${13 * uiScale}px`,
-        color: '#cccccc'
-      }).setOrigin(0.5, 0.5).setDepth(contentDepth);
-      contentElements.push(statsText);
-
-      const weaponIds = [1, 2, 3, 4, 5];
-      const startY = statsY + 36;
-      const spacing = 68;
-      const iconCenterX = overlayLeft + 50;
-
-      for (let i = 0; i < weaponIds.length; i++) {
-        const weaponId = weaponIds[i];
-        const weapon = getWeaponById(weaponId);
-        if (!weapon) continue;
-        const isUnlocked = unlockedWeapons.includes(weaponId);
-        const tier = getTierById(weapon.tier);
-        
-        const y = startY + i * spacing;
-        
-        const boxColor = isUnlocked ? 0x00ff88 : 0x222222;
-        const boxStroke = isUnlocked ? 0x00ff88 : 0x444444;
-        const box = this.add.rectangle(iconCenterX, y, 40, 40, boxColor);
-        box.setStrokeStyle(2, boxStroke).setDepth(contentDepth);
-        contentElements.push(box);
-
-        const textureKey = `weapon-${weapon.type}`;
-        if (this.textures.exists(textureKey)) {
-          const sprite = this.add.sprite(iconCenterX, y, textureKey);
-          sprite.setDisplaySize(32, 32).setDepth(contentDepth);
-          contentElements.push(sprite);
-        } else {
-          const idText = this.add.text(iconCenterX, y, weaponId.toString(), {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '14px',
-            color: isUnlocked ? '#000000' : '#666666',
-            fontStyle: 'bold'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          contentElements.push(idText);
-        }
-
-        const nameColor = isUnlocked ? '#00ff88' : '#cccccc';
-        const nameText = this.add.text(overlayLeft + 100, y - 10, weapon.name, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: `${13 * uiScale}px`,
-          color: nameColor,
-          fontStyle: isUnlocked ? 'bold' : 'normal'
-        }).setDepth(contentDepth);
-        contentElements.push(nameText);
-
-        // Tier requirement
-        const reqText = this.add.text(overlayLeft + 100, y + 8, `Requires: ${tier.name} (${tier.threshold}+ score)`, {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '10px',
-          color: '#888888'
-        }).setDepth(contentDepth);
-        contentElements.push(reqText);
-
-        // Status or unlock button
-        if (isUnlocked) {
-          const statusText = this.add.text(overlayLeft + overlayW - 80, y, 'UNLOCKED', {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '11px',
-            color: '#00ff88',
-            fontStyle: 'bold'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          contentElements.push(statusText);
-        } else if (playerStats.gamesPlayed < 3) {
-          const lockText = this.add.text(overlayLeft + overlayW - 80, y, `Play ${3 - playerStats.gamesPlayed} more`, {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '10px',
-            color: '#ff6666'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          contentElements.push(lockText);
-        } else if (displayScore < tier.threshold) {
-          const lockText = this.add.text(overlayLeft + overlayW - 80, y, 'Score too low', {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '10px',
-            color: '#ff6666'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          contentElements.push(lockText);
-        } else {
-          // Unlock button
-          const unlockBtn = this.add.text(overlayLeft + overlayW - 80, y, 'UNLOCK', {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '11px',
-            color: '#00ffff',
-            fontStyle: 'bold'
-          }).setOrigin(0.5).setDepth(contentDepth);
-          unlockBtn.setInteractive({ useHandCursor: true });
-          unlockBtn.on('pointerover', () => unlockBtn.setColor('#ffffff'));
-          unlockBtn.on('pointerout', () => unlockBtn.setColor('#00ffff'));
-          unlockBtn.on('pointerdown', async () => {
-            unlockBtn.setText('...');
-            try {
-              // This would trigger ZK proof generation and unlock
-              // For now, show coming soon
-              unlockBtn.setText('SOON');
-            } catch (e) {
-              unlockBtn.setText('ERROR');
-            }
-          });
-          contentElements.push(unlockBtn);
-        }
-      }
-
-      // Info text — lower so it doesn't overlap Diamond / tier list
-      const web3InfoY = overlayTop + overlayH - 44;
-      const infoText = this.add.text(overlayLeft + overlayW / 2, web3InfoY, t('weapons.zk_info'), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${11 * uiScale}px`,
-        color: '#666666',
-        wordWrap: { width: overlayW - 56 }
-      }).setOrigin(0.5, 0.5).setDepth(contentDepth);
-      contentElements.push(infoText);
-    };
-
-    const clearContent = () => {
-      contentElements.forEach(el => el.destroy());
-      contentElements.length = 0;
-    };
-
-    const switchTab = (tabIndex) => {
-      this.weaponScrollOffset = 0;
-      tabTexts.forEach((t, i) => {
-        t.setColor(i === tabIndex ? '#ffd700' : '#666666');
-        t.setFontStyle(i === tabIndex ? 'bold' : 'normal');
-      });
-
-      if (tabIndex === 0) {
-        this.weaponTab = 'legendary';
-        renderLegendary();
-      } else if (tabIndex === 1) {
-        this.weaponTab = 'melee';
-        renderMelee();
-      } else if (tabIndex === 2) {
-        this.weaponTab = 'ranged';
-        renderRanged();
-      } else {
-        this.weaponTab = 'web3';
-        renderWeb3();
-      }
-    };
-
-    // Tab click handlers
-    tabTexts.forEach((t, i) => {
-      t.on('pointerdown', () => {
-        switchTab(i);
-        Audio.playXPGain();
-      });
     });
+    const u = ov.u;
 
-    const instructions = this.add.text(overlayLeft + overlayW / 2, instructionsY, t('weapons.tab_instructions'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${10 * uiScale}px`,
-      color: '#aaaaaa'
-    }).setOrigin(0.5).setDepth(1002);
-
-    switchTab(defaultTabIndex);
-
-    let currentTab = defaultTabIndex;
-
-    const tabLeft = () => {
-      currentTab--;
-      if (currentTab < 0) currentTab = 3;
-      switchTab(currentTab);
-      Audio.playXPGain();
+    // Segmented tabs in the header: active = icon + label, others icon only.
+    const tabsC = this.add.container(0, ov.headerH / 2);
+    ov.header.add(tabsC);
+    let tabBtns = [];
+    const drawTabs = () => {
+      tabBtns.forEach((b) => b.container.destroy());
+      tabBtns = TABS.map((tb, i) => {
+        const active = i === tabIndex;
+        const b = pillButton(this, active ? { icon: tb.icon, text: tb.label, iconColor: 0xe6edf7 } : { icon: tb.icon, iconColor: 0x94a3b8 }, () => { switchTab(i); }, { u, primary: active, round: !active, h: 36 });
+        tabsC.add(b.container);
+        return b;
+      });
+      const gap = 6 * u;
+      const total = tabBtns.reduce((s, b) => s + b.w, 0) + gap * (tabBtns.length - 1);
+      let x = ov.headerRightX - total;
+      tabBtns.forEach((b) => { b.container.setX(x + b.w / 2); x += b.w + gap; });
+      // Title shrinks out of the way on narrow panels.
+      ov.titleText.setVisible(ov.titleText.x + ov.titleText.width + 12 * u < ov.headerRightX - total);
     };
 
-    const tabRight = () => {
-      currentTab++;
-      if (currentTab > 3) currentTab = 0;
-      switchTab(currentTab);
-      Audio.playXPGain();
+    // Footer.
+    const fw = ov.footerRect.w; const fh = ov.footerRect.h;
+    const fIcon = this.add.container(22 * u, fh / 2);
+    const detailName = ovText(this, 54 * u, fh / 2 - 11 * u, '', { u, size: 16, bold: true }).setOrigin(0, 0.5);
+    const detailLine = ovText(this, 54 * u, fh / 2 + 13 * u, '', { u, size: 13, color: OV.muted }).setOrigin(0, 0.5);
+    const actionBtn = pillButton(this, '', () => act(), { u, primary: true, minW: 120 });
+    const enterCap = touch ? null : keycap(this, 'Enter', { u });
+    ov.footer.add([fIcon, detailName, detailLine, actionBtn.container]);
+    if (enterCap) ov.footer.add(enterCap);
+
+    const drawCircle = (holder, it, R, selected) => {
+      const g = holder.getData('g');
+      g.clear();
+      const P = ov.px;
+      if (selected) {
+        pixelDisc(this, 0, 0, R + 3 * P, { u, g, fill: PX.white, line: PX.ink });
+        pixelDisc(this, 0, 0, R + 1 * P, { u, g, fill: PX.violet, line: null });
+      }
+      pixelDisc(this, 0, 0, R, { u, g, line: it.locked ? PX.slate : it.color, fill: it.locked ? PX.night : mixColor(it.color, PX.night, 0.22), light: it.locked ? null : mixColor(it.color, PX.night, 0.4) });
     };
 
-    const onWeaponsKeyDown = (event) => {
-      const k = event.key?.toLowerCase?.() || event.key;
-      if (k === 'escape') close();
-      else if (k === 'arrowleft' || k === 'left' || k === 'a') tabLeft();
-      else if (k === 'arrowright' || k === 'right' || k === 'd') tabRight();
-      else if (k === 'arrowdown' || k === 'down' || k === 's') {
-        const total = this.weaponTotalRows || 0;
-        const maxVis = this.weaponMaxVisible || 1;
-        if (total > maxVis && this.weaponScrollOffset < total - maxVis) {
-          this.weaponScrollOffset++;
-          if (this.weaponTab === 'legendary') renderLegendary();
-          else if (this.weaponTab === 'melee') renderMelee();
-          else if (this.weaponTab === 'ranged') renderRanged();
-          Audio.playXPGain();
-        }
-      } else if (k === 'arrowup' || k === 'up' || k === 'w') {
-        if (this.weaponScrollOffset > 0) {
-          this.weaponScrollOffset--;
-          if (this.weaponTab === 'legendary') renderLegendary();
-          else if (this.weaponTab === 'melee') renderMelee();
-          else if (this.weaponTab === 'ranged') renderRanged();
-          Audio.playXPGain();
-        }
+    const buildIcon = (container, it, size) => {
+      if (this.textures.exists(it.texture)) {
+        const sp = this.add.image(0, 0, it.texture);
+        const s = size / Math.max(sp.width, sp.height);
+        sp.setScale(s);
+        if (it.locked) sp.setTint(0x64748b).setAlpha(0.45);
+        container.add(sp);
+      } else {
+        container.add(pixelIcon(this, it.glyph || 'bullet', size * 0.7, it.locked ? 0x475569 : undefined));
       }
     };
 
-    const close = () => {
-      this.input.keyboard.off('keydown', onWeaponsKeyDown);
+    const clearGrid = () => { ov.body.removeAll(true); cells = []; };
 
-      clearContent();
-      backdrop.destroy();
-      overlay.destroy();
-      title.destroy();
-      instructions.destroy();
-      tabTexts.forEach(t => t.destroy());
-
-      this.weaponMenuOpen = false;
+    const showMessage = (glyph, text) => {
+      clearGrid();
+      const cx = ov.bodyRect.w / 2; const cy = ov.bodyRect.h / 2;
+      ov.body.add(pixelIcon(this, glyph, 36 * u, 0x64748b).setPosition(cx, cy - 26 * u));
+      ov.body.add(ovText(this, cx, cy + 16 * u, text, { u, size: 14, color: OV.muted, align: 'center', wrap: ov.bodyRect.w * 0.8 }).setOrigin(0.5, 0));
+      ov.setScrollable(0);
     };
 
-    this.input.keyboard.on('keydown', onWeaponsKeyDown);
-    backdrop.on('pointerdown', close);
+    const buildGrid = () => {
+      clearGrid();
+      const R = (compactGrid ? 25 : 31) * u;
+      grid = gridLayout({ width: ov.bodyRect.w, count: items.length, ...cellSpec(u) });
+      // Short pools (legendary, ZK) sit centred in the viewport instead of hugging the top.
+      const top = Math.max(0, (ov.bodyRect.h - grid.contentH) / 2 - 8 * u);
+      items.forEach((it, i) => {
+        const cell = { ...grid.cell(i) };
+        cell.y += top;
+        const holder = this.add.container(cell.x + cell.w / 2, cell.y + cell.h / 2 - (it.badge ? 6 * u : 0));
+        const g = this.add.graphics();
+        holder.setData('g', g);
+        holder.add(g);
+        buildIcon(holder, it, R * 1.25);
+        if (it.locked) {
+          holder.add(pixelDisc(this, R * 0.74, R * 0.74, 11 * u, { u, fill: PX.night, line: PX.ink }));
+          holder.add(pixelIcon(this, 'lock', 16 * u).setPosition(R * 0.74, R * 0.74));
+        }
+        if (it.equipped) {
+          holder.add(pixelIcon(this, 'check', 16 * u).setPosition(R * 0.74, -R * 0.74));
+        }
+        if (it.badge) {
+          holder.add(ovText(this, 0, R + 13 * u, it.badge, { u, size: 12, bold: true, color: OV.amberCss }).setOrigin(0.5));
+        }
+        const zone = this.add.zone(0, it.badge ? 6 * u : 0, cell.w, cell.h).setInteractive({ useHandCursor: true });
+        zone.on('pointerup', (ptr) => {
+          if (ov.dragged() || !ov.pointerInBody(ptr)) return;
+          if (i === sel) act(); else select(i);
+        });
+        holder.add(zone);
+        ov.body.add(holder);
+        cells.push({ holder, it, R, cell });
+      });
+      ov.setScrollable(grid.contentH + top + 8 * u);
+      ov.scrollTo(0);
+      refresh();
+    };
+
+    const actionFor = (it) => {
+      if (!it) return null;
+      if (it.action === 'equip') return { label: it.equipped ? tt('unequip') : tt('equip'), enabled: true, primary: !it.equipped };
+      if (it.action === 'unlock') return { label: tt('unlock'), enabled: true, primary: true };
+      return null;
+    };
+
+    const refresh = () => {
+      cells.forEach((c, i) => drawCircle(c.holder, c.it, c.R, i === sel));
+      const it = items[sel];
+      fIcon.removeAll(true);
+      const a = actionFor(it);
+      actionBtn.container.setVisible(!!a);
+      if (a) {
+        actionBtn.setLabel(a.label); actionBtn.setPrimary(a.primary); actionBtn.setEnabled(a.enabled);
+        actionBtn.container.setX(fw - actionBtn.w / 2);
+      }
+      if (enterCap) enterCap.setVisible(!!a).setPosition(fw - actionBtn.w - 12 * u - enterCap.w / 2, fh / 2);
+      if (!it) { detailName.setText(''); detailLine.setText(''); return; }
+      const mini = pixelDisc(this, 0, 0, 20 * u, { u, line: it.locked ? PX.slate : it.color, fill: it.locked ? PX.night : mixColor(it.color, PX.night, 0.22) });
+      fIcon.add(mini);
+      buildIcon(fIcon, it, 24 * u);
+      const textMax = fw - 54 * u - (a ? actionBtn.w + (enterCap ? enterCap.w + 28 * u : 16 * u) : 0);
+      detailName.setText(it.name + (it.tag ? `  ` : '')); fitText(detailName, textMax);
+      detailLine.setText(it.tag ? `${it.tag}. ${it.line}` : it.line); fitText(detailLine, textMax);
+      detailName.setColor(it.locked ? OV.muted : OV.text);
+    };
+
+    const select = (i) => {
+      if (i === sel || !items[i]) return;
+      sel = i;
+      refresh();
+      ov.reveal(cells[sel].cell.y, cells[sel].cell.h);
+      Audio.playXPGain();
+    };
+
+    const act = () => {
+      const it = items[sel];
+      if (!it) return;
+      if (it.action === 'equip') {
+        const L = window.VIBE_LEGENDARIES;
+        if (it.equipped) L.unequip(); else L.equip(it.key);
+        Audio.playLevelUp();
+        const keep = sel;
+        items = this.getWeaponTabItems('legendary');
+        sel = Math.min(keep, items.length - 1);
+        buildGrid();
+        ov.reveal(cells[sel].cell.y, cells[sel].cell.h);
+      } else if (it.action === 'unlock') {
+        // On-chain unlock is not wired yet (same as the old gallery's "SOON").
+        it.line = tt('zk_soon');
+        refresh();
+      }
+    };
+
+    const loadZk = async () => {
+      const token = ++loadToken;
+      showMessage('shield', tt('zk_loading'));
+      items = []; sel = 0; refresh();
+      let addr = null;
+      try { addr = await stellarWallet.getAddress(); } catch (_) { addr = null; }
+      if (token !== loadToken || ov.isClosing()) return;
+      if (!addr) { showMessage('shield', t('weapons.zk_connect')); return; }
+      let stats = { gamesPlayed: 0, bestScore: 0 };
+      let unlocked = [1];
+      try {
+        stats = (await weaponClient.getPlayerStats(addr)) || stats;
+        unlocked = await weaponClient.getUnlockedWeapons(addr);
+        if (!Array.isArray(unlocked)) unlocked = [1];
+      } catch (e) {
+        logger.warn('[TitleScene] Failed to load Web3 weapon data:', e);
+      }
+      try {
+        const entries = await LeaderboardManager.fetchOnChain();
+        const norm = (a) => (a || '').toLowerCase().trim();
+        const mine = entries.find((e) => e.address && norm(e.address) === norm(addr));
+        if (mine && (mine.gamesPlayed ?? 0) > (stats.gamesPlayed ?? 0)) stats.gamesPlayed = mine.gamesPlayed;
+      } catch (_) { /* offline */ }
+      if (token !== loadToken || ov.isClosing()) return;
+      const score = stats.bestScore > 0 ? stats.bestScore : (progressStore.highScore ?? 0);
+      const games = Math.max(0, stats.gamesPlayed ?? 0, LeaderboardManager.getLocalGamesPlayed(addr) ?? 0);
+      if (score >= 10 && !unlocked.includes(2)) unlocked = [...unlocked, 2];
+      const TYPE_COLOR = { basic: 0x00ffff, spread: 0xff9900, pierce: 0x0099ff, rapid: 0xffcc00, rmrf: 0xff0000 };
+      items = [1, 2, 3, 4, 5].map((id) => {
+        const w = getWeaponById(id);
+        if (!w) return null;
+        const tier = getTierById(w.tier);
+        const st = zkWeaponState({ unlocked: unlocked.includes(id), gamesPlayed: games, score, threshold: tier.threshold });
+        const line = st.state === 'unlocked' ? `${tier.name}. ${w.description}`
+          : st.state === 'play_more' ? tt('zk_play_more').replace('{n}', st.remaining)
+            : st.state === 'score_low' ? tt('zk_score').replace('{n}', Number(tier.threshold).toLocaleString('en-US'))
+              : tt('zk_ready');
+        return {
+          key: String(id), name: w.name, color: TYPE_COLOR[w.type] ?? OV.cyan, texture: `weapon-${w.type}`, glyph: 'shield',
+          locked: st.state !== 'unlocked', badge: st.state === 'unlocked' ? null : compactNumber(tier.threshold),
+          line, action: st.state === 'unlockable' ? 'unlock' : null
+        };
+      }).filter(Boolean);
+      sel = 0;
+      buildGrid();
+    };
+
+    const switchTab = (i) => {
+      if (i < 0 || i >= TABS.length) return;
+      const changed = i !== tabIndex;
+      tabIndex = i;
+      drawTabs();
+      sel = 0;
+      loadToken++;
+      if (TABS[i].id === 'zk') { loadZk(); } else {
+        items = this.getWeaponTabItems(TABS[i].id);
+        if (!items.length) showMessage('lock', t('weapons.locked'));
+        else buildGrid();
+      }
+      if (changed) Audio.playXPGain();
+    };
+
+    switchTab(tabIndex);
   }
 
   showCharacterSelect() {
     this.characterMenuOpen = true;
-    const CHAR_IDS = ['vibecoder', 'destroyer', 'swordsman'];
-    let selectedIndex = CHAR_IDS.indexOf(progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder');
-    if (selectedIndex < 0) selectedIndex = 0;
+    const IDS = ['vibecoder', 'destroyer', 'swordsman'];
+    const current = () => Math.max(0, IDS.indexOf(progressStore.selectedCharacter || window.VIBE_SELECTED_CHARACTER || 'vibecoder'));
+    let sel = current();
+    let busy = false;
+    const lang = () => (currentLang() === 'es' ? 'es' : 'en');
+    const meta = (id) => window.VIBE_CHARACTERS?.[id] || window.VIBE_CHARACTERS?.vibecoder || { name: 'VibeCoder', textureKey: 'player', animPrefix: 'player' };
+    const nameOf = (id) => { const c = meta(id); return lang() === 'es' ? (c.displayName || c.name) : (c.displayName_en || c.displayName || c.name); };
 
-    const uiScale = getUIScale(this);
-    const w = this.scale.width || 800;
-    const h = this.scale.height || 600;
-    const cx = w / 2;
-    const cy = h / 2;
-
-    const overlayW = Math.min(680, w - 40);
-    const overlayH = Math.min(620, h - 40);
-    const overlayLeft = cx - overlayW / 2;
-    const overlayTop = cy - overlayH / 2;
-
-    const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.98);
-    backdrop.setDepth(1000).setInteractive({ useHandCursor: true });
-
-    const overlay = this.add.rectangle(cx, cy, overlayW, overlayH, 0x0a0a14, 1);
-    overlay.setStrokeStyle(2, 0x00ffff);
-    overlay.setDepth(1001).setInteractive({ useHandCursor: false });
-
-    const title = this.add.text(cx, overlayTop + 32, t('menu.CHARACTER'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${26 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
-
-    // Nombre completo del personaje (centrado debajo del título, con menos espacio)
-    const previewName = this.add.text(cx, overlayTop + 65 * uiScale, 'VibeCoder', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${22 * uiScale}px`,
-      color: '#ffffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1002);
-
-    // Botón para mostrar la historia del personaje (localized), centrado debajo del nombre con menos separación
-    const loreButton = this.add.text(cx, overlayTop + 95 * uiScale, t('menu.VIEW_HISTORY'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${14 * uiScale}px`,
-      color: '#00ffff',
-      backgroundColor: '#002233',
-      padding: {
-        left: 15,
-        right: 15,
-        top: 8,
-        bottom: 8
+    const pre = overlayMetrics(this, { width: 880, height: 600, footerH: 84 });
+    const ov = createOverlay(this, {
+      title: tt('character_title'),
+      icon: 'shield',
+      width: 880,
+      height: fitPanelHeight(pre.u, 372 * pre.u, 84),
+      footerH: 84,
+      hide: this.getOverlayHideTargets(),
+      onClose: () => { this.characterMenuOpen = false; this.refreshIdlePlayerSprite(); },
+      onKey: (k, event) => {
+        if (k === 'arrowleft' || k === 'a') select(wrapIndex(sel - 1, IDS.length));
+        else if (k === 'arrowright' || k === 'd') select(wrapIndex(sel + 1, IDS.length));
+        else if (k === 'enter' || k === ' ') { event.preventDefault?.(); commit(); }
+        else if (k === 'l' || k === 'h') showLore();
       }
-    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
+    });
+    const u = ov.u;
+    const gap = 14 * u;
+    const bw = ov.bodyRect.w; const bh = ov.bodyRect.h;
+    const cw = (bw - gap * 2) / 3;
+    const compact = bh / u < 300;
+    const pad = 14 * u;
 
-    // Posición para el personaje, centrado verticalmente para mejor balance
-    const spriteCenterX = cx;
-    const spriteCenterY = overlayTop + overlayH * 0.40;
-    const previewSprite = this.add.sprite(spriteCenterX, spriteCenterY, 'player', 0);
-    previewSprite.setScale(2.8 * uiScale).setDepth(1004).setVisible(true).setAlpha(1);
-
-    // Placeholder si las texturas no cargaron (ej. assets faltantes)
-    const placeholder = this.add.graphics();
-    placeholder.setDepth(1002.5);
-    const placeW = 80;
-    const placeH = 100;
-    placeholder.fillStyle(0x003333, 0.8);
-    placeholder.fillRoundedRect(spriteCenterX - placeW / 2, spriteCenterY - placeH / 2, placeW, placeH, 8);
-    placeholder.lineStyle(2, 0x00ffff, 0.6);
-    placeholder.strokeRoundedRect(spriteCenterX - placeW / 2, spriteCenterY - placeH / 2, placeW, placeH, 8);
-    const placeText = this.add.text(spriteCenterX, spriteCenterY, '?', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${32 * uiScale}px`,
-      color: '#00ffff'
-    }).setOrigin(0.5).setDepth(1002.6);
-    placeholder.setVisible(false);
-    placeText.setVisible(false);
-
-    const arrowLeft = this.add.text(overlayLeft + 64, spriteCenterY, '◀', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${34 * uiScale}px`,
-      color: '#00ffff'
-    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
-    const arrowRight = this.add.text(overlayLeft + overlayW - 64, spriteCenterY, '▶', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${34 * uiScale}px`,
-      color: '#00ffff'
-    }).setOrigin(0.5).setDepth(1003).setInteractive({ useHandCursor: true });
-
-    const updatePreview = () => {
-      const charId = CHAR_IDS[selectedIndex];
-      const fallbackChar = { 
-        name: 'VibeCoder', 
-        displayName: 'VibeCoder',
-        displayName_en: 'VibeCoder',
-        textureKey: 'player', 
-        animPrefix: 'player',
-        origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
-        origin_en: 'A former network architect who discovered that code is not just written, it is felt.',
-        history: 'Mientras navegaba por los límites del "Sector Estelar", su nave fue infectada por un glitch rítmico. En lugar de morir, su conciencia se fusionó con la terminal. Ahora, lucha fluyendo con la latencia del universo.',
-        history_en: 'While navigating the borders of the "Stellar Sector", his ship was infected by a rhythmic glitch. Rather than dying, his consciousness merged with the terminal. Now, he fights flowing with the latency of the universe.',
-        mission: 'Mantener la armonía entre el hardware y el alma.',
-        mission_en: 'Maintain harmony between hardware and soul.'
-      };
-      const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS?.vibecoder || fallbackChar;
-      const lang = window.VIBE_SETTINGS?.language || 'en';
-      const displayName = lang === 'es' ? (char.displayName || char.name) : (char.displayName_en || char.displayName || char.name);
-      previewName.setText(displayName);
-      if (!this.textures.exists(char.textureKey)) {
-        previewSprite.setVisible(false);
-        placeholder.setVisible(true);
-        placeText.setVisible(true);
-        return;
-      }
-      placeholder.setVisible(false);
-      placeText.setVisible(false);
-      previewSprite.setVisible(true).setAlpha(1);
-      previewSprite.setTexture(char.textureKey, 0);
-
-      // Check for special enabling animation (VibeCoder, Destroyer, StormMan)
-      let enablingKey = null;
-      if (charId === 'destroyer') {
-        enablingKey = 'destroyer-enabling';
-      } else if (charId === 'vibecoder') {
-        enablingKey = 'robot-enabling';
-      } else if (charId === 'swordsman') {
-        enablingKey = 'swordsman-enabling';
-      }
-
-      if (enablingKey && this.anims.exists(enablingKey)) {
-        // Play enabling animation first, then loop idle
-        previewSprite.play(enablingKey);
-        previewSprite.once('animationcomplete', () => {
-          const idleKey = char.animPrefix + '-idle';
-          if (this.anims.exists(idleKey)) {
-            previewSprite.play(idleKey);
-          }
-        });
+    const cards = IDS.map((id, i) => {
+      const c = meta(id);
+      const prof = characterProfile(id);
+      const ability = getCharacterAbility(id);
+      const holder = this.add.container(i * (cw + gap) + cw / 2, bh / 2);
+      const card = glassCard(this, -cw / 2, -bh / 2, cw, bh, { u, radius: 14 });
+      holder.add(card.container);
+      const k = card.container;
+      // Sprite area.
+      // Visible figure height (the 128px frames are ~60% character, feet on the bottom row).
+      const spriteBox = compact ? Math.min(bh - pad * 2, cw * 0.36) : Math.min(bh - 160 * u, 170 * u);
+      const sx = compact ? pad + spriteBox * 0.42 : cw / 2;
+      const feetY = compact ? bh / 2 + spriteBox / 2 : pad + 10 * u + spriteBox;
+      const halo = pixelDisc(this, sx, feetY - 2 * u, spriteBox * 0.375, { u, ry: Math.max(3 * ov.px, spriteBox * 0.07), fill: mixColor(ability.color ?? OV.violet, PX.dusk, 0.3), line: PX.night });
+      k.add(halo);
+      let sprite = null;
+      if (this.textures.exists(c.textureKey)) {
+        sprite = this.add.sprite(sx, feetY, c.textureKey, 0).setOrigin(0.5, 1);
+        sprite.setScale(spriteBox / (Math.max(1, sprite.height) * 0.6));
+        const idle = `${c.animPrefix}-idle`;
+        if (this.anims.exists(idle)) sprite.play({ key: idle, startFrame: i % 2 });
+        k.add(sprite);
       } else {
-        // Normal idle animation
-        const idleKey = char.animPrefix + '-idle';
-        if (this.anims.exists(idleKey)) {
-          previewSprite.play(idleKey);
-        } else {
-          previewSprite.setFrame(0);
-        }
+        k.add(pixelIcon(this, 'shield', spriteBox * 0.5, 0x475569).setPosition(sx, feetY - spriteBox / 2));
       }
-    };
-    updatePreview();
+      // Text column.
+      const tx = compact ? pad + spriteBox * 0.84 + 8 * u : pad;
+      const tw = cw - tx - pad;
+      let y = compact ? pad + 2 * u : feetY + 14 * u;
+      const name = fitText(ovText(this, tx, y, nameOf(id), { u, size: compact ? 15 : 17, bold: true }), tw);
+      y += name.height + 1 * u;
+      const role = ovText(this, tx, y, tt(prof.role), { u, size: 12, color: OV.muted });
+      y += role.height + (compact ? 6 : 10) * u;
+      k.add([name, role]);
+      const bars = [['heart', prof.hp, 0xfb7185], ['sword', prof.dmg, 0xf59e0b], ['chevrons', prof.spd, 0x22d3ee]];
+      const rowH = (compact ? 13 : 15) * u;
+      bars.forEach(([glyph, v, col]) => {
+        k.add(pixelIcon(this, glyph, 16 * u).setPosition(tx + 7 * u, y + rowH / 2));
+        k.add(miniBar(this, v, col, { u, w: (tw - 22 * u) / u, h: 5 }).setPosition(tx + 20 * u, y + rowH / 2));
+        y += rowH;
+      });
+      y += (compact ? 6 : 12) * u;
+      const abIcon = pixelIcon(this, prof.ability, 16 * u).setPosition(tx + 8 * u, y + 8 * u);
+      const abName = fitText(ovText(this, tx + 20 * u, y + 8 * u, tr(ability.name_key), { u, size: 13, bold: true, color: OV.text }).setOrigin(0, 0.5), tw - 20 * u);
+      k.add([abIcon, abName]);
+      // Active-character check badge.
+      const check = this.add.container(compact ? pad + 4 * u : cw - pad - 9 * u, pad + 4 * u + (compact ? 0 : 5 * u));
+      check.add(pixelIcon(this, 'check', 24 * u));
+      k.add(check);
+      const zone = this.add.zone(cw / 2, bh / 2, cw, bh).setInteractive({ useHandCursor: true });
+      zone.on('pointerup', (ptr) => {
+        if (ov.dragged() || !ov.pointerInBody(ptr)) return;
+        if (i === sel) commit(); else select(i);
+      });
+      k.add(zone);
+      ov.body.add(holder);
+      return { id, holder, card, sprite, check, ability };
+    });
 
-    const cycle = async (dir) => {
-      selectedIndex = (selectedIndex + dir + CHAR_IDS.length) % CHAR_IDS.length;
-      await selectCharacter(CHAR_IDS[selectedIndex]);
-      updatePreview();
+    // Footer: ◀ ▶ | ability line | lore + Select.
+    const fw = ov.footerRect.w; const fh = ov.footerRect.h;
+    const touch = isTouch();
+    const arrowL = pillButton(this, { icon: 'chevron-left' }, () => select(wrapIndex(sel - 1, IDS.length)), { u, round: true });
+    const arrowR = pillButton(this, { icon: 'chevron' }, () => select(wrapIndex(sel + 1, IDS.length)), { u, round: true });
+    arrowL.container.setPosition(arrowL.w / 2, fh / 2);
+    arrowR.container.setPosition(arrowL.w + 8 * u + arrowR.w / 2, fh / 2);
+    const selectBtn = pillButton(this, tt('select'), () => commit(), { u, primary: true, minW: 120 });
+    const loreBtn = pillButton(this, { icon: 'book' }, () => showLore(), { u, round: true });
+    const enterCap = touch ? null : keycap(this, 'Enter', { u });
+    const descX = arrowL.w + arrowR.w + 24 * u;
+    const abilityLine = ovText(this, descX, fh / 2, '', { u, size: 13, color: OV.muted, wrap: 10, maxLines: 2 }).setOrigin(0, 0.5);
+    ov.footer.add([arrowL.container, arrowR.container, abilityLine, loreBtn.container, selectBtn.container]);
+    if (enterCap) ov.footer.add(enterCap);
+
+    const refresh = () => {
+      const active = current();
+      cards.forEach((c, i) => {
+        c.card.setSelected(i === sel);
+        c.check.setVisible(i === active);
+        c.sprite?.setAlpha(i === sel ? 1 : 0.55);
+        if (c.sprite?.anims) { if (i === sel) c.sprite.anims.resume(); else c.sprite.anims.pause(); }
+      });
+      const isActive = sel === active;
+      selectBtn.setLabel(isActive ? tt('selected') : tt('select'));
+      selectBtn.setPrimary(!isActive);
+      selectBtn.setEnabled(!isActive && !busy);
+      selectBtn.container.setPosition(fw - selectBtn.w / 2, fh / 2);
+      loreBtn.container.setPosition(fw - selectBtn.w - 10 * u - loreBtn.w / 2, fh / 2);
+      let right = fw - selectBtn.w - loreBtn.w - 20 * u;
+      if (enterCap) {
+        enterCap.setVisible(!isActive);
+        enterCap.setPosition(right - 10 * u - enterCap.w / 2, fh / 2);
+        if (!isActive) right -= enterCap.w + 14 * u;
+      }
+      const ab = cards[sel].ability;
+      abilityLine.setWordWrapWidth(Math.max(40 * u, right - descX - 12 * u), true);
+      abilityLine.setText(tr(ab.desc_key));
+    };
+
+    const select = (i) => {
+      if (i === sel) return;
+      sel = i;
+      refresh();
+      const h = cards[sel].holder;
+      this.tweens.killTweensOf(h);
+      h.setScale(1);
+      this.tweens.add({ targets: h, scale: 1.02, duration: 90, yoyo: true, ease: 'Quad.easeOut' });
+      Audio.playXPGain();
+    };
+
+    const commit = async () => {
+      if (busy || sel === current()) return;
+      busy = true;
+      refresh();
+      try { await selectCharacter(IDS[sel]); } catch (e) { logger.warn('[TitleScene] selectCharacter failed', e); }
+      busy = false;
+      if (ov.isClosing()) return;
       this.refreshIdlePlayerSprite();
+      refresh();
+      const c = cards[sel];
+      const enabling = { vibecoder: 'robot-enabling', destroyer: 'destroyer-enabling', swordsman: 'swordsman-enabling' }[c.id];
+      if (c.sprite && enabling && this.anims.exists(enabling)) {
+        c.sprite.play(enabling);
+        c.sprite.once('animationcomplete', () => {
+          const idle = `${meta(c.id).animPrefix}-idle`;
+          if (c.sprite.active && this.anims.exists(idle)) c.sprite.play(idle);
+        });
+      }
       if (window.VIBE_SETTINGS?.sfxEnabled) Audio.playLevelUp();
     };
 
-    arrowLeft.on('pointerdown', () => { cycle(-1); });
-    arrowRight.on('pointerdown', () => { cycle(1); });
-
-    let currentView = "menu"; // "menu" | "history"
-    let loreCloseCallback = null; // ref so ESC/arrows in lore view can close or cycle
-    
-    const showCharacterLore = () => {
-      if (currentView === "history") return;
-      
-      // Cambiar el estado a history
-      currentView = "history";
-      
-      const charId = CHAR_IDS[selectedIndex];
-      const fallbackChar = { 
-        name: 'VibeCoder', 
-        displayName: 'VibeCoder',
-        displayName_en: 'VibeCoder',
-        textureKey: 'player', 
-        animPrefix: 'player',
-        origin: 'Un ex-arquitecto de redes que descubrió que el código no solo se escribe, se siente.',
-        origin_en: 'A former network architect who discovered that code is not just written, it is felt.',
-        history: 'Mientras navegaba por los límites del "Sector Estelar", su nave fue infectada por un glitch rítmico. En lugar de morir, su conciencia se fusionó con la terminal. Ahora, lucha fluyendo con la latencia del universo.',
-        history_en: 'While navigating the borders of the "Stellar Sector", his ship was infected by a rhythmic glitch. Rather than dying, his consciousness merged with the terminal. Now, he fights flowing with the latency of the universe.',
-        mission: 'Mantener la armonía entre el hardware y el alma.',
-        mission_en: 'Maintain harmony between hardware and soul.'
-      };
-      const char = window.VIBE_CHARACTERS?.[charId] || window.VIBE_CHARACTERS?.vibecoder || fallbackChar;
-      
-      // Create a copy of the current character sprite to animate separately
-      const animatedSprite = this.add.sprite(previewSprite.x, previewSprite.y, previewSprite.texture.key, previewSprite.frame.name);
-      animatedSprite.setScale(previewSprite.scaleX).setDepth(1008);
-      
-      // Copy the animation from the original sprite
-      if (previewSprite.anims.currentAnim) {
-        animatedSprite.play(previewSprite.anims.currentAnim.key);
-      }
-      
-      // Define two-column grid layout
-      const gridPadding = 32;
-      const loreBoxW = Math.min(860, w - 40);
-      const loreBoxH = Math.min(620, h - 40);
-      const characterWidth = loreBoxW * 0.35; // 35% para el personaje
-      const textWidth = loreBoxW * 0.55;      // 55% para el texto
-      const horizontalGap = 32;               // Separación entre columnas
-      
-      // Position character in left column
-      const characterX = (cx - loreBoxW/2) + characterWidth/2 + gridPadding;
-      const characterY = cy - loreBoxH/2 + gridPadding + 104; // Align with top of text block (lowered)
-      
-      const loreTween = this.tweens.add({
-        targets: animatedSprite,
-        x: characterX,
-        y: characterY,
-        duration: 800,
-        ease: 'Power2',
-        onComplete: () => {
-          if (!animatedSprite || !animatedSprite.scene || !animatedSprite.active) return;
-          const walkSideKey = char.animPrefix + '-walk-side';
-          if (this.anims.exists(walkSideKey)) {
-            animatedSprite.play(walkSideKey);
-          }
-        }
+    const showLore = () => {
+      const id = IDS[sel];
+      const c = meta(id);
+      const es = lang() === 'es';
+      // Lay the text out first so the panel can be sized to it.
+      const lp = overlayMetrics(this, { width: 620, height: 560 });
+      const lu = lp.u;
+      const w = lp.bodyW - 12 * lu;
+      const parts = [];
+      let y = 0;
+      [['character.origin', es ? c.origin : (c.origin_en || c.origin)], ['character.history', es ? c.history : (c.history_en || c.history)], ['character.mission', es ? c.mission : (c.mission_en || c.mission)]].forEach(([k, body]) => {
+        if (!body) return;
+        const head = ovText(this, 0, y, String(t(k) || '').replace(/:\s*$/, ''), { u: lu, size: 13, bold: true, color: OV.violetCss });
+        y += head.height + 6 * lu;
+        const txt = ovText(this, 0, y, body, { u: lu, size: 15, color: OV.text, wrap: w });
+        y += txt.height + 18 * lu;
+        parts.push(head, txt);
       });
-      
-      // Crear un overlay para mostrar la información del personaje
-      const loreBackdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x050510, 0.95);
-      loreBackdrop.setDepth(1005).setInteractive({ useHandCursor: true });
-
-      const loreBox = this.add.rectangle(cx, cy, loreBoxW, loreBoxH, 0x0a0a14, 1);
-      loreBox.setStrokeStyle(2, 0x00ffff);
-      loreBox.setDepth(1006);
-      const loreBoxTop = cy - loreBoxH / 2;
-      
-      // Título del personaje en el idioma apropiado - columna derecha
-      const lang = window.VIBE_SETTINGS?.language || 'en';
-      const textStartX = (cx - loreBoxW/2) + (loreBoxW * 0.35) + 32; // Columna derecha
-      const loreTitleText = lang === 'es' ? (char.displayName || char.name) : (char.displayName_en || char.displayName || char.name);
-      const loreTitle = this.add.text(textStartX, cy - loreBoxH/2 + 40, loreTitleText, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${24 * uiScale}px`,
-        color: '#00ffff',
-        fontStyle: 'bold'
-      }).setOrigin(0, 0).setDepth(1007);
-      
-      // Origin (localized) - columna derecha
-      let cursorY = cy - loreBoxH/2 + 90;
-      const sectionGap = 18;
-      const bodyGap = 8;
-
-      const originLabel = this.add.text(textStartX, cursorY, t('character.origin') || 'Origin:', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${16 * uiScale}px`,
-        color: '#ffffff',
-        fontStyle: 'bold'
-      }).setOrigin(0, 0).setDepth(1007);
-      cursorY += originLabel.height + bodyGap;
-      
-      // Get localized character info based on current language (lang already declared above)
-      const originText = this.add.text(textStartX, cursorY, 
-        lang === 'es' ? (char.origin || '') : (char.origin_en || char.origin || ''), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${14 * uiScale}px`,
-        color: '#cccccc',
-        wordWrap: { width: (loreBoxW * 0.55) - 32 } // Width for right column
-      }).setOrigin(0, 0).setDepth(1007);
-      cursorY += originText.height + sectionGap;
-      
-      // History (localized) - columna derecha
-      const historyLabel = this.add.text(textStartX, cursorY, t('character.history') || 'History:', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${16 * uiScale}px`,
-        color: '#ffffff',
-        fontStyle: 'bold'
-      }).setOrigin(0, 0).setDepth(1007);
-      cursorY += historyLabel.height + bodyGap;
-      
-      const historyText = this.add.text(textStartX, cursorY, 
-        lang === 'es' ? (char.history || '') : (char.history_en || char.history || ''), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${14 * uiScale}px`,
-        color: '#cccccc',
-        wordWrap: { width: (loreBoxW * 0.55) - 32 } // Width for right column
-      }).setOrigin(0, 0).setDepth(1007);
-      cursorY += historyText.height + sectionGap;
-      
-      // Mission (localized) - columna derecha
-      const missionLabel = this.add.text(textStartX, cursorY, t('character.mission') || 'Mission:', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${16 * uiScale}px`,
-        color: '#ffffff',
-        fontStyle: 'bold'
-      }).setOrigin(0, 0).setDepth(1007);
-      cursorY += missionLabel.height + bodyGap;
-      
-      const missionText = this.add.text(textStartX, cursorY, 
-        lang === 'es' ? (char.mission || '') : (char.mission_en || char.mission || ''), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${14 * uiScale}px`,
-        color: '#cccccc',
-        wordWrap: { width: (loreBoxW * 0.55) - 32 }
-      }).setOrigin(0, 0).setDepth(1007);
-
-      // Ajustar altura del recuadro para reducir espacio vacío (anclado arriba)
-      const contentBottom = Math.max(
-        missionText.y + missionText.height,
-        characterY + (animatedSprite.displayHeight ? animatedSprite.displayHeight / 2 : 0)
-      );
-      const closeBtnHeight = 48 * uiScale;
-      const desiredH = (contentBottom - loreBoxTop) + closeBtnHeight + 12;
-      const minH = 320 * uiScale;
-      const effectiveLoreBoxH = Math.max(minH, Math.min(loreBoxH, desiredH));
-      loreBox.setSize(loreBoxW, effectiveLoreBoxH);
-      loreBox.setDisplaySize(loreBoxW, effectiveLoreBoxH);
-      loreBox.y = loreBoxTop + effectiveLoreBoxH / 2;
-      
-      const loreBoxLeft = cx - loreBoxW / 2;
-      const loreBoxRight = cx + loreBoxW / 2;
-      const arrowLoreY = cy;
-
-      const arrowLeftLore = this.add.text(loreBoxLeft + 40, arrowLoreY, '◀', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${36 * uiScale}px`,
-        color: '#00ffff'
-      }).setOrigin(0.5).setDepth(1009).setInteractive({ useHandCursor: true });
-      const arrowRightLore = this.add.text(loreBoxRight - 40, arrowLoreY, '▶', {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${36 * uiScale}px`,
-        color: '#00ffff'
-      }).setOrigin(0.5).setDepth(1009).setInteractive({ useHandCursor: true });
-
-      const closeLore = () => {
-        loreCloseCallback = null;
-        currentView = "menu";
-        if (loreTween && loreTween.isPlaying) loreTween.remove();
-        loreBackdrop.destroy();
-        loreBox.destroy();
-        loreTitle.destroy();
-        originLabel.destroy();
-        originText.destroy();
-        historyLabel.destroy();
-        historyText.destroy();
-        missionLabel.destroy();
-        missionText.destroy();
-        arrowLeftLore.destroy();
-        arrowRightLore.destroy();
-        closeButton.destroy();
-        if (animatedSprite && animatedSprite.scene) animatedSprite.destroy();
-      };
-
-      const cycleInLore = (dir) => {
-        closeLore();
-        selectedIndex = (selectedIndex + dir + CHAR_IDS.length) % CHAR_IDS.length;
-        selectCharacter(CHAR_IDS[selectedIndex]).then(() => {
-          updatePreview();
-          if (window.VIBE_SETTINGS?.sfxEnabled) Audio.playLevelUp();
-          showCharacterLore();
-        });
-      };
-
-      arrowLeftLore.on('pointerdown', () => cycleInLore(-1));
-      arrowRightLore.on('pointerdown', () => cycleInLore(1));
-
-      // Botón de cerrar (localized) — ESC para salir
-      const closeButton = this.add.text(cx, loreBoxTop + effectiveLoreBoxH - 22, (t('prompt.esc_close') || 'ESC TO CLOSE').replace(/\[|\]/g, '').trim(), {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${18 * uiScale}px`,
-        color: '#00ffff',
-        backgroundColor: '#002233',
-        padding: {
-          left: 20,
-          right: 20,
-          top: 10,
-          bottom: 10
-        }
-      }).setOrigin(0.5).setDepth(1009).setInteractive({ useHandCursor: true });
-      
-      closeButton.on('pointerdown', closeLore);
-      loreBackdrop.on('pointerdown', (ptr) => {
-        const px = ptr.x;
-        const py = ptr.y;
-        const loreBoxTopY = loreBoxTop;
-        const loreBoxBottomY = loreBoxTop + effectiveLoreBoxH;
-        if (px < loreBoxLeft || px > loreBoxRight || py < loreBoxTopY || py > loreBoxBottomY) closeLore();
+      const contentH = Math.max(0, y - 18 * lu);
+      const lore = createOverlay(this, {
+        title: nameOf(id), icon: 'book', width: 620, height: fitPanelHeight(lu, contentH, 0, 560), depth: OV.depth + 20, hide: [ov.container]
       });
-      loreCloseCallback = closeLore;
-    };
-    
-    loreButton.on('pointerdown', showCharacterLore);
-
-    const instructions = this.add.text(cx, overlayTop + overlayH - 44, t('prompt.arrows_esc'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${11 * uiScale}px`,
-      color: '#666666'
-    }).setOrigin(0.5).setDepth(1002);
-
-    const onCharKeyDown = (event) => {
-      const k = event.key?.toLowerCase?.() || event.key;
-      if (currentView === 'history') {
-        if (k === 'escape') { loreCloseCallback?.(); return; }
-        if (k === 'arrowleft' || k === 'left' || k === 'a') { loreCloseCallback?.(); cycle(-1); showCharacterLore(); return; }
-        if (k === 'arrowright' || k === 'right' || k === 'd') { loreCloseCallback?.(); cycle(1); showCharacterLore(); return; }
-      }
-      if (k === 'escape') close();
-      else if (k === 'arrowleft' || k === 'left' || k === 'a') { cycle(-1); }
-      else if (k === 'arrowright' || k === 'right' || k === 'd') { cycle(1); }
+      lore.body.add(parts);
+      lore.setScrollable(contentH);
     };
 
-    const close = () => {
-      this.input.keyboard.off('keydown', onCharKeyDown);
-      this.refreshIdlePlayerSprite();
-      backdrop.destroy();
-      overlay.destroy();
-      title.destroy();
-      previewSprite.destroy();
-      previewName.destroy();
-      loreButton.destroy(); // Destroy the lore button as well
-      placeholder.destroy();
-      placeText.destroy();
-      arrowLeft.destroy();
-      arrowRight.destroy();
-      instructions.destroy();
-      this.characterMenuOpen = false;
-    };
-
-    this.input.keyboard.on('keydown', onCharKeyDown);
-    backdrop.on('pointerdown', close);
+    refresh();
   }
 }

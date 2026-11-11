@@ -6,21 +6,62 @@ import SaveManager from '../systems/SaveManager.js';
 import RebirthManager from '../systems/RebirthManager.js';
 import MapManager from '../systems/MapManager.js';
 import TouchControls from '../systems/TouchControls.js';
-import { getUIScale, getCameraZoom, getHudLayout } from '../utils/layout.js';
+import { getUIScale, getCameraZoom, getDisplaySize } from '../utils/layout.js';
+import { computeHudLayout, BUFF_SLOTS } from '../systems/hud/hudLayout.js';
+import { computeGameOverLayout } from '../systems/hud/gameOverLayout.js';
+import { buildHudModel, abilityChipModel, LOW_HP_PCT } from '../systems/hud/hudModel.js';
+import { routeObjectsToCameras } from '../systems/hud/cameraRouting.js';
+import { snapPx, stepsFilled, drawSegRing, drawPixelDisc, fadeSteps } from '../systems/hud/pixelShapes.js';
+import { pixelText, pixelPanel, uiIcon, uiSprite, ditherFill, pixelDivider, progressFillSkin, tileSkin, buttonSkin, PX, PX_CSS } from './boot/uiAssets.js';
+import { mixColor, pixelDisc } from './title/overlayKit.js';
+import { createQualityState, stepQuality, QUALITY_LEVELS } from '../systems/hud/qualityGovernor.js';
+import { attachAbilityController, createArenaAbilityHooks } from '../systems/abilities/AbilityController.js';
+import { playHitFlash } from './boot/characterAssets.js';
+import { biomeBgKey } from './boot/biomeAssets.js';
+import { BIOMES } from '../data/biomes.js';
 import RunModifiers from '../systems/RunModifiers.js';
 import EventManager from '../systems/EventManager.js';
 import ShrineManager from '../systems/ShrineManager.js';
 import LeaderboardManager from '../systems/LeaderboardManager.js';
 import { getRankById, getRankName, getRankBonus, isUnranked } from '../systems/RankManager.js';
-import { t, getBarks } from '../utils/i18n.js';
+import { t, getBarks, currentLang } from '../utils/i18n.js';
 import * as stellarWallet from '../utils/stellarWallet.js';
 import * as authApi from '../utils/authApi.js';
 import { progressStore, saveProgressToWallet, persistIfWalletConnected } from '../utils/walletProgressService.js';
 import * as gameClient from '../contracts/gameClient.js';
 import * as weaponClient from '../contracts/weaponClient.js';
-import { WEAPON_TYPE_CONFIG, getWeaponById } from '../config/weapons.js';
-import { validateGameRules, computeGameHash, generateRunSeed } from '../zk/gameProof.js';
+import { parseContractError } from '../contracts/contractErrors.js';
+import { WEAPON_TYPE_CONFIG, WEAPON_TIERS, getWeaponById } from '../config/weapons.js';
+import { validateGameRules, computeGameHash, generateRunSeed, maxProvableScore, MIN_SCORE_PER_WAVE } from '../zk/gameProof.js';
+import { canOpenPauseMenu } from '../systems/pauseRules.js';
+import { decideMove, pickGem } from '../systems/autoPilot.js';
+import { canTakeContactDamage, applyDamage } from '../systems/damageRules.js';
+import { createBossBrain, stepBoss, bossBarInfo, nextRandom } from '../systems/bossAI.js';
+import BossFx from '../systems/bossFx.js';
+import { getRunScore } from '../systems/scoreRules.js';
+import { waveStatScale } from '../systems/waveRules.js';
+import { createDirector, tick as directorTick, pickEnemyType, spawnPointOutsideView, eliteModChance, createRng } from '../systems/spawnDirector.js';
 import * as BALANCE from '../config/balance.js';
+import logger from '../utils/log.js';
+import { cloneWeapons, EVOLUTION_RECIPES } from '../data/weapons.js';
+import {
+  createStatus, applyOnHit, tickStatus, speedMultiplier, dominantStatus, STATUS_TINTS, isCcImmune, getPower,
+  hitReady, canSplit, spiralAngles, fanAngles, pickTarget, inArc, onLine
+} from '../systems/weaponEffects.js';
+
+/** Weapons that attack through orbiting projectiles (updateOrbitals) instead of autoAttack. */
+const ORBITAL_WEAPON_IDS = ['orbital', 'ringoffire', 'plasmaorb', 'deathaura'];
+import {
+  ENEMIES, MINI_BOSSES, BOSSES, cloneTable,
+  isBossWave, isMiniBossWave, getBossForWave, getMiniBossForWave
+} from '../data/enemies.js';
+import { cloneStages } from '../data/stages.js';
+import { XP_PICKUP_RADIUS, createGemState, dropGem, tickGems, mergeIfOverflow } from '../systems/xpGems.js';
+import { ITEMS, ITEM_LIFETIME_MS } from '../data/items.js';
+import {
+  createItemState, rollDrop, applyItem, tickEffects, getItemModifiers,
+  absorbDamage, consumeRevive, drainActions, getEnemyTier
+} from '../systems/ItemManager.js';
 
 /** localStorage key: set to '1' once user has signed a ZK proof at least once. Weapon drops only allowed after that. */
 const STORAGE_HAS_SIGNED_ZK_ONCE = 'cosmicCoderHasSignedZkOnce';
@@ -31,6 +72,44 @@ function hasSignedZkOnce() {
   } catch (_) {
     return false;
   }
+}
+
+// ---- HUD design tokens (ui/hud-minimal-v2): rounded glass panels, clean sans, few accents
+const HUD_DEPTH = 900;
+const HUD_FONT = '"Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif';
+const HUD = {
+  glass: 0x0b1020,
+  glassAlpha: 0.55,
+  edge: 0xffffff,
+  edgeAlpha: 0.12,
+  track: 0xffffff,
+  trackAlpha: 0.1,
+  violet: 0x8b5cf6,
+  cyan: 0x22d3ee,
+  magenta: 0xe879f9,
+  amber: 0xf59e0b,
+  green: 0x34d399,
+  rose: 0xf43f5e,
+  text: '#f1f5f9',
+  textMuted: '#94a3b8',
+  textMutedNum: 0x94a3b8
+};
+
+/** Pickup halo / name colours per rarity (match the medallion art in scripts/assets/gen-items.mjs). */
+const RARITY_GLOW = { common: 0x94a3b8, rare: 0x22d3ee, epic: 0x8b5cf6, legendary: 0xf59e0b };
+
+// ---- Game over v2 canvas helpers (antialiased Canvas2D; the WebGL context has no AA under pixelArt)
+const GO_TEX_Q = 1.5; // canvas textures are drawn at 1.5x their logical size and scaled down (LINEAR)
+
+/** 'GOLD' -> 'Gold' */
+function displayRankName(name) {
+  const s = String(name || '').toLowerCase();
+  return s ? s[0].toUpperCase() + s.slice(1) : '—';
+}
+
+/** v2 pixel-art sheets (docs/ASSETS.md) carry their own palette and must not be multiply-tinted. */
+function isV2Texture(key) {
+  return typeof key === 'string' && key.endsWith('-v2');
 }
 
 export default class ArenaScene extends Phaser.Scene {
@@ -60,11 +139,16 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Invincibility after hit
     this.invincible = false;
+    // Contact i-frames (see systems/damageRules.js)
+    this.lastContactHitAt = null;
+    this.iFrameFlashTimer = null;
 
     // Wave system
     this.waveNumber = 1;
     // Más enemigos base por ola para que escale más agresivo
-    this.enemiesPerWave = 52; // base 22 + 30 extra mobs en todas las waves
+    this.spawnDirector = null; // systems/spawnDirector.js — time-driven waves + continuous spawning (startWave)
+    this.waveClockMs = 0;
+    this.waveClockHold = false;
     this.spawnTimer = null;
     this.waveTimer = null;
 
@@ -82,82 +166,12 @@ export default class ArenaScene extends Phaser.Scene {
       duration: Infinity // basic never expires
     };
 
-    // Weapon definitions
-    this.weaponTypes = {
-      basic: { attackRate: 0.6, damage: 1, projectiles: 1, pierce: false, color: 0x00ffff },
-      spread: { attackRate: 1, damage: 0.7, projectiles: 5, pierce: false, color: 0xff9900 },
-      pierce: { attackRate: 0.8, damage: 1.5, projectiles: 1, pierce: true, color: 0x0099ff },
-      orbital: { attackRate: 0, damage: 2, projectiles: 0, pierce: true, color: 0xaa44ff },
-      rapid: { attackRate: 3, damage: 0.5, projectiles: 1, pierce: false, color: 0xffcc00 },
-      // New weapons
-      homing: { attackRate: 0.7, damage: 1.2, projectiles: 1, pierce: false, color: 0x00ff88, special: 'homing' },
-      bounce: { attackRate: 1, damage: 0.8, projectiles: 2, pierce: false, color: 0x88ff00, special: 'bounce', bounces: 3 },
-      aoe: { attackRate: 0.5, damage: 0.6, projectiles: 0, pierce: true, color: 0xff4488, special: 'aoe', radius: 100 },
-      freeze: { attackRate: 0.8, damage: 0.9, projectiles: 1, pierce: false, color: 0x88ffff, special: 'freeze', slowDuration: 2000 },
-      // Rare weapons - special effects
-      rmrf: { attackRate: 0, damage: 0, projectiles: 0, pierce: false, color: 0xff0000, special: 'clearAll' },
-      sudo: { attackRate: 2, damage: 3, projectiles: 1, pierce: true, color: 0xffd700, special: 'godMode' },
-      forkbomb: { attackRate: 1.5, damage: 0.6, projectiles: 3, pierce: false, color: 0xff00ff, special: 'fork' },
-      // Melee weapons
-      sword: { attackRate: 1.2, damage: 1.5, projectiles: 0, pierce: false, color: 0xcccccc, melee: true, meleeType: 'slash', range: 50 },
-      spear: { attackRate: 0.8, damage: 1.2, projectiles: 0, pierce: true, color: 0x8b4513, melee: true, meleeType: 'thrust', range: 80, pierces: 3 },
-      boomerang: { attackRate: 0.6, damage: 1.0, projectiles: 1, pierce: false, color: 0xdaa520, melee: true, meleeType: 'return', range: 150 },
-      kunai: { attackRate: 2.0, damage: 0.8, projectiles: 3, pierce: false, color: 0x2f2f2f, melee: true, meleeType: 'throw', range: 120 }
-    };
+    // Weapon + boss definitions (data: src/data/weapons.js, src/data/enemies.js)
+    this.weaponTypes = cloneWeapons();
+    this.bossTypes = cloneTable(BOSSES);
 
-    // Boss definitions
-    this.bossTypes = {
-      'boss-stackoverflow': {
-        name: 'STACK OVERFLOW',
-        health: 2000,
-        speed: 30,
-        damage: 25,
-        xpValue: 500,
-        wave: 20,
-        color: 0x00ff00,
-        ability: 'spawnMinions'
-      },
-      'boss-nullpointer': {
-        name: 'NULL POINTER',
-        health: 3500,
-        speed: 60,
-        damage: 30,
-        xpValue: 1000,
-        wave: 40,
-        color: 0xff00ff,
-        ability: 'teleport'
-      },
-      'boss-memoryleakprime': {
-        name: 'MEMORY LEAK PRIME',
-        health: 5000,
-        speed: 20,
-        damage: 35,
-        xpValue: 1500,
-        wave: 60,
-        color: 0xaa00ff,
-        ability: 'split'
-      },
-      'boss-kernelpanic': {
-        name: 'KERNEL PANIC',
-        health: 8000,
-        speed: 40,
-        damage: 45,
-        xpValue: 3000,
-        wave: 80,
-        color: 0xff0000,
-        ability: 'rage'
-      }
-    };
-
-    // Stage definitions with enhanced visual properties (stageKey for i18n)
-    this.stages = [
-      { name: 'DEBUG ZONE', stageKey: 'debug_zone', startWave: 1, bgColor: 0x0a0a1a, gridColor: 0x00ffff, nodeColor: 0x00ffff, particleColor: 0x00ffff, glowIntensity: 0.3 },
-      { name: 'MEMORY BANKS', stageKey: 'memory_banks', startWave: 25, bgColor: 0x0a001a, gridColor: 0xaa00ff, nodeColor: 0xff00ff, particleColor: 0xaa00ff, glowIntensity: 0.4 },
-      { name: 'NETWORK LAYER', stageKey: 'network_layer', startWave: 50, bgColor: 0x001a0a, gridColor: 0x00ff00, nodeColor: 0x00ff88, particleColor: 0x00ff00, glowIntensity: 0.35 },
-      { name: 'KERNEL SPACE', stageKey: 'kernel_space', startWave: 75, bgColor: 0x1a0a0a, gridColor: 0xff0000, nodeColor: 0xff4400, particleColor: 0xff4400, glowIntensity: 0.5 },
-      { name: 'CLOUD CLUSTER', stageKey: 'cloud_cluster', startWave: 100, bgColor: 0x0a0a1a, gridColor: 0x4488ff, nodeColor: 0x88aaff, particleColor: 0x4488ff, glowIntensity: 0.4 },
-      { name: 'SINGULARITY', stageKey: 'singularity', startWave: 150, bgColor: 0x050510, gridColor: 0xffffff, nodeColor: 0xffaa00, particleColor: 0xffd700, glowIntensity: 0.6 }
-    ];
+    // Stage definitions (data: src/data/stages.js; stageKey for i18n)
+    this.stages = cloneStages();
 
     // Current stage
     this.currentStage = 0;
@@ -181,68 +195,23 @@ export default class ArenaScene extends Phaser.Scene {
     this.shrineManager = null;
     this.shrineDamageBuff = 1;
 
-    // New enemy types with unique behaviors
-    // Enemy definitions — single source of truth for stats, spawning, and textures.
-    // waveMin: wave at which enemy enters the spawn pool (0 = always available)
-    // spawnWeight: how many copies added to spawn pool (higher = more common)
-    // texture: Phaser texture key (defaults to enemy type name if omitted)
-    this.enemyTypes = {
-      // Original enemies – buffeados para que peguen más duro
-      bug: { health: 24, speed: 45, damage: 14, xpValue: 5, behavior: 'chase', waveMin: 0, spawnWeight: 6 }, // base trash mob
-      glitch: { health: 45, speed: 75, damage: 17, xpValue: 15, behavior: 'chase', waveMin: 0, spawnWeight: 2 },
-      'memory-leak': { health: 90, speed: 28, damage: 24, xpValue: 30, behavior: 'chase', waveMin: 0, spawnWeight: 2 },
-      'syntax-error': { health: 18, speed: 110, damage: 13, xpValue: 10, behavior: 'teleport', teleportCooldown: 2800, waveMin: 8, spawnWeight: 2 },
-      'infinite-loop': { health: 60, speed: 55, damage: 16, xpValue: 20, behavior: 'orbit', orbitRadius: 120, waveMin: 12 },
-      'race-condition': { health: 40, speed: 70, damage: 18, xpValue: 25, behavior: 'erratic', speedVariance: 90, waveMin: 15 },
+    // Enemy, mini-boss and evolution definitions (data: src/data/enemies.js, src/data/weapons.js)
+    this.enemyTypes = cloneTable(ENEMIES);
+    this.miniBossTypes = cloneTable(MINI_BOSSES);
+    this.evolutionRecipes = EVOLUTION_RECIPES;
 
-      // Coding-themed enemies
-      'segfault': { health: 12, speed: 0, damage: 1009, xpValue: 50, behavior: 'deathzone', lifespan: 8000, waveMin: 30, texture: 'enemy-segfault' },
-      'dependency-hell': { health: 120, speed: 32, damage: 18, xpValue: 80, behavior: 'spawner', spawnInterval: 2700, maxMinions: 5, waveMin: 35, texture: 'enemy-dependency-hell' },
-      'stack-overflow': { health: 150, speed: 38, damage: 20, xpValue: 100, behavior: 'grow', growRate: 0.0012, waveMin: 25, texture: 'enemy-stack-overflow' },
-
-      // AI-themed enemies
-      'hallucination': { health: 1, speed: 55, damage: 10, xpValue: 1, behavior: 'fake', waveMin: 20, spawnWeight: 2, texture: 'enemy-hallucination' },
-      'token-overflow': { health: 60, speed: 50, damage: 17, xpValue: 40, behavior: 'growDamage', growRate: 0.0007, waveMin: 25, texture: 'enemy-token-overflow' },
-      'context-loss': { health: 70, speed: 65, damage: 19, xpValue: 60, behavior: 'contextLoss', teleportCooldown: 2400, wanderChance: 0.35, waveMin: 30, texture: 'enemy-context-loss' },
-      'prompt-injection': { health: 85, speed: 45, damage: 17, xpValue: 100, behavior: 'hijack', hijackDuration: 5500, hijackCooldown: 9000, waveMin: 40, texture: 'enemy-prompt-injection' },
-
-      // v2 enemies (Mixed AI + Coding)
-      '404-not-found': { health: 35, speed: 60, damage: 15, xpValue: 20, behavior: 'invisible', waveMin: 18, texture: 'enemy-404-not-found' },
-      'cors-error': { health: 50, speed: 0, damage: 20, xpValue: 30, behavior: 'blocker', blockDuration: 6000, waveMin: 22, texture: 'enemy-cors-error' },
-      'type-error': { health: 45, speed: 55, damage: 17, xpValue: 25, behavior: 'morph', morphInterval: 2800, waveMin: 28, texture: 'enemy-type-error' },
-      'git-conflict': { health: 65, speed: 45, damage: 16, xpValue: 35, behavior: 'split', waveMin: 32, texture: 'enemy-git-conflict' },
-      'overfitting': { health: 75, speed: 70, damage: 18, xpValue: 45, behavior: 'predict', waveMin: 38, texture: 'enemy-overfitting' },
-      'mode-collapse': { health: 95, speed: 38, damage: 19, xpValue: 60, behavior: 'clone', cloneCooldown: 7500, cloneRadius: 130, waveMin: 45, texture: 'enemy-mode-collapse' }
-    };
-
-    // Mini-boss definitions (appear at waves 10, 30, 50...)
-    this.miniBossTypes = {
-      'miniboss-deadlock': {
-        name: 'DEADLOCK',
-        health: 500,
-        speed: 35,
-        damage: 22,
-        xpValue: 150,
-        color: 0xff6600,
-        ability: 'freeze'
-      }
-    };
-
-    // Weapon evolution recipes (combine 2 weapons to evolve)
-    this.evolutionRecipes = {
-      'spread+pierce': { result: 'laserbeam', name: 'LASER BEAM', attackRate: 1.2, damage: 2.5, projectiles: 3, pierce: true, color: 0xff0088 },
-      'orbital+rapid': { result: 'plasmaorb', name: 'PLASMA ORB', attackRate: 0, damage: 3, projectiles: 0, pierce: true, color: 0x00ffaa, orbitalCount: 5 },
-      'pierce+rapid': { result: 'chainlightning', name: 'CHAIN LIGHTNING', attackRate: 2.5, damage: 1.8, projectiles: 1, pierce: false, color: 0x00aaff, chains: 3 },
-      // New evolutions
-      'spread+rapid': { result: 'bullethell', name: 'BULLET HELL', attackRate: 4, damage: 0.4, projectiles: 8, pierce: false, color: 0xff6600 },
-      'orbital+spread': { result: 'ringoffire', name: 'RING OF FIRE', attackRate: 0, damage: 2.5, projectiles: 0, pierce: true, color: 0xff4400, orbitalCount: 8 },
-      'homing+pierce': { result: 'seekingmissile', name: 'SEEKING MISSILE', attackRate: 0.5, damage: 4, projectiles: 1, pierce: true, color: 0x00ffcc, special: 'homing' },
-      'bounce+spread': { result: 'chaosbounce', name: 'CHAOS BOUNCE', attackRate: 1.2, damage: 1, projectiles: 5, pierce: false, color: 0xaaff00, special: 'bounce', bounces: 5 },
-      'aoe+orbital': { result: 'deathaura', name: 'DEATH AURA', attackRate: 0, damage: 1.5, projectiles: 0, pierce: true, color: 0xff00aa, special: 'aura', radius: 150 },
-      'freeze+pierce': { result: 'icelance', name: 'ICE LANCE', attackRate: 0.6, damage: 2.5, projectiles: 1, pierce: true, color: 0x00ffff, special: 'freeze', slowDuration: 3000 },
-      'homing+rapid': { result: 'swarm', name: 'SWARM', attackRate: 3, damage: 0.8, projectiles: 3, pierce: false, color: 0x88ff88, special: 'homing' },
-      'freeze+aoe': { result: 'blizzard', name: 'BLIZZARD', attackRate: 0.3, damage: 0.8, projectiles: 0, pierce: true, color: 0xaaffff, special: 'freezeAoe', radius: 120 }
-    };
+    // === Item pickups (src/data/items.js + systems/ItemManager.js) ===
+    this.itemPickups = null;
+    this.itemState = createItemState();
+    this.itemPity = 0;
+    // === XP gems on the floor (systems/xpGems.js): XP only counts once picked up ===
+    this.xpGems = null;
+    this.xpGemSprites = null;
+    this.xpGemState = null;
+    this.biomeDamageAcc = 0;
+    this.lastBiomeTeleport = -Infinity;
+    this.playerSlowUntil = 0;
+    this.playerSlowMult = 1;
 
     // Collected weapon types for evolution
     this.collectedWeapons = new Set(['basic']);
@@ -308,14 +277,14 @@ export default class ArenaScene extends Phaser.Scene {
     panel.setStrokeStyle(2, 0x00ffff);
 
     const label = this.add.text(cx, cy - 18, 'ZK', {
-      fontFamily: 'monospace',
+      fontFamily: HUD_FONT,
       fontSize: `${Math.round(20 * uiScale)}px`,
       color: '#00ffff',
       fontStyle: 'bold'
     }).setOrigin(0.5);
 
     const msg = this.add.text(cx, cy + 18, String(text || ''), {
-      fontFamily: 'monospace',
+      fontFamily: HUD_FONT,
       fontSize: `${Math.round(12 * uiScale)}px`,
       color: '#ffffff',
       align: 'center',
@@ -379,7 +348,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // ZK pickup prompt (only shown when proof verified; pickup requires pressing E)
     const prompt = this.add.text(x, y - 44, t('zk_popup.zk_weapon_pickup_prompt'), {
-      fontFamily: 'monospace',
+      fontFamily: HUD_FONT,
       fontSize: '12px',
       color: '#00ffff',
       fontStyle: 'bold',
@@ -410,12 +379,12 @@ export default class ArenaScene extends Phaser.Scene {
 
     try {
       // Simple health check instead of full ZK test
-      console.log('[ZK Startup] Checking ZK prover health...');
+      logger.log('[ZK Startup] Checking ZK prover health...');
       const health = await gameClient.checkZkProverHealth();
       if (health?.ok) {
-        console.log('[ZK Startup] ✅ ZK prover is healthy');
+        logger.log('[ZK Startup] ✅ ZK prover is healthy');
       } else {
-        console.warn('[ZK Startup] ⚠️ ZK prover health check failed');
+        logger.warn('[ZK Startup] ⚠️ ZK prover health check failed');
       }
 
       const addr = await stellarWallet.getAddress();
@@ -440,18 +409,18 @@ export default class ArenaScene extends Phaser.Scene {
         let milestone = { tier: 0, bestWave: 0 };
         try {
           milestone = await gameClient.getPlayerMilestone(addr, 1);
-          console.log('[ZK Startup] Player milestone:', JSON.stringify(milestone));
+          logger.log('[ZK Startup] Player milestone:', JSON.stringify(milestone));
         } catch (e) {
-          console.warn('[ZK Startup] getPlayerMilestone failed:', e?.message || e);
+          logger.warn('[ZK Startup] getPlayerMilestone failed:', e?.message || e);
         }
 
         // Fallback path for legacy data when milestone is not present yet.
         let stats = { gamesPlayed: 0 };
         try {
           stats = await weaponClient.getPlayerStats(addr);
-          console.log('[ZK Startup] Player stats:', JSON.stringify(stats));
+          logger.log('[ZK Startup] Player stats:', JSON.stringify(stats));
         } catch (e) {
-          console.warn('[ZK Startup] getPlayerStats failed:', e);
+          logger.warn('[ZK Startup] getPlayerStats failed:', e);
           stats = { gamesPlayed: 0 };
         }
 
@@ -462,9 +431,9 @@ export default class ArenaScene extends Phaser.Scene {
           try {
             const entries = await LeaderboardManager.fetchOnChain();
             hasPlayedBefore = Array.isArray(entries) && entries.some((e) => String(e?.address || '') === String(addr));
-            console.log('[ZK Startup] Local leaderboard API match:', hasPlayedBefore);
+            logger.log('[ZK Startup] Local leaderboard API match:', hasPlayedBefore);
           } catch (e) {
-            console.warn('[ZK Startup] Local leaderboard API fallback failed:', e?.message || e);
+            logger.warn('[ZK Startup] Local leaderboard API fallback failed:', e?.message || e);
           }
         }
 
@@ -472,30 +441,30 @@ export default class ArenaScene extends Phaser.Scene {
           try {
             const lb = await gameClient.getLeaderboardBySeason(1, 50);
             hasPlayedBefore = Array.isArray(lb) && lb.some((e) => String(e?.player || '') === String(addr));
-            console.log('[ZK Startup] Leaderboard fallback match:', hasPlayedBefore);
+            logger.log('[ZK Startup] Leaderboard fallback match:', hasPlayedBefore);
           } catch (e) {
-            console.warn('[ZK Startup] Leaderboard fallback failed:', e?.message || e);
+            logger.warn('[ZK Startup] Leaderboard fallback failed:', e?.message || e);
           }
         }
 
-        // Unlocked ZK weapons: API + fallback (score >= 10 unlocks Shotgun for testing)
+        // Unlocked ZK weapons: API + fallback (score >= Shotgun tier threshold)
         let unlockedWeapons = [1];
         try {
           const list = await weaponClient.getUnlockedWeapons(addr);
           if (Array.isArray(list)) unlockedWeapons = list;
         } catch (_) {}
         const displayScore = (stats.bestScore != null && stats.bestScore > 0) ? stats.bestScore : (progressStore.highScore ?? 0);
-        if (displayScore >= 10 && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
+        if (displayScore >= WEAPON_TIERS[2].threshold && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
 
         // Spawn best unlocked ZK weapon as drop only if account has completed ZK proof (hash on-chain)
         const weaponType = this.getZkWeaponTypeFromUnlocked(unlockedWeapons);
         if (weaponType && weaponType !== 'basic' && hasSignedZkOnce()) {
-          console.log('[ZK Startup] Dropping ZK weapon (proof verified):', weaponType);
+          logger.log('[ZK Startup] Dropping ZK weapon (proof verified):', weaponType);
           this.spawnSpecificWeaponDropNearPlayer(weaponType, 52, 0);
         } else if (weaponType && weaponType !== 'basic' && !hasSignedZkOnce()) {
-          console.log('[ZK Startup] ZK weapon not dropped — complete a ZK proof first');
+          logger.log('[ZK Startup] ZK weapon not dropped — complete a ZK proof first');
         } else {
-          console.log('[ZK Startup] No ZK weapon unlocked beyond starter');
+          logger.log('[ZK Startup] No ZK weapon unlocked beyond starter');
         }
       }
     } catch (_) {
@@ -560,10 +529,18 @@ export default class ArenaScene extends Phaser.Scene {
     this.gameMode = data?.gameMode === 'zk_ranked' ? 'zk_ranked' : 'casual';
     this.zkProofSubmitted = false;
     this.playerDead = false; // FIX: Always reset playerDead when starting/continuing a game
+    this.lastContactHitAt = null;
+    this.iFrameFlashTimer = null;
+    // Scene instance is reused across runs (constructor runs once): a new run must start at wave 1.
+    // A continued run restores wave/stage from the save later in create().
+    this.waveNumber = 1;
+    this.currentStage = 0;
+    this.currentBoss = null;
   }
 
   create() {
     this._gameOverKeydown = null;
+    this.ensureSmoothTextures();
     this.events.once('shutdown', () => {
       if (this._gameOverKeydown) {
         try { this.input.keyboard.off('keydown', this._gameOverKeydown); } catch (_) {}
@@ -571,38 +548,38 @@ export default class ArenaScene extends Phaser.Scene {
       }
     });
 
-    console.log('[Cosmic Coder] Game start:', this.isContinuedGame ? 'continued' : 'new', 'mode:', this.gameMode === 'zk_ranked' ? 'ZK Ranked' : 'Casual');
+    logger.log('[Cosmic Coder] Game start:', this.isContinuedGame ? 'continued' : 'new', 'mode:', this.gameMode === 'zk_ranked' ? 'ZK Ranked' : 'Casual');
     if (typeof this.zkProofSubmitted === 'undefined') this.zkProofSubmitted = false;
 
     // ZK Configuration Check
     if (this.gameMode === 'zk_ranked') {
-      console.log('[ZK Config] Checking configuration...');
+      logger.log('[ZK Config] Checking configuration...');
       const contractId = gameClient.getContractId();
-      console.log('[ZK Config] Contract ID from gameClient:', contractId);
-      console.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID);
-      console.log('[ZK Config] Contract ID length:', contractId?.length);
-      console.log('[ZK Config] Contract ID starts with C:', contractId?.startsWith('C'));
-      console.log('[ZK Config] Prover URL:', gameClient.getZkProverUrl());
-      console.log('[ZK Config] Is contract configured:', gameClient.isContractConfigured());
-      console.log('[ZK Config] Is prover configured:', gameClient.isZkProverConfigured());
+      logger.log('[ZK Config] Contract ID from gameClient:', contractId);
+      logger.log('[ZK Config] Contract ID from config.json:', window.__VITE_CONFIG__?.VITE_COSMIC_CODER_CONTRACT_ID);
+      logger.log('[ZK Config] Contract ID length:', contractId?.length);
+      logger.log('[ZK Config] Contract ID starts with C:', contractId?.startsWith('C'));
+      logger.log('[ZK Config] Prover URL:', gameClient.getZkProverUrl());
+      logger.log('[ZK Config] Is contract configured:', gameClient.isContractConfigured());
+      logger.log('[ZK Config] Is prover configured:', gameClient.isZkProverConfigured());
       
       // Validate contract ID format (should start with 'C' and be 56 chars)
       if (contractId && (contractId.length !== 56 || !contractId.startsWith('C'))) {
-        console.error('[ZK Config] ❌ Invalid contract ID format. Expected 56 chars starting with C');
+        logger.error('[ZK Config] ❌ Invalid contract ID format. Expected 56 chars starting with C');
       }
       
       // Skip contract existence check for now - try ZK directly
-      console.log('[ZK Config] 🚀 Skipping contract check - will try ZK submission directly');
+      logger.log('[ZK Config] 🚀 Skipping contract check - will try ZK submission directly');
       this.zkContractMissing = false; // Assume it exists and try
       
       if (!gameClient.isContractConfigured()) {
-        console.error('[ZK Config] ❌ Contract NOT configured!');
+        logger.error('[ZK Config] ❌ Contract NOT configured!');
       }
       if (!gameClient.isZkProverConfigured()) {
-        console.error('[ZK Config] ❌ Prover NOT configured!');
+        logger.error('[ZK Config] ❌ Prover NOT configured!');
       }
       if (gameClient.isContractConfigured() && gameClient.isZkProverConfigured()) {
-        console.log('[ZK Config] ✅ ZK configuration looks good!');
+        logger.log('[ZK Config] ✅ ZK configuration looks good!');
       }
     }
 
@@ -640,6 +617,16 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Create weapon drops group
     this.weaponDrops = this.physics.add.group();
+
+    // Create item pickups group (consumables: heal, shield, buffs...)
+    this.itemPickups = this.physics.add.group();
+    this.itemState = createItemState();
+    this.itemPity = 0;
+
+    // XP gems: recycled sprite pool, no physics (positions come from the pure gem state)
+    this.xpGems = this.add.group();
+    this.xpGemSprites = new Map();
+    this.resetXpGems();
 
     // Create orbital weapons group (circle around player)
     this.orbitals = this.add.group();
@@ -680,9 +667,12 @@ export default class ArenaScene extends Phaser.Scene {
     this.physics.add.overlap(this.projectiles, this.enemies, this.hitEnemy, null, this);
     this.physics.add.overlap(this.player, this.enemies, this.playerHit, null, this);
     this.physics.add.overlap(this.player, this.weaponDrops, this.pickupWeapon, null, this);
+    this.physics.add.overlap(this.player, this.itemPickups, this.pickupItem, null, this);
 
     // Create HUD
     this.createHUD();
+    this.abilities?.destroy();
+    this.abilities = attachAbilityController(this, createArenaAbilityHooks(this, this.playingCharacterId));
 
     this.runSeed = null;
     this.runSeedRestoredFromSave = false;
@@ -691,7 +681,7 @@ export default class ArenaScene extends Phaser.Scene {
       if (savedRun) {
         SaveManager.applySaveToScene(savedRun, this);
         this.updateHUD();
-        console.log(`Continuing from Wave ${this.waveNumber}, Stage ${this.currentStage}`);
+        logger.log(`Continuing from Wave ${this.waveNumber}, Stage ${this.currentStage}`);
       }
     }
     if (!this.runSeed) {
@@ -711,7 +701,7 @@ export default class ArenaScene extends Phaser.Scene {
             duration: 30000 // 30 seconds
           };
         }
-        console.log(`Rebirth bonus: Starting with weapons: ${startingWeapons.join(', ')}`);
+        logger.log(`Rebirth bonus: Starting with weapons: ${startingWeapons.join(', ')}`);
       }
 
       // Apply Web3 weapon unlock starting bonus
@@ -746,10 +736,18 @@ export default class ArenaScene extends Phaser.Scene {
     this.mapManager.init();
     this.mapManager.generateMap(this.currentStage);
     this.mapManager.setupCollisions(this.player, this.enemies, this.projectiles);
+    this.mapManager.onWaveChanged(this.waveNumber || 1);
+    this.startQualityGovernor();
 
     // Initialize touch controls (solo en dispositivos táctiles)
     this.touchControls = new TouchControls(this);
     this.touchControls.create();
+    // The HUD was built before the touch controls existed: rebuild so the ability chip docks above the pause button.
+    if (this.touchControls.enabled && this.hudContainer) {
+      this.hudContainer.removeAll(true);
+      this.buildHudWidgets();
+      this.updateHUD();
+    }
 
     this.eventManager = new EventManager(this);
 
@@ -800,7 +798,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.input.keyboard.on('keydown-ESC', () => this.togglePause());
     this.input.keyboard.on('keydown-P', () => this.togglePause());
 
-    console.log('Arena ready! WASD to move, auto-attack enabled. M for music. ESC/P to pause.');
+    logger.log('Arena ready! WASD to move, auto-attack enabled. M for music. ESC/P to pause.');
   }
 
   /**
@@ -835,7 +833,12 @@ export default class ArenaScene extends Phaser.Scene {
     const arenaBgIndex = this.getArenaBgIndex(this.waveNumber);
     const arenaBgKey = `arena-bg-${arenaBgIndex}`;
 
-    if (this.textures.exists(arenaBgKey)) {
+    const biome = BIOMES[this.currentStage] || BIOMES[0];
+    const biomeOwnsBackground = !!(biome && this.textures.exists(biomeBgKey(biome.id, 'far')));
+    if (biomeOwnsBackground) {
+      // MapManager draws the opaque far layer over the whole viewport: an arena-bg image under it
+      // would only cost a full-screen fill per frame (see docs/PERFORMANCE.md).
+    } else if (this.textures.exists(arenaBgKey)) {
       // Use preloaded cosmic/cyber space image — full world, centered, scaled to cover
       this.bgImageSprite = this.add.image(this.worldWidth / 2, this.worldHeight / 2, arenaBgKey);
       this.bgImageSprite.setDisplaySize(this.worldWidth, this.worldHeight);
@@ -848,32 +851,7 @@ export default class ArenaScene extends Phaser.Scene {
       this.bgTileSprite.setDepth(-10);
     }
 
-    // === ANIMATED FLOATING PARTICLES (spread across larger world) ===
-    const particleCount = 40 + Math.floor(stage.glowIntensity * 50); // More for larger world
-    for (let i = 0; i < particleCount; i++) {
-      const particle = this.add.circle(
-        Phaser.Math.Between(0, this.worldWidth),
-        Phaser.Math.Between(0, this.worldHeight),
-        Phaser.Math.Between(1, 4),
-        stage.particleColor || stage.nodeColor,
-        Phaser.Math.FloatBetween(0.1, stage.glowIntensity || 0.4)
-      );
-      particle.setDepth(-5);
-      this.bgParticles.push(particle);
-
-      // Floating animation
-      this.tweens.add({
-        targets: particle,
-        y: particle.y + Phaser.Math.Between(-100, 100),
-        x: particle.x + Phaser.Math.Between(-50, 50),
-        alpha: { from: particle.alpha, to: 0 },
-        scale: { from: 1, to: Phaser.Math.FloatBetween(0.5, 1.5) },
-        duration: Phaser.Math.Between(3000, 8000),
-        ease: 'Sine.easeInOut',
-        repeat: -1,
-        yoyo: true
-      });
-    }
+    // Floating motes come from the spaceBackground module (MapManager); no duplicate particles here.
 
     // === STAGE-SPECIFIC EFFECTS ===
     // Singularity stage: add vortex effect at world center
@@ -1015,6 +993,7 @@ export default class ArenaScene extends Phaser.Scene {
         this.currentStage = i;
         this.showStageTransition();
         this.createBackground();
+        if (this.mapManager) this.mapManager.transitionToStage(i);
         return true;
       }
     }
@@ -1030,26 +1009,9 @@ export default class ArenaScene extends Phaser.Scene {
     // Flash screen
     this.cameras.main.flash(500, 255, 255, 255);
 
-    // Big stage announcement
+    // Stage name for 2 s, then gone: it is not pinned to the HUD.
     const stageName = stage.stageKey ? t('stages.' + stage.stageKey) : stage.name;
-    const stageText = this.add.text(400, 200, `${t('stages.entering')}\n${stageName}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '36px',
-      color: '#ffffff',
-      fontStyle: 'bold',
-      align: 'center',
-      stroke: '#000000',
-      strokeThickness: 6
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    this.tweens.add({
-      targets: stageText,
-      scale: 1.3,
-      alpha: 0,
-      duration: 3000,
-      ease: 'Power2',
-      onComplete: () => stageText.destroy()
-    });
+    this.showHudBanner(stageName, { color: HUD.cyan, duration: 2000 });
   }
 
   createPlayer() {
@@ -1211,7 +1173,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     this.barkBubble = this.add.graphics();
     this.barkText = this.add.text(0, 0, phrase, {
-      fontFamily: '"Segoe UI", system-ui, monospace',
+      fontFamily: HUD_FONT,
       fontSize: `${fontSize}px`,
       color: '#e0e0e0',
       align: 'center',
@@ -1277,6 +1239,7 @@ export default class ArenaScene extends Phaser.Scene {
     const modDamageMult = this.modifierEffects?.damageMultiplier || 1;
     const modHealthMult = this.modifierEffects?.healthMultiplier || 1;
     const shrineDamageMult = this.shrineDamageBuff || 1;
+    const itemMods = this.itemState ? getItemModifiers(this.itemState) : { damageMult: 1, attackRateMult: 1 };
 
     const baseSpeed = this.baseStats.speed + (level * 8);
     const baseAttackRate = Math.max(100, this.baseStats.attackRate - (level * 15));
@@ -1287,8 +1250,8 @@ export default class ArenaScene extends Phaser.Scene {
     const weaponNerf = BALANCE.WEAPON_DAMAGE_NERF;
     return {
       speed: Math.floor(baseSpeed * speedBonus * rebirthMultiplier),
-      attackRate: Math.max(50, Math.floor(baseAttackRate / (attackRateBonus * rebirthMultiplier))),
-      attackDamage: Math.floor(baseDamage * damageBonus * rebirthMultiplier * modDamageMult * shrineDamageMult * weaponNerf),
+      attackRate: Math.max(50, Math.floor(baseAttackRate / (attackRateBonus * rebirthMultiplier * itemMods.attackRateMult))),
+      attackDamage: Math.floor(baseDamage * damageBonus * rebirthMultiplier * modDamageMult * shrineDamageMult * weaponNerf * itemMods.damageMult),
       maxHealth: Math.floor(baseHealth * healthBonus * rebirthMultiplier * modHealthMult)
     };
   }
@@ -1305,6 +1268,19 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   /** Color por peligrosidad del enemigo (daño base). Verde = bajo, amarillo = medio, rojo = alto. */
+  /**
+   * Elite cue. Legacy textures get a colour tint; v2 pixel-art sheets keep their palette and pulse
+   * their alpha instead (a multiply tint turns the 16-colour art into a flat blob).
+   */
+  markEliteEnemy(enemy, color) {
+    enemy.eliteColor = color;
+    if (!isV2Texture(enemy.texture?.key)) {
+      enemy.setTint(color);
+      return;
+    }
+    this.createTrackedTween({ targets: enemy, alpha: { from: 1, to: 0.55 }, duration: 420, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+  }
+
   getEnemyDangerTint(damage) {
     if (damage <= 8) return 0x88ff88;
     if (damage <= 20) return 0xffff88;
@@ -1335,33 +1311,25 @@ export default class ArenaScene extends Phaser.Scene {
     return upgrades.getBonus('weaponDuration');
   }
 
-  // Smart Auto-Play: Hunt enemies, evade when threatened
+  // Smart Auto-Play: Hunt enemies, evade when threatened (decision logic in systems/autoPilot.js)
   calculateAutoMove() {
     const px = this.player.x;
     const py = this.player.y;
-    const healthPercent = this.player.health / this.player.maxHealth;
-    const nearbyCount = this.countNearbyEnemies(120);
-
-    // Track current auto-play mode for UI
-    let mode = 'hunt';
-
-    // EVADE MODE: Low health or too many enemies nearby
-    if (healthPercent < 0.3 || nearbyCount >= 4) {
-      mode = 'evade';
-      this.autoPlayMode = 'evade';
-      return this.calculateEvadeMove(px, py);
-    }
-
-    // HUNT MODE: Find and approach nearest enemy
-    const target = this.findNearestEnemy(px, py);
-    if (target) {
-      this.autoPlayMode = 'hunt';
-      return this.calculateHuntMove(px, py, target);
-    }
-
-    // IDLE MODE: No enemies, gentle wander
-    this.autoPlayMode = 'idle';
-    return this.calculateWanderMove(px, py);
+    const enemies = [];
+    this.enemies.children.each((enemy) => {
+      if (enemy.active) enemies.push({ x: enemy.x, y: enemy.y, type: enemy.enemyType });
+    });
+    const decision = decideMove({
+      player: { x: px, y: py },
+      hp: this.player.health,
+      maxHp: this.player.maxHealth,
+      enemies,
+      nearestGem: pickGem(this.xpGemState ? this.xpGemState.gems : null, { x: px, y: py })
+    });
+    this.autoPlayMode = decision.mode;
+    if (decision.mode === 'idle') return this.calculateWanderMove(px, py);
+    if (decision.dx === 0 && decision.dy === 0) return { x: 0, y: 0 };
+    return this.applyBoundsCheck(px, py, decision.dx, decision.dy);
   }
 
   // Count enemies within radius
@@ -1505,316 +1473,531 @@ export default class ArenaScene extends Phaser.Scene {
     return animMap[enemyType] || null;
   }
 
-  createHUD() {
-    this.hudLayout = getHudLayout(this);
-    const L = this.hudLayout;
-    const HUD_DEPTH = 500;
-    const font = () => ({ fontFamily: '"Segoe UI", system-ui, sans-serif' });
-
-    // XP Bar background
-    this.xpBarBg = this.add.graphics();
-    this.xpBarBg.fillStyle(0x333333, 0.8);
-    this.xpBarBg.fillRect(L.leftX, L.xpY, L.barW, L.barH);
-    this.xpBarBg.setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // XP Bar fill
-    this.xpBar = this.add.graphics();
-    this.xpBar.setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // HP label — Barra de vida visible
-    this.hpLabelText = this.add.text(L.leftX, L.hpY - 2, t('hud.hp'), {
-      ...font(),
-      fontSize: `${L.fontSize.small}px`,
-      color: '#00ff00',
-      fontStyle: 'bold'
-    }).setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // Health bar background + border
-    this.healthBarBg = this.add.graphics();
-    this.healthBarBg.fillStyle(0x333333, 0.8);
-    this.healthBarBg.fillRect(L.leftX, L.hpY, L.barW, L.barHp);
-    this.healthBarBg.lineStyle(1, 0x00ff00, 0.6);
-    this.healthBarBg.strokeRect(L.leftX, L.hpY, L.barW, L.barHp);
-    this.healthBarBg.setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // Health bar fill
-    this.healthBar = this.add.graphics();
-    this.healthBar.setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // Level text
-    this.levelText = this.add.text(L.leftX, L.leftTextY, `${t('hud.lvl')} 1`, {
-      ...font(),
-      fontSize: `${L.fontSize.large}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // XP text
-    this.xpText = this.add.text(L.leftX, L.leftTextY + L.lineH, `${t('hud.xp')}: 0 / 100`, {
-      ...font(),
-      fontSize: `${L.fontSize.normal}px`,
-      color: '#aaaaaa'
-    }).setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // Right column: wave, enemies, score, kills, stage, hi_wave
-    let ry = L.rightTopY;
-    this.waveText = this.add.text(L.rightX, ry, `${t('hud.wave')} 1`, {
-      ...font(),
-      fontSize: `${L.fontSize.large}px`,
-      color: '#ff00ff',
-      fontStyle: 'bold'
-    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
-    ry += L.lineH;
-    this.enemiesCountText = this.add.text(L.rightX, ry, `${t('hud.enemies')}: 0`, {
-      ...font(),
-      fontSize: `${L.fontSize.normal}px`,
-      color: '#ffaa00'
-    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
-    ry += L.lineH;
-    this.scoreText = this.add.text(L.rightX, ry, `${t('hud.score')}: 0`, {
-      ...font(),
-      fontSize: `${L.fontSize.normal}px`,
-      color: '#00ffff'
-    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
-    ry += L.lineH;
-    this.killsText = this.add.text(L.rightX, ry, `${t('hud.kills')}: 0`, {
-      ...font(),
-      fontSize: `${L.fontSize.normal}px`,
-      color: '#aaaaaa'
-    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
-    ry += L.lineH;
-    this.stageText = this.add.text(L.rightX, ry, `${t('hud.stage')}: ${t('stages.debug_zone')}`, {
-      ...font(),
-      fontSize: `${L.fontSize.small}px`,
-      color: '#00ffff'
-    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
-    ry += L.lineH;
-    this.highScoreText = this.add.text(L.rightX, ry, `${t('hud.hi_wave')}: ${this.highWave}`, {
-      ...font(),
-      fontSize: `${L.fontSize.small}px`,
-      color: '#ffd700'
-    }).setOrigin(1, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // Mode indicator — centro, debajo de las barras para no solaparse
-    this.modeIndicatorText = this.add.text(L.centerX, L.modeY, t('hud.mode_manual'), {
-      ...font(),
-      fontSize: `${L.fontSize.normal}px`,
-      color: '#888888',
-      fontStyle: 'bold'
-    }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // Weapon + tooltip (izquierda, debajo de XP text)
-    const weaponY = L.leftTextY + L.lineH * 2;
-    this.weaponText = this.add.text(L.leftX, weaponY, `${t('hud.weapon')}: BASIC`, {
-      ...font(),
-      fontSize: `${L.fontSize.normal}px`,
-      color: '#00ffff'
-    }).setScrollFactor(0).setDepth(HUD_DEPTH);
-    this.weaponTooltipText = this.add.text(L.leftX, weaponY + L.lineH, '', {
-      ...font(),
-      fontSize: `${L.fontSize.small}px`,
-      color: '#aaaaaa'
-    }).setScrollFactor(0).setDepth(HUD_DEPTH).setVisible(false);
-    this.weaponText.setInteractive({ useHandCursor: true });
-    this.weaponText.on('pointerover', () => {
-      const tip = this.getWeaponTooltip(this.currentWeapon?.type || 'basic');
-      if (tip) {
-        this.weaponTooltipText.setText(tip);
-        this.weaponTooltipText.setVisible(true);
-      }
+  /**
+   * Screen-space UI camera. The world camera is zoomed (getCameraZoom) and Phaser applies that zoom
+   * to scrollFactor-0 objects too, around the camera centre, which pushed the HUD off screen.
+   * This un-zoomed camera draws every scrollFactor-0 object (HUD, menus, banners); the world camera
+   * draws everything else. Routing runs right before each render so late-spawned objects are covered.
+   */
+  setupUICamera() {
+    this.uiCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height, false, 'ui');
+    this.uiCamera.setScroll(0, 0);
+    this._routeCameras = () => {
+      if (this.uiCamera && this.cameras.main) routeObjectsToCameras(this.children.list, this.cameras.main.id, this.uiCamera.id);
+    };
+    this.events.on('prerender', this._routeCameras);
+    this.events.once('shutdown', () => {
+      this.events.off('prerender', this._routeCameras);
+      this.scale.off('resize', this.onHudResize, this);
     });
-    this.weaponText.on('pointerout', () => this.weaponTooltipText.setVisible(false));
+    this._routeCameras();
+  }
 
-    // Connection status — oculto (sin indicador OFFLINE/LIVE/SPACE FOR XP)
-    this.connectionText = this.add.text(L.centerX, L.connectionY, '', {
-      ...font(),
-      fontSize: `${L.fontSize.normal}px`,
-      color: '#ffff00'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(HUD_DEPTH).setVisible(false);
-
-    this.xpServerConnectedHandler = () => {
-      this.connectionText.setText(t('hud.live'));
-      this.connectionText.setColor('#00ff00');
-    };
-    this.xpServerDisconnectedHandler = () => {
-      this.connectionText.setText(t('hud.offline'));
-      this.connectionText.setColor('#ff6666');
-    };
-    window.addEventListener('xpserver-connected', this.xpServerConnectedHandler);
-    window.addEventListener('xpserver-disconnected', this.xpServerDisconnectedHandler);
-
-    if (isConnected()) {
-      this.connectionText.setText(t('hud.live'));
-      this.connectionText.setColor('#00ff00');
-    }
-
-    // Collected weapons (izquierda, debajo del weapon)
-    this.weaponsCollectedText = this.add.text(L.leftX, weaponY + L.lineH * 2, `${t('hud.collected')}: basic`, {
-      ...font(),
-      fontSize: `${L.fontSize.small}px`,
-      color: '#888888'
-    }).setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    // Boss health bar (centrado abajo)
-    this.bossHealthBarBg = this.add.graphics();
-    this.bossHealthBarBg.fillStyle(0x333333, 0.8);
-    this.bossHealthBarBg.fillRect(L.bossBarX, L.bossBarY, L.bossBarW, L.bossBarH);
-    this.bossHealthBarBg.setVisible(false);
-    this.bossHealthBarBg.setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    this.bossHealthBar = this.add.graphics();
-    this.bossHealthBar.setVisible(false);
-    this.bossHealthBar.setScrollFactor(0).setDepth(HUD_DEPTH);
-
-    this.bossNameText = this.add.text(L.centerX, L.bossNameY, '', {
-      ...font(),
-      fontSize: `${L.fontSize.medium}px`,
-      color: '#ff0000',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setScrollFactor(0).setDepth(HUD_DEPTH);
-    this.bossNameText.setVisible(false);
-
+  onHudResize() {
+    if (!this.hudContainer || !this.sys.isActive()) return;
+    if (this.uiCamera) this.uiCamera.setSize(this.scale.width, this.scale.height);
+    this.cameras.main.setZoom(getCameraZoom(this));
+    this.hudContainer.removeAll(true);
+    this.buildHudWidgets();
     this.updateHUD();
   }
 
+  createHUD() {
+    this.setupUICamera();
+    this.hudContainer = this.add.container(0, 0).setScrollFactor(0).setDepth(HUD_DEPTH);
+    this.hudStartedAt = this.time.now;
+    this.hudBossAlpha = 0;
+    this.buildHudWidgets();
+    this.scale.on('resize', this.onHudResize, this);
+    this.updateHUD();
+  }
+
+  /** Pixel text helper for HUD / banners / game over (size = glyph scale in art px; P = logical per art px). */
+  pxText(x, y, str, { P = 2, scale = 1, color = PX_CSS.white, shadow = true, align = 'left', maxWidth = 0 } = {}) {
+    return pixelText(this, x, y, String(str ?? ''), { size: 8 * scale * P, color, shadow, align, maxWidth });
+  }
+
+  /** (Re)creates every HUD game object inside hudContainer for the current viewport (pixel HUD v3). */
+  buildHudWidgets() {
+    const display = getDisplaySize(this);
+    const L = computeHudLayout({ w: this.scale.width, h: this.scale.height, displayW: display.width, displayH: display.height });
+    this.hudLayout = L;
+    const P = L.px;
+    const S = (v) => snapPx(v, P);
+    const add = (o) => { this.hudContainer.add(o); return o; };
+    const txt = (x, y, str, opts = {}) => add(this.pxText(x, y, str, { P, ...opts }));
+    const { vitals } = L;
+    const hp = this.hudPx = {}; // pixel geometry (logical, snapped) shared with updateHUD
+
+    // ---- vitals: dark pixel panel, portrait in a well, HP bar, XP bar + level chip, mode dot
+    const v = { x: S(vitals.x), y: S(vitals.y), w: S(vitals.w), h: S(vitals.h) };
+    add(pixelPanel(this, v.x, v.y, v.w, v.h, v.h / P >= 26 ? 'panel-dark' : 'chip', { px: P }));
+    const pd = S(vitals.portrait.r * 2);
+    const pw = { x: S(vitals.portrait.x - pd / 2), y: S(vitals.portrait.y - pd / 2), s: pd };
+    add(pixelPanel(this, pw.x, pw.y, pw.s, pw.s, 'well', { px: P }));
+    if (this.hudPortraitMask) { this.hudPortraitMask.destroy(); this.hudPortraitMask = null; }
+    const texKey = this.player?.texture?.key;
+    if (texKey && this.textures.exists(texKey)) {
+      // Idle frames are 128 px with the character small in the middle: frame the head (2 css px per texel).
+      const box = this.hudPortraitBox(texKey);
+      const img = add(this.add.image(pw.x + pw.s / 2, pw.y + 3 * P, texKey, 0).setScale(P));
+      img.setOrigin(box.cx, box.top);
+      const maskG = this.make.graphics({ x: 0, y: 0 }, false);
+      maskG.setScrollFactor(0);
+      maskG.fillStyle(0xffffff, 1);
+      maskG.fillRect(pw.x + 2 * P, pw.y + 2 * P, pw.s - 4 * P, pw.s - 4 * P);
+      img.setMask(maskG.createGeometryMask());
+      this.hudPortraitMask = maskG;
+    }
+    const hpH = Math.max(9 * P, S(vitals.hp.h));
+    hp.hp = { x: S(vitals.hp.x), y: S(vitals.portrait.y - pd / 2), w: S(vitals.hp.w), h: hpH };
+    this.hudHpTrack = add(pixelPanel(this, hp.hp.x, hp.hp.y, hp.hp.w, hp.hp.h, 'progress-track', { px: P }));
+    this.hudHpFill = add(pixelPanel(this, hp.hp.x, hp.hp.y, hp.hp.w, hp.hp.h, 'progress-fill-green', { px: P }));
+    this.hudHpText = txt(hp.hp.x + hp.hp.w - 3 * P, hp.hp.y + Math.max(P, Math.floor((hp.hp.h / P - 7) / 2) * P), '', { color: PX_CSS.white })
+      .setOrigin(1, 0);
+    // level chip (auto width) at the right end of the XP row; XP bar fills the rest
+    const rowY = hp.hp.y + hp.hp.h + 2 * P;
+    hp.level = { x: hp.hp.x + hp.hp.w, y: rowY, h: 11 * P };
+    this.hudLevelChip = add(pixelPanel(this, hp.level.x - 11 * P, rowY, 11 * P, hp.level.h, 'chip', { px: P }));
+    this.levelText = txt(hp.level.x, rowY + 2 * P, '', { color: PX_CSS.mist }).setOrigin(0.5, 0);
+    hp.xp = { x: hp.hp.x, y: rowY + 3 * P, h: 5 * P };
+    this.hudXpTrack = add(pixelPanel(this, hp.xp.x, hp.xp.y, 40 * P, hp.xp.h, 'progress-track', { px: P }));
+    this.hudXpFill = add(pixelPanel(this, hp.xp.x, hp.xp.y, 40 * P, hp.xp.h, 'progress-fill-violet', { px: P }));
+    hp.dot = { x: S(vitals.modeDot.x), y: hp.hp.y + hp.hp.h / 2 };
+    // Panel must hold the XP row (portrait is shorter on phones).
+    const needH = rowY + hp.level.h + 4 * P - v.y;
+    if (needH > v.h) this.hudContainer.list[0].resize(v.w, needH);
+
+    // ---- WAVE n: chip, muted label + big number (2x)
+    hp.wave = { cx: S(L.wave.x + L.wave.w / 2), y: S(L.wave.y), h: 22 * P };
+    this.hudWaveChip = add(pixelPanel(this, hp.wave.cx, hp.wave.y, 40 * P, hp.wave.h, 'chip', { px: P }));
+    this.hudWaveLabel = txt(0, hp.wave.y + 11 * P, t('hud.wave'), { color: PX_CSS.periw });
+    this.waveText = txt(0, hp.wave.y + 4 * P, '', { scale: 2, color: PX_CSS.white });
+
+    // ---- score: star + big number, right-aligned chip
+    hp.score = { right: S(L.score.x + L.score.w), y: S(L.score.y), h: 22 * P };
+    this.hudScoreChip = add(pixelPanel(this, hp.score.right - 40 * P, hp.score.y, 40 * P, hp.score.h, 'chip', { px: P }));
+    this.hudScoreStar = add(uiIcon(this, 0, hp.score.y + hp.score.h / 2, 'star', { px: P }));
+    this.scoreText = txt(hp.score.right - 5 * P, hp.score.y + 4 * P, '', { scale: 2, color: PX_CSS.white }).setOrigin(1, 0);
+
+    // Dynamic pixel layer (rings, discs, dots). Redrawn only when its quantised state changes.
+    this.hudG = add(this.add.graphics());
+    this._hudSig = '';
+
+    // ---- buffs: item icons (32 px art, nearest) inside segmented duration rings
+    this.hudBuffSlots = [];
+    for (let i = 0; i < BUFF_SLOTS; i++) {
+      const icon = add(this.add.image(0, 0, 'item-magnet').setVisible(false).setScale(P / 2));
+      this.hudBuffSlots.push({ icon });
+    }
+    this.hudReviveBadge = txt(0, 0, '1', { color: PX_CSS.ink, shadow: false }).setOrigin(0.5, 0).setVisible(false);
+
+    // ---- boss bar: name + phase pips above a red pixel bar
+    this.hudBossTrack = add(pixelPanel(this, 0, 0, 40 * P, 6 * P, 'progress-track', { px: P }).setVisible(false));
+    this.hudBossFill = add(pixelPanel(this, 0, 0, 40 * P, 6 * P, 'progress-fill-red', { px: P }).setVisible(false));
+    this.bossNameText = txt(0, 0, '', { color: PX_CSS.white }).setVisible(false);
+
+    // ---- ability: on touch it sits above the pause button and is tappable
+    const pauseBtn = this.touchControls?.enabled ? this.touchControls.pauseButton : null;
+    let { x: abX, y: abY, r: abR } = L.ability;
+    if (pauseBtn) {
+      const pauseR = (pauseBtn.width || 76) / 2;
+      abX = pauseBtn.x;
+      abY = pauseBtn.y - pauseR - L.gap * 2 - abR;
+    }
+    this.hudAbility = { x: S(abX), y: S(abY), r: abR, touch: !!pauseBtn };
+    this.hudAbilityKeyText = txt(this.hudAbility.x, this.hudAbility.y - 4 * P, '', { scale: 1, color: PX_CSS.white }).setOrigin(0.5, 0).setVisible(false);
+    this.hudAbilityHint = txt(this.hudAbility.x, this.hudAbility.y + 16 * P, 'SPACE', { color: PX_CSS.periw })
+      .setOrigin(0.5, 0).setVisible(false);
+
+    // ---- hover tooltip (desktop): chip + pixel label
+    this.hudTooltipBg = add(pixelPanel(this, 0, 0, 20 * P, 13 * P, 'chip', { px: P }).setVisible(false));
+    this.hudTooltip = txt(0, 0, '', { color: PX_CSS.white }).setOrigin(0.5, 0).setVisible(false);
+
+    if (!this._abilityTapHandler) {
+      this._abilityTapHandler = (pointer) => {
+        const a = this.hudAbility;
+        if (!a || !a.touch || this.isPaused || this.playerDead) return;
+        const dx = pointer.x - a.x;
+        const dy = pointer.y - a.y;
+        if (dx * dx + dy * dy <= a.r * a.r * 1.44) this.abilities?.tryActivate();
+      };
+      this.input.on('pointerdown', this._abilityTapHandler);
+      this.events.once('shutdown', () => {
+        this.input.off('pointerdown', this._abilityTapHandler);
+        this._abilityTapHandler = null;
+        if (this.hudPortraitMask) { this.hudPortraitMask.destroy(); this.hudPortraitMask = null; }
+      });
+    }
+  }
+
+  /** Opaque bbox of a texture's frame 0 (normalised head-top / centre x), cached per key. */
+  hudPortraitBox(key) {
+    this._portraitBoxes = this._portraitBoxes || {};
+    if (this._portraitBoxes[key]) return this._portraitBoxes[key];
+    let box = { cx: 0.5, top: 0.3 };
+    try {
+      const fr = this.textures.getFrame(key, 0);
+      const src = fr.source.image;
+      const cv = document.createElement('canvas');
+      cv.width = fr.cutWidth; cv.height = fr.cutHeight;
+      const ctx = cv.getContext('2d');
+      ctx.drawImage(src, fr.cutX, fr.cutY, fr.cutWidth, fr.cutHeight, 0, 0, fr.cutWidth, fr.cutHeight);
+      const data = ctx.getImageData(0, 0, cv.width, cv.height).data;
+      let top = -1; let minX = cv.width; let maxX = -1;
+      for (let y = 0; y < cv.height; y++) {
+        for (let x = 0; x < cv.width; x++) {
+          if (data[(y * cv.width + x) * 4 + 3] > 40) {
+            if (top < 0) top = y;
+            if (y - top < 14) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); }
+          }
+        }
+        if (top >= 0 && y - top >= 14) break;
+      }
+      if (top >= 0 && maxX >= minX) box = { cx: (minX + maxX + 1) / 2 / cv.width, top: Math.max(0, top - 1) / cv.height };
+    } catch (_) { /* cosmetic: keep the default framing */ }
+    this._portraitBoxes[key] = box;
+    return box;
+  }
+
+  /** Raw game state -> hudModel input. */
+  collectHudInput() {
+    const state = window.VIBE_CODER;
+    const xpNeeded = state.xpForLevel(state.level);
+    const cw = this.currentWeapon || { type: 'basic', duration: Infinity };
+    let label = cw.isEvolved ? `★${String(cw.type).toUpperCase()}★` : String(cw.type).toUpperCase();
+    if (cw.zkWeaponName) label = String(cw.zkWeaponName).toUpperCase();
+    const timed = this.weaponExpiryTimer && Number.isFinite(cw.duration) && cw.duration > 0;
+    let boss = null;
+    const liveBoss = this.currentBoss?.active ? this.currentBoss : (this.hudMiniBoss?.active && this.hudMiniBoss.health > 0 ? this.hudMiniBoss : null);
+    if (liveBoss) {
+      // Name, phase pips and the telegraphed attack are drawn separately (the pixel font has no ● ○ ›).
+      const key = liveBoss.bossNameKey || liveBoss.miniBossDef?.nameKey;
+      const name = String((key ? t(key) : '') || liveBoss.bossName || liveBoss.miniBossName || '').trim();
+      const info = liveBoss.bossBrain && liveBoss.bossMech ? bossBarInfo(liveBoss.bossBrain, liveBoss.bossMech, this.time.now) : null;
+      boss = {
+        name,
+        hp: liveBoss.health,
+        maxHp: liveBoss.maxHealth,
+        color: liveBoss.bossColor ?? liveBoss.miniBossColor,
+        phase: info ? info.phase : 0,
+        phases: info ? info.phases : 0,
+        attack: info?.labelKey ? t(info.labelKey) : ''
+      };
+    }
+    return {
+      hp: this.player.health,
+      maxHp: this.player.maxHealth,
+      shield: this.itemState?.shield || 0,
+      xp: state.xp,
+      xpNeeded,
+      level: state.level,
+      wave: this.waveNumber,
+      enemies: this.enemies ? this.enemies.countActive() : 0,
+      score: getRunScore(state),
+      kills: state.kills,
+      hiWave: this.highWave,
+      mode: this.hudMode,
+      weapon: {
+        label,
+        color: Phaser.Display.Color.HexStringToColor(this.getWeaponColorStr(cw.type)).color,
+        remainingMs: timed ? this.weaponExpiryTimer.getRemaining() : Infinity,
+        totalMs: timed ? cw.duration : Infinity
+      },
+      effects: this.itemState?.effects || [],
+      revives: this.itemState?.revives || 0,
+      boss
+    };
+  }
+
+  /** Resize a 9-slice fill to pct of maxW (snapped to art px); hidden when too short to draw its caps. */
+  setPixelFill(panel, maxW, pct, P, minArt = 4) {
+    const w = Math.round((maxW * Math.min(1, Math.max(0, pct))) / P) * P;
+    if (w < minArt * P) { panel.setVisible(false); return 0; }
+    if (panel.pw !== w) panel.resize(w, panel.ph);
+    panel.setVisible(true);
+    return w;
+  }
+
   /**
-   * Actualiza toda la información del HUD (vida, XP, oleada, enemigos, puntuación, modo).
-   * Se llama cada frame y en eventos (daño, level up, etc.).
-   * Cómo conectar eventos al HUD:
-   * - Tras daño al jugador: this.updateHUD() (ya en playerHit) + this.cameras.main.flash() para impacto.
-   * - Tras daño a enemigo: this.showDamageNumber(enemy.x, enemy.y, damage, isCrit).
-   * - Eventos importantes: this.showEventPopUp(t('game.wave_cleared'), 'Wave 5', 1500).
+   * Pixel HUD refresh (ui/arena-pixel-v3): health, wave and score are the only words on screen;
+   * weapon, buffs and ability are pixel discs with 12-step rings. Called every frame and on game events.
+   * Pure logic: systems/hud/hudModel.js + hudLayout.js + pixelShapes.js.
    */
   updateHUD() {
-    const state = window.VIBE_CODER;
-    const L = this.hudLayout || getHudLayout(this);
-    const xpNeeded = state.xpForLevel(state.level);
-    const xpPercent = state.xp / xpNeeded;
+    if (!this.hudG || !this.player || !this.hudPx) return;
+    const L = this.hudLayout;
+    const P = L.px;
+    const X = this.hudPx;
+    const input = this.collectHudInput();
+    const m = buildHudModel(input, ITEMS);
+    const g = this.hudG;
+    const now = this.time.now;
+    const dt = Math.min(100, Math.max(0, now - (this._hudLastNow ?? now)));
+    this._hudLastNow = now;
+    const blink = Math.floor(now / 280) % 2 === 0; // retro on/off blink (no smooth pulse)
+    const hovers = []; // { x, y, r, label } — hit areas for the desktop tooltip
+    const sig = []; // quantised draw state; the pixel layer is redrawn only when it changes
 
-    // Update XP bar
-    this.xpBar.clear();
-    this.xpBar.fillStyle(0x00ffff, 1);
-    this.xpBar.fillRect(L.leftX, L.xpY, L.barW * xpPercent, L.barH);
+    // ---- HP bar: fill skin by health band, number inside (right)
+    const fam = m.hpPct >= 0.5 ? 'green' : (m.hpPct >= LOW_HP_PCT ? 'amber' : 'red');
+    this.hudHpFill.setSkin(progressFillSkin(fam));
+    const hpW = this.setPixelFill(this.hudHpFill, X.hp.w, m.hpPct, P);
+    this.hudHpText.setText(m.hpText).setVisible(!m.hpLow || blink);
+    if (this.hudHpText.width > X.hp.w - 6 * P) this.hudHpText.setText(String(Math.ceil(Math.max(0, input.hp)))); // narrow bar: current HP only
+    const shieldW = m.shieldPct > 0 ? Math.max(2, Math.round(((X.hp.w / P) - 4) * m.shieldPct)) : 0;
+    sig.push(hpW, shieldW, m.hpLow && blink ? 1 : 0);
 
-    // Update health bar
-    const healthPercent = this.player.health / this.player.maxHealth;
-    this.healthBar.clear();
-    this.healthBar.fillStyle(healthPercent > 0.3 ? 0x00ff00 : 0xff0000, 1);
-    this.healthBar.fillRect(L.leftX, L.hpY, L.barW * healthPercent, L.barHp);
+    // ---- XP bar + level chip (chip grows with the number)
+    this.levelText.setText(String(m.level));
+    const chipW = Math.max(11 * P, Math.ceil(this.levelText.width / P + 5) * P);
+    if (this.hudLevelChip.pw !== chipW) this.hudLevelChip.resize(chipW, X.level.h);
+    this.hudLevelChip.setX(X.level.x - chipW);
+    this.levelText.setX(X.level.x - chipW / 2);
+    const xpMax = X.level.x - chipW - 2 * P - X.xp.x;
+    if (this.hudXpTrack.pw !== xpMax) this.hudXpTrack.resize(xpMax, X.xp.h);
+    this.setPixelFill(this.hudXpFill, xpMax, m.xpPct, P, 3);
 
-    // Update text
-    this.levelText.setText(`${t('hud.lvl')} ${state.level}`);
-    this.xpText.setText(`${t('hud.xp')}: ${state.xp} / ${xpNeeded}`);
-    this.killsText.setText(`${t('hud.kills')}: ${state.kills}`);
-    this.waveText.setText(`${t('hud.wave')} ${this.waveNumber}`);
-    // Enemies remaining on screen / Enemigos en pantalla
-    const enemyCount = this.enemies ? this.enemies.countActive() : 0;
-    if (this.enemiesCountText) this.enemiesCountText.setText(`${t('hud.enemies')}: ${enemyCount}`);
-    // Score = total XP
-    if (this.scoreText) this.scoreText.setText(`${t('hud.score')}: ${state.totalXP}`);
-    // Mode indicator (set in update from hudMode)
-    const modeKey = (this.hudMode === 'hunt' && 'mode_hunt') || (this.hudMode === 'evade' && 'mode_evade') || (this.hudMode === 'idle' && 'mode_idle') || 'mode_manual';
-    if (this.modeIndicatorText) {
-      this.modeIndicatorText.setText(t('hud.' + modeKey));
-      const modeColor = this.hudMode === 'evade' ? '#ff6600' : this.hudMode === 'hunt' ? '#00ff88' : this.hudMode === 'idle' ? '#888888' : '#00aaff';
-      this.modeIndicatorText.setColor(modeColor);
-    }
+    // ---- WAVE n chip (label + number centred as one unit)
+    this.waveText.setText(m.waveText);
+    const wGap = 3 * P;
+    const wTotal = this.hudWaveLabel.width + wGap + this.waveText.width;
+    const wChip = Math.ceil((wTotal + 12 * P) / P) * P;
+    const wx = X.wave.cx - wChip / 2;
+    if (this.hudWaveChip.pw !== wChip) this.hudWaveChip.resize(wChip, X.wave.h);
+    this.hudWaveChip.setX(wx);
+    this.hudWaveLabel.setX(wx + 6 * P);
+    this.waveText.setX(wx + 6 * P + this.hudWaveLabel.width + wGap);
 
-    // Update weapon text — show ZK weapon name (e.g. Shotgun) when from unlock, else type
-    let weaponLabel = this.currentWeapon.isEvolved ? `★${this.currentWeapon.type.toUpperCase()}★` : this.currentWeapon.type.toUpperCase();
-    if (this.currentWeapon.zkWeaponName) weaponLabel = this.currentWeapon.zkWeaponName.toUpperCase();
-    this.weaponText.setText(`${t('hud.weapon')}: ${weaponLabel}`);
-    this.weaponText.setColor(this.getWeaponColorStr(this.currentWeapon.type));
+    // ---- score chip: star + number
+    this.scoreText.setText(m.scoreText);
+    const sChip = Math.ceil((this.scoreText.width + 16 * P + 14 * P) / P) * P;
+    if (this.hudScoreChip.pw !== sChip) this.hudScoreChip.resize(sChip, X.score.h);
+    this.hudScoreChip.setX(X.score.right - sChip);
+    this.hudScoreStar.setX(X.score.right - sChip + 4 * P + 8 * P);
 
-    // Update stage text
-    const stage = this.stages[this.currentStage];
-    const stageName = stage.stageKey ? t('stages.' + stage.stageKey) : stage.name;
-    this.stageText.setText(`${t('hud.stage')}: ${stageName}`);
+    // ---- mode dot
+    sig.push(m.mode.color);
+    hovers.push({ x: X.dot.x, y: X.dot.y, r: 6 * P, label: t('hud.' + m.mode.key) });
 
-    // Update high score display
-    if (this.highScoreText) {
-      this.highScoreText.setText(`${t('hud.hi_wave')}: ${this.highWave}`);
-    }
+    // ---- weapon: pixel disc in its colour + 12-step timer ring (permanent = plain frame)
+    const wp = L.weapon;
+    const wSteps = m.weapon.timerPct !== null ? stepsFilled(m.weapon.timerPct) : -1;
+    sig.push(m.weapon.color, wSteps);
+    hovers.push({ x: wp.x, y: wp.y, r: wp.r, label: m.weapon.label + (m.weapon.timeText ? `  ${m.weapon.timeText}` : '') });
 
-    // Update collected weapons
-    if (this.weaponsCollectedText) {
-      const weapons = Array.from(this.collectedWeapons).join(', ');
-      this.weaponsCollectedText.setText(`${t('hud.collected')}: ${weapons}`);
-    }
+    // ---- buffs
+    const chips = m.buffs.slice(0, BUFF_SLOTS - (m.revive ? 1 : 0)).map((b) => ({
+      id: b.id, texture: `item-${b.id}`, color: b.color, steps: stepsFilled(b.pct), name: t(b.nameKey), revive: false
+    }));
+    if (m.revive) chips.push({ id: 'hotfix', texture: 'item-hotfix', color: PX.green, steps: 12, name: t('hud.revive'), revive: true });
+    const ringR = 13; // art px: inner radius 11 art = 22 css holds the 32 css icon
+    const slotStep = (ringR * 2 + 3) * P;
+    const rowW = chips.length * slotStep - 3 * P;
+    const bcy = snapPx(L.buffs.y + L.buffs.slot / 2 - 4 * P, P);
+    let bcx = snapPx(L.buffs.x + L.buffs.w / 2 - rowW / 2 + ringR * P, P);
+    const buffPos = [];
+    this.hudReviveBadge.setVisible(false);
+    this.hudBuffSlots.forEach((slot, i) => {
+      const chip = chips[i];
+      if (!chip) { slot.icon.setVisible(false); return; }
+      buffPos.push({ x: bcx, y: bcy, chip });
+      if (this.textures.exists(chip.texture)) slot.icon.setTexture(chip.texture).setVisible(true).setPosition(bcx, bcy).setScale(P / 2);
+      else slot.icon.setVisible(false);
+      if (chip.revive) {
+        this.hudReviveBadge.setVisible(true).setPosition(bcx + 10 * P, bcy - 14 * P).setText(String(Math.max(1, input.revives | 0)));
+      }
+      sig.push(chip.id, chip.steps);
+      hovers.push({ x: bcx, y: bcy, r: ringR * P, label: chip.name });
+      bcx += slotStep;
+    });
 
-    // Update boss health bar
-    if (this.currentBoss && this.currentBoss.active) {
-      this.bossHealthBarBg.setVisible(true);
-      this.bossHealthBar.setVisible(true);
-      this.bossNameText.setVisible(true);
+    // ---- ability
+    const ab = this.drawAbilityChip(null, L, now, hovers);
+    if (ab) sig.push(ab.steps, ab.ready ? (blink ? 2 : 1) : 0, ab.active ? 1 : 0, ab.color);
 
-      const bossHealthPercent = this.currentBoss.health / this.currentBoss.maxHealth;
-      this.bossHealthBar.clear();
-      this.bossHealthBar.fillStyle(this.currentBoss.bossColor, 1);
-      this.bossHealthBar.fillRect(L.bossBarX, L.bossBarY, L.bossBarW * bossHealthPercent, L.bossBarH);
-
-      this.bossNameText.setText(`⚠ ${this.currentBoss.bossName} ⚠`); // bossName may be translated elsewhere
-      this.bossNameText.setColor(this.hexToColorStr(this.currentBoss.bossColor));
+    // ---- boss bar: steps in/out (alpha 0.25 steps), name + phase pips + red bar
+    const bossTarget = m.boss ? 1 : 0;
+    this.hudBossAlpha = Phaser.Math.Clamp((this.hudBossAlpha || 0) + Math.sign(bossTarget - (this.hudBossAlpha || 0)) * (dt / 400), 0, 1);
+    if (m.boss) this._hudLastBoss = m.boss;
+    const shownBoss = m.boss || this._hudLastBoss;
+    const bossA = Math.round(this.hudBossAlpha * 4) / 4;
+    const ringTop = bcy - ringR * P;
+    const bar = { w: snapPx(L.boss.w, P), h: 6 * P };
+    bar.x = snapPx(this.scale.width / 2 - bar.w / 2, P);
+    bar.y = (chips.length ? ringTop : snapPx(L.boss.barY + L.boss.barH, P)) - 3 * P - bar.h;
+    if (bossA > 0 && shownBoss) {
+      this.hudBossTrack.setVisible(true).setAlpha(bossA).setPosition(bar.x, bar.y);
+      if (this.hudBossTrack.pw !== bar.w) this.hudBossTrack.resize(bar.w, bar.h);
+      this.hudBossFill.setPosition(bar.x, bar.y).setAlpha(bossA);
+      this.setPixelFill(this.hudBossFill, bar.w, shownBoss.pct, P);
+      const word = shownBoss.attack ? `${shownBoss.name} · ${shownBoss.attack}` : shownBoss.name;
+      this.bossNameText.setVisible(true).setText(word).setAlpha(bossA).setPosition(bar.x, bar.y - 10 * P);
+      sig.push(bossA, shownBoss.phase, shownBoss.phases, bar.x, bar.y);
     } else {
-      this.bossHealthBarBg.setVisible(false);
-      this.bossHealthBar.setVisible(false);
+      this.hudBossTrack.setVisible(false);
+      this.hudBossFill.setVisible(false);
       this.bossNameText.setVisible(false);
+      sig.push(0);
     }
+
+    // ---- redraw the pixel layer only when something visible changed
+    const key = sig.join('|');
+    if (key !== this._hudSig) {
+      this._hudSig = key;
+      g.clear();
+      // shield: cyan sliver on the HP bar bottom
+      if (shieldW > 0) { g.fillStyle(PX.cyan, 1); g.fillRect(X.hp.x + 2 * P, X.hp.y + X.hp.h - 3 * P, shieldW * P, P); }
+      // low HP: blinking red frame
+      if (m.hpLow && blink) {
+        g.fillStyle(PX.red, 1);
+        g.fillRect(X.hp.x - P, X.hp.y - P, X.hp.w + 2 * P, P);
+        g.fillRect(X.hp.x - P, X.hp.y + X.hp.h, X.hp.w + 2 * P, P);
+        g.fillRect(X.hp.x - P, X.hp.y, P, X.hp.h);
+        g.fillRect(X.hp.x + X.hp.w, X.hp.y, P, X.hp.h);
+      }
+      // mode dot (3 art radius gem)
+      drawPixelDisc(g, X.dot.x, X.dot.y, { r: 3, P, fill: m.mode.color, light: mixColor(m.mode.color, 0xffffff, 0.5) });
+      // weapon
+      const wr = Math.max(9, Math.round(wp.r / P));
+      drawPixelDisc(g, snapPx(wp.x, P), snapPx(wp.y, P), { r: wr, P, fill: PX.night, light: PX.dusk });
+      drawPixelDisc(g, snapPx(wp.x, P), snapPx(wp.y, P), { r: wr - 5, P, fill: m.weapon.color, light: mixColor(m.weapon.color, 0xffffff, 0.55), dark: mixColor(m.weapon.color, 0x0f1228, 0.6) });
+      drawSegRing(g, snapPx(wp.x, P), snapPx(wp.y, P), { r: wr - 1, thick: 2, P, filled: wSteps < 0 ? 0 : wSteps, on: m.weapon.color, off: PX.slate });
+      // buffs
+      for (const b of buffPos) {
+        drawPixelDisc(g, b.x, b.y, { r: ringR + 1, P, fill: PX.night, outline: PX.ink });
+        drawSegRing(g, b.x, b.y, { r: ringR, thick: 2, P, filled: b.chip.steps, on: b.chip.color, off: PX.dusk });
+        if (b.chip.revive) drawPixelDisc(g, b.x + 10 * P, b.y - 11 * P, { r: 6, P, fill: PX.green, dark: PX.greenD });
+      }
+      // ability
+      if (ab) this.drawAbilityChip(g, L, now, null, ab, blink);
+      // boss phase pips (right end, above the bar)
+      if (bossA > 0 && shownBoss && shownBoss.phases > 1) {
+        for (let i = 0; i < shownBoss.phases; i++) {
+          const px = bar.x + bar.w - (shownBoss.phases - i) * 7 * P + 3 * P;
+          drawPixelDisc(g, px, bar.y - 6 * P, { r: 3, P, fill: i < shownBoss.phase ? PX.red : PX.dusk, light: i < shownBoss.phase ? 0xffb0bf : null, alpha: bossA });
+        }
+      }
+    }
+
+    // ---- desktop tooltip on hover
+    this.updateHudTooltip(null, hovers);
 
     // Sync game state to Electron tray (if running in desktop app)
     if (window.electronAPI?.updateGameState) {
       window.electronAPI.updateGameState({
-        level: state.level,
-        xp: state.xp,
-        xpToNext: xpNeeded,
-        weapon: weaponLabel,
+        level: m.level,
+        xp: input.xp,
+        xpToNext: input.xpNeeded,
+        weapon: m.weapon.label,
         wave: this.waveNumber,
         isPlaying: true
       });
     }
   }
 
-  showXPPopup(amount) {
-    // Subtle XP blip sound
-    Audio.playXPGain();
-
-    // Check for CLI source info (from live XP server)
-    const source = window.VIBE_CODER?.lastXPSource;
-    const hasSource = source && source.name && source.name !== 'CODE';
-
-    // Format text with optional source tag
-    const text = hasSource ? `+${amount} XP [${source.name}]` : `+${amount} XP`;
-    const color = hasSource ? source.color : '#00ffff';
-
-    const popup = this.add.text(
-      this.player.x + Phaser.Math.Between(-30, 30),
-      this.player.y - 40,
-      text,
-      {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: hasSource ? '16px' : '14px', // Slightly larger for CLI XP
-        color: color,
-        fontStyle: 'bold',
-        stroke: '#000000',
-        strokeThickness: hasSource ? 2 : 0
-      }
-    ).setOrigin(0.5);
-
-    // Clear the source after displaying
-    if (window.VIBE_CODER?.lastXPSource) {
-      window.VIBE_CODER.lastXPSource = null;
+  /** Hover tooltip (mouse only): name of the icon under the pointer, in a pixel chip. */
+  updateHudTooltip(_g, hovers) {
+    const tip = this.hudTooltip;
+    if (!tip) return;
+    const ptr = this.input?.activePointer;
+    const touch = this.touchControls?.enabled || ptr?.wasTouch;
+    let hit = null;
+    if (ptr && !touch && !this.isPaused) {
+      hit = hovers.find((h) => h.label && (ptr.x - h.x) ** 2 + (ptr.y - h.y) ** 2 <= h.r * h.r);
     }
+    if (!hit) { tip.setVisible(false); this.hudTooltipBg.setVisible(false); return; }
+    const L = this.hudLayout;
+    const P = L.px;
+    tip.setText(hit.label).setVisible(true);
+    const w = Math.ceil((tip.width + 10 * P) / P) * P;
+    const h = 13 * P;
+    const above = hit.y > this.scale.height / 2;
+    const ty = snapPx(above ? hit.y - hit.r - L.gap - h : hit.y + hit.r + L.gap, P);
+    const tx = snapPx(Phaser.Math.Clamp(hit.x, w / 2 + L.pad, this.scale.width - w / 2 - L.pad), P);
+    if (this.hudTooltipBg.pw !== w) this.hudTooltipBg.resize(w, h);
+    this.hudTooltipBg.setVisible(true).setPosition(tx - w / 2, ty);
+    tip.setPosition(tx, ty + 3 * P);
+  }
 
-    // Animate popup
-    this.tweens.add({
-      targets: popup,
-      y: popup.y - 50,
-      alpha: 0,
-      duration: 1000,
-      ease: 'Power2',
-      onComplete: () => popup.destroy()
+  /**
+   * Adaptive graphics quality (docs/PERFORMANCE.md). Samples actualFps every 500 ms; a slow median
+   * after warm-up switches MapManager to its single-layer background for the rest of the session.
+   * Force with ?quality=low|high or localStorage `vibeCoderGraphicsQuality`.
+   */
+  startQualityGovernor() {
+    let forced = null;
+    try {
+      const fromUrl = new URLSearchParams(window.location.search).get('quality');
+      const stored = window.localStorage?.getItem('vibeCoderGraphicsQuality');
+      forced = [fromUrl, stored].find((v) => QUALITY_LEVELS.includes(v)) || null;
+    } catch (e) {
+      logger.debug('[Quality] could not read the forced level:', e?.message || e);
+    }
+    // A previous run in this session already proved the machine is slow: start low.
+    if (!forced && window.VIBE_GRAPHICS_QUALITY === 'low') forced = 'low';
+    this.qualityState = createQualityState({ forced, startAt: this.game.loop.time });
+    if (this.qualityState.level === 'low') this.applyGraphicsQuality('low');
+    if (this.qualityTimer) this.qualityTimer.remove(false);
+    this.qualityTimer = this.time.addEvent({ delay: 500, loop: true, callback: this.sampleQuality, callbackScope: this });
+  }
+
+  sampleQuality() {
+    const prev = this.qualityState?.level;
+    this.qualityState = stepQuality(this.qualityState, {
+      now: this.game.loop.time,
+      fps: this.game.loop.actualFps,
+      hidden: typeof document !== 'undefined' && document.hidden
     });
+    if (this.qualityState && this.qualityState.level !== prev) {
+      logger.log(`[Quality] ${prev} -> ${this.qualityState.level} (${this.qualityState.reason})`);
+      this.applyGraphicsQuality(this.qualityState.level);
+    }
+  }
 
+  applyGraphicsQuality(level) {
+    window.VIBE_GRAPHICS_QUALITY = level;
+    if (this.mapManager) this.mapManager.setQuality(level);
+  }
+
+  /**
+   * Bottom-right ability: pixel disc + 12-step cooldown ring, seconds in pixel font while cooling,
+   * on/off blink when ready. Two passes: g == null updates texts / hover and returns the quantised
+   * state; with g (only when the HUD signature changed) it draws that state.
+   */
+  drawAbilityChip(g, L, now, hovers = [], state = null, blink = true) {
+    const a = this.hudAbility;
+    const P = L.px;
+    if (!g) {
+      const chip = a ? abilityChipModel(this.abilities?.getHudModel?.() ?? null, { now }) : null;
+      if (!chip) {
+        if (this.hudAbilityKeyText) this.hudAbilityKeyText.setVisible(false);
+        if (this.hudAbilityHint) this.hudAbilityHint.setVisible(false);
+        return null;
+      }
+      const cooling = !chip.ready && !chip.active;
+      this.hudAbilityKeyText.setVisible(cooling).setText(cooling ? chip.timeText.replace(/s$/, '') : '');
+      const showHint = !a.touch && !L.compact && now - (this.hudStartedAt ?? now) < 10000;
+      this.hudAbilityHint.setVisible(showHint).setText(chip.keyText);
+      if (hovers) hovers.push({ x: a.x, y: a.y, r: a.r, label: chip.name });
+      return { steps: stepsFilled(chip.ringPct), ready: chip.ready, active: chip.active, color: chip.color };
+    }
+    const R = Math.max(11, Math.round(a.r / P));
+    const c = state.color;
+    drawPixelDisc(g, a.x, a.y, { r: R + 1, P, fill: PX.night, light: PX.dusk, outline: PX.ink });
+    if (state.active) drawSegRing(g, a.x, a.y, { r: R + 3, thick: 1, segments: 1, P, filled: 1, on: PX.white });
+    drawSegRing(g, a.x, a.y, { r: R, thick: 2, P, filled: state.steps, on: c, off: PX.slate });
+    if (state.ready) {
+      const lit = blink || state.active;
+      drawPixelDisc(g, a.x, a.y, { r: Math.max(4, R - 6), P, fill: lit ? c : mixColor(c, PX.night, 0.55), light: lit ? mixColor(c, 0xffffff, 0.5) : null, dark: mixColor(c, PX.ink, 0.65) });
+    }
+    return state;
+  }
+
+  /** XP gains are shown by the XP bar; no floating text (ui/hud-minimal-v2). */
+  showXPPopup(_amount) {
+    Audio.playXPGain();
+    if (window.VIBE_CODER?.lastXPSource) window.VIBE_CODER.lastXPSource = null;
     this.updateHUD();
   }
 
@@ -1822,28 +2005,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Level up song (slightly quieter)
     Audio.playLevelUpSong();
 
-    // Screen flash
-    this.cameras.main.flash(200, 0, 255, 255);
-
-    // Big level up text (fixed to camera center)
-    const levelUpText = this.add.text(400, 300, `LEVEL ${level}!`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '48px',
-      color: '#00ffff',
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 4
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    // Animate
-    this.tweens.add({
-      targets: levelUpText,
-      scale: 1.5,
-      alpha: 0,
-      duration: 1500,
-      ease: 'Power2',
-      onComplete: () => levelUpText.destroy()
-    });
+    this.showHudBanner(`${t('game.level_up')} ${level}`, { color: HUD.violet, duration: 1400 });
 
     // Update player health on level up
     const newMaxHealth = this.getStats().maxHealth;
@@ -1868,118 +2030,42 @@ export default class ArenaScene extends Phaser.Scene {
     const centerX = w / 2;
     const centerY = h / 2;
 
-    // Create banner container — centro de la pantalla
-    const banner = this.add.container(centerX, centerY).setScrollFactor(0).setDepth(1000);
+    this.showHudBanner(mod.name, { subtitle: mod.desc, color: mod.color ?? HUD.magenta, duration: 2600 });
 
-    // Background — más grande para leer bien (no excesivo)
-    const boxW = 420;
-    const boxH = 88;
-    const bg = this.add.rectangle(0, 0, boxW, boxH, 0x000000, 0.92);
-    bg.setStrokeStyle(4, mod.color);
-
-    // Modifier text — título más grande
-    const modText = this.add.text(0, -18, `${mod.icon} ${mod.name}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '26px',
-      color: this.hexToColorStr(mod.color),
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-
-    // Description — descripción legible
-    const descText = this.add.text(0, 18, mod.desc, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '15px',
-      color: '#cccccc'
-    }).setOrigin(0.5);
-
-    banner.add([bg, modText, descText]);
-
-    // Animate in (desde arriba al centro)
-    banner.y = centerY - 120;
-    this.tweens.add({
-      targets: banner,
-      y: centerY,
-      duration: 500,
-      ease: 'Back.easeOut'
-    });
-
-    // Animate out after delay
-    this.time.delayedCall(4000, () => {
-      this.tweens.add({
-        targets: banner,
-        y: centerY - 120,
-        alpha: 0,
-        duration: 500,
-        onComplete: () => banner.destroy()
-      });
-    });
-
-    console.log(`Run modifier active: ${mod.name}`);
+    logger.log(`Run modifier active: ${mod.name}`);
   }
 
+  /**
+   * (Re)start the time-driven wave flow at this.waveNumber: new run, continue from a save, or after the
+   * rebirth prompt. Vampire Survivors rules: the wave advances by clock (WAVE_DURATION_MS) in
+   * updateSpawnDirector(); killing never ends a wave and bosses never stop the normal spawn flow.
+   */
   startWave() {
+    if (this.spawnTimer && this.spawnTimer.destroy) this.spawnTimer.destroy();
+    if (this.waveTimer && this.waveTimer.destroy) this.waveTimer.destroy();
+    this.spawnTimer = null;
+    this.waveTimer = null;
+    this.waveClockMs = 0;
+    this.waveClockHold = false;
+    const seed = (Date.now() ^ Math.imul(this.waveNumber || 1, 2654435761)) >>> 0;
+    this.spawnRng = createRng(seed ^ 0x9e3779b9);
+    this.spawnDirector = createDirector({ startWave: this.waveNumber, pool: this.enemyTypes }, seed);
+    this.beginWave();
+  }
+
+  /** Per-wave start hooks: stage change, boss / mini-boss, random EventManager event, high-wave record. */
+  beginWave() {
     // Ensure player can be hit from wave 1 (no stuck invincible)
     if (this.waveNumber === 1) this.invincible = false;
-    // Check for stage transition
     this.checkStageChange();
 
-    // Check if this is a boss wave (every 20 waves)
-    if (this.waveNumber % 20 === 0) {
+    if (isBossWave(this.waveNumber)) {
       this.spawnBoss();
-      // Don't spawn normal enemies on boss waves
-      this.spawnTimer = { getRemaining: () => 0 };
-
-      this.waveTimer = this.time.addEvent({
-        delay: 2000,
-        callback: () => this.checkWaveComplete(),
-        loop: true
-      });
-      return;
-    }
-
-    // Mini-boss waves: 10, 30, 50, 70... (every 20 starting at 10)
-    const isMiniBossWave = this.waveNumber >= 10 && this.waveNumber % 20 === 10;
-    if (isMiniBossWave) {
-      this.spawnMiniBoss();
-    }
-
-    // Try to trigger a random event
-    if (this.eventManager) {
-      this.eventManager.tryTriggerEvent(this.waveNumber);
-    }
-
-    // Spawn enemies over time — balance.js: wave scale and spawn delay
-    let spawned = 0;
-    let waveScale;
-    if (this.waveNumber < 10) {
-      waveScale = this.waveNumber * BALANCE.WAVE_SCALE_EARLY;
-    } else if (this.waveNumber < 25) {
-      waveScale = this.waveNumber * BALANCE.WAVE_SCALE_MID;
     } else {
-      waveScale = this.waveNumber * BALANCE.WAVE_SCALE_LATE;
+      // Mini-boss waves: 10, 30, 50, 70... (every 20 starting at 10)
+      if (isMiniBossWave(this.waveNumber)) this.spawnMiniBoss();
+      if (this.eventManager) this.eventManager.tryTriggerEvent(this.waveNumber);
     }
-    const toSpawn = Math.min(this.enemiesPerWave + Math.floor(waveScale), BALANCE.SPAWN_CAP);
-    let spawnDelay = this.waveNumber >= 8
-      ? Math.max(BALANCE.SPAWN_DELAY_MIN, BALANCE.SPAWN_DELAY_BASE - this.waveNumber * BALANCE.SPAWN_DELAY_PER_WAVE)
-      : BALANCE.SPAWN_DELAY_BASE;
-
-    this.spawnTimer = this.time.addEvent({
-      delay: spawnDelay,
-      callback: () => {
-        if (spawned < toSpawn) {
-          this.spawnEnemy();
-          spawned++;
-        }
-      },
-      repeat: toSpawn - 1
-    });
-
-    // Check for wave completion
-    this.waveTimer = this.time.addEvent({
-      delay: 2000,
-      callback: () => this.checkWaveComplete(),
-      loop: true
-    });
 
     // Update high wave record (wallet-backed)
     if (this.waveNumber > this.highWave) {
@@ -1991,90 +2077,94 @@ export default class ArenaScene extends Phaser.Scene {
     }
   }
 
-  checkWaveComplete() {
-    const bossAlive = this.currentBoss && this.currentBoss.active;
-    const enemiesCleared = this.enemies.countActive() === 0;
-    const spawnDone = this.spawnTimer && !this.spawnTimer.getRemaining();
+  /** Camera half extents in world units: the director spawns 1.1-1.3x beyond this rectangle (off-screen). */
+  getSpawnViewRadius() {
+    const cam = this.cameras && this.cameras.main;
+    const zoom = cam && cam.zoom > 0 ? cam.zoom : 1;
+    const w = (cam && cam.width) || this.scale?.width || 800;
+    const h = (cam && cam.height) || this.scale?.height || 720;
+    return { halfW: w / zoom / 2, halfH: h / zoom / 2 };
+  }
 
-    if (enemiesCleared && spawnDone && !bossAlive) {
-      // Wave complete sound!
-      Audio.playWaveComplete();
-      // Pop-up animado oleada completada / Wave cleared pop-up
-      this.showEventPopUp(t('game.wave_cleared'), `Wave ${this.waveNumber} → ${this.waveNumber + 1}`, 1500);
+  /** Centre of what the camera shows (differs from the player when the camera is clamped at a world edge). */
+  getSpawnViewCenter() {
+    const wv = this.cameras && this.cameras.main && this.cameras.main.worldView;
+    if (wv && wv.width > 0 && Number.isFinite(wv.centerX) && Number.isFinite(wv.centerY)) return { x: wv.centerX, y: wv.centerY };
+    return { x: this.player.x, y: this.player.y };
+  }
 
-      this.waveNumber++;
-      this.waveText.setText(`WAVE ${this.waveNumber}`);
-
-      // Refresh arena background when crossing wave ranges (1–3, 4–6, 7–9, 10–12, 16–18, 19+)
-      const prevBgIndex = this.getArenaBgIndex(this.waveNumber - 1);
-      const nextBgIndex = this.getArenaBgIndex(this.waveNumber);
-      if (nextBgIndex !== prevBgIndex) this.createBackground();
-
-      // Wave complete bonus XP (more for boss waves)
-      const wassBossWave = (this.waveNumber - 1) % 20 === 0;
-      const waveXpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
-      window.VIBE_CODER.addXP(Math.floor(this.waveNumber * (wassBossWave ? 100 : 25) * waveXpMult));
-
-      // Auto-save at wave completion
-      this.autoSaveRun();
-
-      // Save progress to leaderboard (so wave 13 etc. shows even if player hasn't died yet)
-      const state = window.VIBE_CODER;
-      const settings = window.VIBE_SETTINGS || {};
-      const nameForLeaderboard = (settings.playerName && String(settings.playerName).trim()) || (() => {
-        const cid = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
-        const ch = window.VIBE_CHARACTERS?.[cid];
-        return ch ? (ch.displayName_en || ch.displayName || ch.name || '') : '';
-      })() || 'Anonymous';
-      stellarWallet.getAddress().then((addr) => {
-        const displayName = addr ? nameForLeaderboard : (settings.playerName || 'Anonymous');
-        LeaderboardManager.addEntry(displayName, this.waveNumber, state.totalXP);
-        if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, state.totalXP, nameForLeaderboard).catch(() => {});
-      });
-
-      // Check for rebirth milestone
-      const rebirthMilestone = RebirthManager.canRebirth(this.waveNumber);
-      if (rebirthMilestone && !this.rebirthPromptShown) {
-        this.showRebirthPrompt(rebirthMilestone);
-        return; // Don't auto-start next wave, wait for player choice
-      }
-
-      // Start next wave after delay
-      this.time.delayedCall(2000, () => this.startWave());
-
-      // Show wave text with special boss wave indicator
-      const isBossWave = this.waveNumber % 20 === 0;
-      const waveColor = isBossWave ? '#ff0000' : '#ff00ff';
-      const waveText = isBossWave ? `⚠ BOSS WAVE ${this.waveNumber} ⚠` : `WAVE ${this.waveNumber}`;
-
-      const waveAnnounce = this.add.text(400, 200, waveText, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: isBossWave ? '28px' : '32px',
-        color: waveColor,
-        fontStyle: 'bold'
-      }).setOrigin(0.5).setScrollFactor(0);
-
-      this.tweens.add({
-        targets: waveAnnounce,
-        alpha: 0,
-        scale: isBossWave ? 1.5 : 1,
-        duration: 2000,
-        onComplete: () => waveAnnounce.destroy()
-      });
-
-      // Screen shake for boss wave announcement
-      if (isBossWave) {
-        this.cameras.main.shake(500, 0.01);
-      }
+  /** Called every frame from update(): advances the run clock and spawns what the director asks for. */
+  updateSpawnDirector(deltaMs) {
+    const d = this.spawnDirector;
+    if (!d || this.playerDead || this.waveClockHold || !this.player || !this.player.active || !this.enemies) return;
+    const dt = Number.isFinite(deltaMs) && deltaMs > 0 ? Math.min(deltaMs, 100) : 0;
+    this.waveClockMs += dt;
+    const res = directorTick(d, {
+      nowMs: this.waveClockMs,
+      aliveCount: this.enemies.countActive(),
+      playerPos: this.getSpawnViewCenter(),
+      viewRadius: this.getSpawnViewRadius()
+    });
+    if (res.waveChanged && res.wave > this.waveNumber) this.advanceWave(res.wave);
+    for (const s of res.spawns) this.spawnEnemy(s);
+    if (res.event) {
+      for (const s of res.event.spawns) this.spawnEnemy(s);
+      const labels = { swarm: 'SWARM', horde: 'HORDE', elitePack: 'ELITE PACK' };
+      this.showHudBanner(labels[res.event.kind] || res.event.kind, { color: HUD.rose, duration: 1400 });
+      logger.log(`[waves] event ${res.event.kind} x${res.event.spawns.length} at wave ${this.waveNumber}`);
     }
   }
 
-  spawnBoss() {
+  /** The clock crossed into `newWave`: rewards, save, leaderboard, rebirth milestone, banner, wave hooks. */
+  advanceWave(newWave) {
+    const prevWave = this.waveNumber;
+    this.waveNumber = newWave;
+    Audio.playWaveComplete();
+    if (this.mapManager) this.mapManager.onWaveChanged(this.waveNumber);
+
+    // Refresh arena background when crossing wave ranges (1–3, 4–6, 7–9, 10–12, 16–18, 19+)
+    if (this.getArenaBgIndex(newWave) !== this.getArenaBgIndex(prevWave)) this.createBackground();
+
+    // Survival bonus XP (more after a boss wave)
+    const waveXpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
+    window.VIBE_CODER.addXP(Math.floor(newWave * (isBossWave(prevWave) ? 100 : 25) * waveXpMult));
+
+    this.autoSaveRun();
+
+    // Save progress to leaderboard (so wave 13 etc. shows even if player hasn't died yet)
+    const state = window.VIBE_CODER;
+    const settings = window.VIBE_SETTINGS || {};
+    const nameForLeaderboard = (settings.playerName && String(settings.playerName).trim()) || (() => {
+      const cid = this.playingCharacterId ?? progressStore?.selectedCharacter ?? window.VIBE_SELECTED_CHARACTER ?? 'vibecoder';
+      const ch = window.VIBE_CHARACTERS?.[cid];
+      return ch ? (ch.displayName_en || ch.displayName || ch.name || '') : '';
+    })() || 'Anonymous';
+    stellarWallet.getAddress().then((addr) => {
+      const displayName = addr ? nameForLeaderboard : (settings.playerName || 'Anonymous');
+      LeaderboardManager.addEntry(displayName, this.waveNumber, getRunScore(state));
+      if (addr) LeaderboardManager.submitOnChain(addr, this.waveNumber, getRunScore(state), nameForLeaderboard).catch(() => {});
+    });
+
+    // Rebirth milestone: hold the clock; CONTINUE calls startWave() which resumes at this wave.
+    const rebirthMilestone = RebirthManager.canRebirth(this.waveNumber);
+    if (rebirthMilestone && !this.rebirthPromptShown) {
+      this.waveClockHold = true;
+      this.showRebirthPrompt(rebirthMilestone);
+      return;
+    }
+
+    // Brief wave banner (1.2 s); boss waves get the rose accent.
+    const bossWave = isBossWave(this.waveNumber);
+    this.showHudBanner(`${t('hud.wave')} ${this.waveNumber}`, { color: bossWave ? HUD.rose : HUD.violet, duration: 1200 });
+    if (bossWave) this.cameras.main.shake(500, 0.01);
+
+    this.beginWave();
+  }
+
+  /** @param {string} [bossKeyOverride] force a boss id (debug / screenshot scripts); default: boss for this wave. */
+  spawnBoss(bossKeyOverride) {
     // Determine which boss to spawn based on wave
-    let bossKey = 'boss-stackoverflow';
-    if (this.waveNumber >= 80) bossKey = 'boss-kernelpanic';
-    else if (this.waveNumber >= 60) bossKey = 'boss-memoryleakprime';
-    else if (this.waveNumber >= 40) bossKey = 'boss-nullpointer';
+    const bossKey = bossKeyOverride && this.bossTypes[bossKeyOverride] ? bossKeyOverride : getBossForWave(this.waveNumber);
 
     const bossData = this.bossTypes[bossKey];
 
@@ -2087,7 +2177,10 @@ export default class ArenaScene extends Phaser.Scene {
     // Spawn boss near player (above them)
     const bossX = Phaser.Math.Clamp(this.player.x, 100, this.worldWidth - 100);
     const bossY = Math.max(50, this.player.y - 300);
-    const boss = this.enemies.create(bossX, bossY, bossKey);
+    const bossTexture = bossData.texture && this.textures.exists(bossData.texture) ? bossData.texture : bossKey;
+    const boss = this.enemies.create(bossX, bossY, bossTexture);
+    if (bossTexture !== bossKey) boss.setScale(1.5); // 64px v2 sheet
+    if (bossData.anim && this.anims.exists(bossData.anim)) boss.play(bossData.anim);
     boss.health = Math.floor(bossData.health * healthScale);
     boss.maxHealth = boss.health;
     const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
@@ -2100,6 +2193,11 @@ export default class ArenaScene extends Phaser.Scene {
     boss.bossColor = bossData.color;
     boss.ability = bossData.ability;
     boss.lastAbilityTime = 0;
+    boss.bossNameKey = bossData.nameKey;
+    // Telegraphed attacks hit with the full boss damage; plain contact is softened (mechanics.contactDamageMult).
+    boss.attackDamage = boss.damage;
+    boss.damage = Math.max(1, Math.floor(boss.damage * (bossData.mechanics?.contactDamageMult ?? 1)));
+    this.attachBossBrain(boss, bossData.mechanics);
 
     // Set boss as current boss for health bar
     this.currentBoss = boss;
@@ -2134,72 +2232,70 @@ export default class ArenaScene extends Phaser.Scene {
     });
 
     this.updateHUD();
+    return boss;
+  }
+
+  /** Keep a spawn point inside the world: mirror across the player on an out-of-bounds axis (same distance). */
+  clampSpawnToWorld(x, y) {
+    const c = this.player ? this.getSpawnViewCenter() : { x, y };
+    const px = c.x;
+    const py = c.y;
+    const m = 50;
+    if (x < m || x > this.worldWidth - m) x = 2 * px - x;
+    if (y < m || y > this.worldHeight - m) y = 2 * py - y;
+    return {
+      x: Phaser.Math.Clamp(x, m, this.worldWidth - m),
+      y: Phaser.Math.Clamp(y, m, this.worldHeight - m)
+    };
   }
 
   /**
-   * Build weighted spawn pool from enemyTypes definitions.
-   * Each enemy appears once the current wave >= its waveMin,
-   * repeated by its spawnWeight (default 1).
+   * Spawn one regular enemy. `spawn` comes from the spawn director ({type, x, y, elite, march?}); with no
+   * argument (legacy callers such as EventManager SWARM) a director-style point/type is rolled here.
+   * Stats: base * waveStatScale(wave) * gentle player-level scaling — difficulty comes from the count.
    */
-  buildSpawnPool(wave) {
-    // Wave 1 uses same spawn pool as wave 2 so all types that appear in wave 2 can appear in wave 1
-    const effectiveWave = wave < 2 ? 2 : wave;
-    const pool = [];
-    for (const [type, data] of Object.entries(this.enemyTypes)) {
-      const waveMin = data.waveMin ?? 0;
-      if (effectiveWave >= waveMin) {
-        const weight = data.spawnWeight ?? 1;
-        for (let i = 0; i < weight; i++) {
-          pool.push(type);
-        }
-      }
+  spawnEnemy(spawn) {
+    if (this.enemies.countActive() >= (BALANCE.DIRECTOR_HARD_CAP ?? 360)) return null;
+    const rng = this.spawnRng || Math.random;
+    const wave = this.waveNumber;
+    let type;
+    let elite;
+    let px;
+    let py;
+    if (spawn && typeof spawn === 'object' && spawn.type && this.enemyTypes[spawn.type] && Number.isFinite(spawn.x) && Number.isFinite(spawn.y)) {
+      type = spawn.type;
+      elite = !!spawn.elite;
+      px = spawn.x;
+      py = spawn.y;
+    } else {
+      type = pickEnemyType(rng, wave, this.enemyTypes);
+      elite = rng() < eliteModChance(wave);
+      const pt = spawnPointOutsideView(rng, this.getSpawnViewCenter(), this.getSpawnViewRadius());
+      px = pt.x;
+      py = pt.y;
     }
-    return pool;
-  }
+    if (!type) return null;
+    const { x, y } = this.clampSpawnToWorld(px, py);
 
-  spawnEnemy() {
-    // CAP enemies on screen to prevent overwhelming at high levels
-    const MAX_ENEMIES = 30;
-    if (this.enemies.countActive() >= MAX_ENEMIES) return;
-
-    // Spawn in a ring around the player (not screen edges)
-    const spawnRadius = 500; // Distance from player
-    const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
-
-    let x = this.player.x + Math.cos(angle) * spawnRadius;
-    let y = this.player.y + Math.sin(angle) * spawnRadius;
-
-    // Clamp to world bounds
-    x = Phaser.Math.Clamp(x, 50, this.worldWidth - 50);
-    y = Phaser.Math.Clamp(y, 50, this.worldHeight - 50);
-
-    // Choose enemy type based on wave with scaling pools
     const playerLevel = Math.max(1, window.VIBE_CODER.level || 1);
-    // Scale with player level so higher level = harder enemies (still killable, but reaching wave 100 is tough)
     const levelHealthMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_HEALTH_FACTOR ?? 0.1), BALANCE.LEVEL_HEALTH_CAP ?? 6);
     const levelSpeedMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_SPEED_FACTOR ?? 0.03), BALANCE.LEVEL_SPEED_CAP ?? 2.2);
     const levelDamageMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_DAMAGE_FACTOR ?? 0.06), BALANCE.LEVEL_DAMAGE_CAP ?? 4);
+    const waveScale = waveStatScale(wave);
 
-    // Build spawn pool from enemyTypes data (waveMin + spawnWeight)
-    const spawnPool = this.buildSpawnPool(this.waveNumber);
-
-    const type = Phaser.Utils.Array.GetRandom(spawnPool);
-    if (!type) return;
     const typeData = this.enemyTypes[type];
     const textureName = typeData.texture || type;
 
     const enemy = this.enemies.create(x, y, textureName);
     // Vida: base + oleada + nivel jugador
-    const waveHealthMult = 1 + (this.waveNumber - 1) * 0.05;
-    enemy.health = Math.floor(typeData.health * levelHealthMult * waveHealthMult);
+    enemy.health = Math.max(1, Math.floor(typeData.health * levelHealthMult * waveScale.health));
     enemy.maxHealth = enemy.health;
     // Apply event speed modifier (e.g., CURSE event)
     const speedMod = this.eventEnemySpeedMod || 1;
-    const waveSpeedMult = Math.min(BALANCE.WAVE_SPEED_CAP, 1 + (this.waveNumber - 1) * BALANCE.WAVE_SPEED_FACTOR);
     const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
-    enemy.speed = Math.floor(typeData.speed * speedMod * waveSpeedMult * mobSpeedMult * levelSpeedMult);
+    enemy.speed = Math.floor(typeData.speed * speedMod * waveScale.speed * mobSpeedMult * levelSpeedMult);
     // Daño: oleada + nivel jugador
-    const damageScale = 1 + this.waveNumber * BALANCE.WAVE_DAMAGE_FACTOR;
+    const damageScale = waveScale.damage;
     const enemyDmgMult = BALANCE.ENEMY_DAMAGE_MULT ?? 1;
     let baseDmg = Math.max(1, Math.floor(typeData.damage * damageScale * enemyDmgMult * levelDamageMult));
     enemy.damage = baseDmg;
@@ -2208,23 +2304,24 @@ export default class ArenaScene extends Phaser.Scene {
     enemy.behavior = typeData.behavior;
 
     // Elite modifier (random): shield = more health, speedBurst = faster, criticalHit = can deal crit to player
-    if (BALANCE.ELITE_MODIFIERS && BALANCE.ELITE_MODIFIERS.length && Math.random() < BALANCE.ELITE_CHANCE) {
-      const mod = Phaser.Utils.Array.GetRandom(BALANCE.ELITE_MODIFIERS);
+    if (elite && BALANCE.ELITE_MODIFIERS && BALANCE.ELITE_MODIFIERS.length) {
+      const mod = BALANCE.ELITE_MODIFIERS[Math.floor(rng() * BALANCE.ELITE_MODIFIERS.length)] || BALANCE.ELITE_MODIFIERS[0];
       enemy.eliteModifier = mod;
       enemy.isElite = true;
       if (mod === 'shield') {
         enemy.health = Math.floor(enemy.health * 1.5);
         enemy.maxHealth = enemy.health;
-        enemy.setTint(0x4488ff);
+        this.markEliteEnemy(enemy, 0x4488ff);
       } else if (mod === 'speedBurst') {
         enemy.speed = Math.floor(enemy.speed * 1.4);
-        enemy.setTint(0xffaa00);
+        this.markEliteEnemy(enemy, 0xffaa00);
       } else if (mod === 'criticalHit') {
         enemy.canCritPlayer = true;
-        enemy.setTint(0xff2244);
+        this.markEliteEnemy(enemy, 0xff2244);
       }
-    } else {
-      // Colores por peligrosidad (accesibilidad) / Danger-based tint for non-elite
+    } else if (!isV2Texture(textureName)) {
+      // Colores por peligrosidad (accesibilidad) / Danger-based tint for non-elite.
+      // v2 pixel-art sheets carry their own palette: a multiply tint would wash it out.
       enemy.setTint(this.getEnemyDangerTint(baseDmg));
     }
 
@@ -2241,7 +2338,7 @@ export default class ArenaScene extends Phaser.Scene {
     }
 
     // Play enemy animation based on type
-    const animKey = this.getEnemyAnimKey(type);
+    const animKey = typeData.anim || this.getEnemyAnimKey(type);
     if (animKey && this.anims.exists(animKey)) {
       enemy.play(animKey);
     }
@@ -2260,6 +2357,22 @@ export default class ArenaScene extends Phaser.Scene {
       enemy.speedVariance = typeData.speedVariance;
       enemy.nextSpeedChange = this.time.now + Phaser.Math.Between(500, 1500);
       enemy.currentSpeedMod = 1;
+    }
+    // Early-pool behaviors (typo / spam-bot / lag-spike), see updateEarlyEnemyBehavior
+    if (typeData.behavior === 'zigzag') {
+      enemy.zigzagAmp = typeData.zigzagAmp ?? 0.9;
+      enemy.zigzagFreq = typeData.zigzagFreq ?? 0.006;
+      enemy.zigzagPhase = rng() * Math.PI * 2;
+    }
+    if (typeData.behavior === 'dash') {
+      enemy.dashState = 'chase';
+      enemy.dashNextAt = this.time.now + (typeData.dashCooldown ?? 1600) * (0.5 + rng());
+      enemy.dashCfg = { mult: typeData.dashSpeedMult ?? 3.4, ms: typeData.dashMs ?? 420, windup: typeData.windupMs ?? 550, cd: typeData.dashCooldown ?? 1600 };
+    }
+    if (typeData.behavior === 'burst') {
+      enemy.burstCfg = { slow: typeData.burstSlowMs ?? 1200, fast: typeData.burstFastMs ?? 520, mult: typeData.burstSpeedMult ?? 3 };
+      enemy.burstPhaseEnd = this.time.now + enemy.burstCfg.slow * (0.3 + rng());
+      enemy.burstFast = false;
     }
 
     // NEW: Segfault death zone setup - despawns after lifespan
@@ -2354,10 +2467,20 @@ export default class ArenaScene extends Phaser.Scene {
       enemy.cloneCooldown = typeData.cloneCooldown;
       enemy.cloneRadius = typeData.cloneRadius;
     }
+
+    // Director HORDE event: march straight across the screen instead of chasing (update(): case 'march').
+    if (spawn && spawn.march && Number.isFinite(spawn.march.x) && Number.isFinite(spawn.march.y)) {
+      enemy.behavior = 'march';
+      enemy.marchDir = { x: spawn.march.x, y: spawn.march.y };
+      enemy.marchUntil = this.time.now + 14000;
+    }
+    return enemy;
   }
 
-  spawnMiniBoss() {
-    const miniBossData = this.miniBossTypes['miniboss-deadlock'];
+  /** @param {string} [keyOverride] force a mini-boss id (debug / screenshot scripts). */
+  spawnMiniBoss(keyOverride) {
+    const miniBossKey = keyOverride && this.miniBossTypes[keyOverride] ? keyOverride : getMiniBossForWave(this.waveNumber);
+    const miniBossData = this.miniBossTypes[miniBossKey];
 
     const playerLevel = Math.max(1, window.VIBE_CODER.level || 1);
     const levelHealthMult = Math.min(1 + playerLevel * (BALANCE.LEVEL_HEALTH_FACTOR ?? 0.1), BALANCE.LEVEL_HEALTH_CAP ?? 6);
@@ -2368,25 +2491,34 @@ export default class ArenaScene extends Phaser.Scene {
     // Spawn mini-boss near player
     const mbX = Phaser.Math.Clamp(this.player.x + Phaser.Math.Between(-200, 200), 100, this.worldWidth - 100);
     const mbY = Math.max(50, this.player.y - 250);
-    const miniBoss = this.enemies.create(mbX, mbY, 'miniboss');
+    // 'mini-boss' is the procedural fallback generated by BootScene (the old 'miniboss' key never existed).
+    const miniBossTexture = miniBossData.texture && this.textures.exists(miniBossData.texture) ? miniBossData.texture : 'mini-boss';
+    const miniBoss = this.enemies.create(mbX, mbY, miniBossTexture);
+    if (isV2Texture(miniBossTexture)) miniBoss.setScale(1.25); // 48px v2 sheet
+    if (miniBossData.anim && this.anims.exists(miniBossData.anim)) miniBoss.play(miniBossData.anim);
     miniBoss.health = Math.floor(miniBossData.health * healthScale);
     miniBoss.maxHealth = miniBoss.health;
     const mobSpeedMult = BALANCE.MOB_SPEED_MULT ?? 1;
     miniBoss.speed = Math.floor(miniBossData.speed * mobSpeedMult * levelSpeedMult);
     miniBoss.damage = Math.max(1, Math.floor(miniBossData.damage * (1 + this.waveNumber * BALANCE.BOSS_DAMAGE_FACTOR) * levelDamageMult));
     miniBoss.xpValue = miniBossData.xpValue;
-    miniBoss.enemyType = 'miniboss-deadlock';
+    miniBoss.enemyType = miniBossKey;
     miniBoss.isMiniBoss = true;
+    miniBoss.miniBossDef = miniBossData;
+    if (miniBossKey !== 'miniboss-deadlock' && !isV2Texture(miniBossTexture)) miniBoss.setTint(miniBossData.color);
     miniBoss.miniBossName = miniBossData.name;
     miniBoss.miniBossColor = miniBossData.color;
+    this.hudMiniBoss = miniBoss; // HUD boss bar tracks the latest mini-boss
     miniBoss.behavior = 'chase';
     miniBoss.ability = miniBossData.ability;
-    miniBoss.lastAbilityTime = 0;
+    miniBoss.lastAbilityTime = this.time.now;
+    this.attachBossBrain(miniBoss, miniBossData.mechanics);
 
     // Mini-boss entrance
     this.cameras.main.shake(300, 0.01);
 
-    const miniBossAnnounce = this.add.text(400, 150, `⚡ ${miniBossData.name} ⚡`, {
+    const miniBossLabel = miniBossData.nameKey ? t(miniBossData.nameKey) : miniBossData.name;
+    const miniBossAnnounce = this.add.text(400, 150, `⚡ ${miniBossLabel} ⚡`, {
       fontFamily: '"Segoe UI", system-ui, sans-serif',
       fontSize: '20px',
       color: this.hexToColorStr(miniBossData.color),
@@ -2402,239 +2534,505 @@ export default class ArenaScene extends Phaser.Scene {
       duration: 2000,
       onComplete: () => miniBossAnnounce.destroy()
     });
+    return miniBoss;
   }
 
+  /** Resolve a base or evolved weapon def by id (falls back to basic). */
+  resolveWeaponDef(type) {
+    const base = this.weaponTypes && this.weaponTypes[type];
+    if (base) return base;
+    for (const recipe of Object.values(this.evolutionRecipes || {})) {
+      if (recipe.result === type) return recipe;
+    }
+    return this.weaponTypes.basic;
+  }
+
+  /**
+   * Fire the current weapon. Each weapon's identity comes from `weapon.power` (src/data/weapons.js) and the
+   * pure rules in systems/weaponEffects.js: fan / spiral / beam / melee arc / thrust / projectile with
+   * pierce budget, bounces, homing (elite-first), return trip and fork splitting.
+   */
   autoAttack() {
     if (this.isPaused) return;
-
-    // Orbital weapons don't use normal attack - they're always active
-    if (this.currentWeapon.type === 'orbital' || this.currentWeapon.type === 'ringoffire' ||
-        this.currentWeapon.type === 'plasmaorb' || this.currentWeapon.type === 'deathaura') return;
+    const weapon = this.resolveWeaponDef(this.currentWeapon.type);
+    const power = getPower(weapon);
+    // Orbital weapons don't use normal attack - they're always active (updateOrbitals)
+    if (power.orbit || ORBITAL_WEAPON_IDS.includes(this.currentWeapon.type)) return;
 
     const now = this.time.now;
     const stats = this.getStats();
-    let weapon = this.weaponTypes[this.currentWeapon.type];
-
-    // Check evolution recipes for evolved weapons
-    if (!weapon && this.evolutionRecipes) {
-      for (const recipe of Object.values(this.evolutionRecipes)) {
-        if (recipe.result === this.currentWeapon.type) {
-          weapon = recipe;
-          break;
-        }
-      }
-    }
-    if (!weapon) weapon = this.weaponTypes.basic;
-
-    // Apply weapon's attack rate modifier
     const attackDelay = weapon.attackRate > 0 ? stats.attackRate / weapon.attackRate : 999999;
     if (now - this.lastAttackTime < attackDelay) return;
 
-    // Handle AOE weapons (no projectiles, damage around player)
-    if (weapon.special === 'aoe' || weapon.special === 'aura' || weapon.special === 'freezeAoe') {
+    // Pulse weapons (aoe / blizzard): no projectiles, blast in a radius
+    if (power.pattern === 'pulse' || weapon.special === 'aoe' || weapon.special === 'aura' || weapon.special === 'freezeAoe') {
       this.lastAttackTime = now;
       this.doAoeAttack(weapon, stats);
       return;
     }
 
-    // Find nearest enemy
+    // Nearest enemy in range (+ candidate list for elite-seeking homing)
+    const px = this.player.x;
+    const py = this.player.y;
     let nearest = null;
     let nearestDist = Infinity;
-
+    const candidates = power.preferElite ? [] : null;
     this.enemies.children.each((enemy) => {
       if (!enemy.active) return;
-      const dist = Phaser.Math.Distance.Between(
-        this.player.x, this.player.y,
-        enemy.x, enemy.y
-      );
-      if (dist < nearestDist && dist < 300) { // Attack range
+      const dist = Phaser.Math.Distance.Between(px, py, enemy.x, enemy.y);
+      if (dist >= 300) return; // Attack range
+      if (dist < nearestDist) {
         nearestDist = dist;
         nearest = enemy;
       }
+      if (candidates) candidates.push({ enemy, dist, elite: !!(enemy.isBoss || enemy.isMiniBoss || enemy.isElite) });
     });
+    if (!nearest) return;
 
-    if (nearest) {
+    const baseAngle = Phaser.Math.Angle.Between(px, py, nearest.x, nearest.y);
+    const damage = stats.attackDamage * weapon.damage; // fractional: applyOnHit rounds per hit
+
+    // Melee: wide arc (sword family) or long thrust (spear); waits until something is in reach
+    if (power.pattern === 'arc' || power.pattern === 'thrust') {
+      if (nearestDist > (weapon.range || 80) + 20) return;
       this.lastAttackTime = now;
-
-      const baseAngle = Phaser.Math.Angle.Between(
-        this.player.x, this.player.y,
-        nearest.x, nearest.y
-      );
-
-      // Melee weapons with 0 projectiles (sword, spear): spawn one short-range slash so they can hit
-      const meleeRange = weapon.range || 80;
-      if (weapon.melee && (weapon.projectiles === 0 || weapon.projectiles == null) && nearestDist <= meleeRange) {
-        const projectile = this.projectiles.create(this.player.x, this.player.y, 'slash');
-        projectile.setRotation(baseAngle);
-        projectile.damage = Math.floor(stats.attackDamage * weapon.damage);
-        projectile.pierce = !!weapon.pierce;
-        projectile.setTint(weapon.color);
-        this.physics.velocityFromRotation(baseAngle, 380, projectile.body.velocity);
-        const lifetime = 220;
-        this.time.delayedCall(lifetime, () => {
-          if (projectile.active) projectile.destroy();
-        });
-        if (projectile.body && projectile.body.setSize) {
-          projectile.body.setSize(48, 48);
-        }
-        this.cameras.main.shake(50, 0.002);
-        Audio.playShoot();
-        return;
-      }
-
-      // Fire based on weapon type
-      const projectileCount = weapon.projectiles;
-      const spreadAngle = Math.PI / 6; // 30 degrees spread for spread shot
-
-      for (let i = 0; i < projectileCount; i++) {
-        let angle = baseAngle;
-
-        // Spread shot: fan out projectiles
-        if (projectileCount > 1) {
-          const offset = (i - (projectileCount - 1) / 2) * spreadAngle;
-          angle = baseAngle + offset;
-        }
-
-        const projectile = this.projectiles.create(this.player.x, this.player.y, 'slash');
-        projectile.setRotation(angle);
-        projectile.damage = Math.floor(stats.attackDamage * weapon.damage);
-        projectile.pierce = weapon.pierce;
-        projectile.setTint(weapon.color);
-
-        // Mark forkbomb projectiles for chain splitting
-        if (this.currentWeapon.type === 'forkbomb') {
-          projectile.isForkBomb = true;
-          projectile.forkDepth = 0;
-        }
-
-        // Homing projectiles track enemies
-        if (weapon.special === 'homing') {
-          projectile.isHoming = true;
-          projectile.homingTarget = nearest;
-        }
-
-        // Bounce projectiles bounce off walls
-        if (weapon.special === 'bounce') {
-          projectile.isBounce = true;
-          projectile.bouncesLeft = weapon.bounces || 3;
-          projectile.body.setBounce(1, 1);
-          projectile.body.setCollideWorldBounds(true);
-          projectile.body.onWorldBounds = true;
-        }
-
-        // Freeze projectiles slow enemies
-        if (weapon.special === 'freeze') {
-          projectile.isFreeze = true;
-          projectile.slowDuration = weapon.slowDuration || 2000;
-        }
-
-        // Set velocity
-        this.physics.velocityFromRotation(angle, 400, projectile.body.velocity);
-
-        // Pierce projectiles last longer, bounce last even longer
-        let lifetime = weapon.pierce ? 2000 : 1000;
-        if (weapon.special === 'bounce') lifetime = 3000;
-        if (weapon.special === 'homing') lifetime = 2500;
-
-        this.time.delayedCall(lifetime, () => {
-          if (projectile.active) projectile.destroy();
-        });
-      }
-
-      // Screen shake on attack (subtle)
+      if (power.pattern === 'arc') this.doMeleeArc(weapon, damage, baseAngle);
+      else this.doThrust(weapon, damage, baseAngle);
       this.cameras.main.shake(50, 0.002);
-
-      // Play shoot sound
       Audio.playShoot();
+      return;
     }
+
+    this.lastAttackTime = now;
+    if (power.pattern === 'beam') {
+      this.doBeam(weapon, damage, baseAngle);
+      return; // ticks ~10x/s: no shake/sound spam
+    }
+
+    const count = Math.max(1, weapon.projectiles || 1);
+    let angles;
+    if (power.pattern === 'spiral') {
+      this.spiralVolley = (this.spiralVolley || 0) + 1;
+      angles = spiralAngles(count, this.spiralVolley, power.spiralStep || 0.35);
+    } else {
+      const stepDeg = power.fanStepDeg || (power.homing ? 24 : 12);
+      angles = fanAngles(baseAngle, count, Phaser.Math.DegToRad(stepDeg));
+    }
+    let homingTarget = null;
+    if (power.homing) {
+      const picked = pickTarget(candidates || [], { preferElite: !!power.preferElite, range: 300 });
+      homingTarget = (picked && picked.enemy) || nearest;
+    }
+    for (const angle of angles) {
+      this.spawnWeaponProjectile(weapon, px, py, angle, damage, { homingTarget });
+    }
+
+    // Screen shake on attack (subtle)
+    this.cameras.main.shake(50, 0.002);
+    Audio.playShoot();
+  }
+
+  /** One weapon projectile with its power wired in (hit budget, bounces, homing, return trip, split depth). */
+  spawnWeaponProjectile(weapon, x, y, angle, damage, { homingTarget = null, splitDepth = 0, speed = null, lifetime = null } = {}) {
+    const power = getPower(weapon);
+    const projectile = this.projectiles.create(x, y, 'slash');
+    if (!projectile) return null;
+    projectile.damage = damage;
+    projectile.weaponDef = weapon;
+    projectile.hitSet = new Set();
+    projectile.pierceIndex = 0;
+    projectile.hitsLeft = power.pierceCount || (weapon.pierce ? Infinity : 1);
+    projectile.pierce = projectile.hitsLeft > 1; // legacy flag
+    projectile.splitDepth = splitDepth;
+    this.applyWeaponArt(projectile, weapon);
+    projectile.setRotation(angle);
+    const v = speed || power.speed || 400;
+    projectile.flySpeed = v;
+    this.physics.velocityFromRotation(angle, v, projectile.body.velocity);
+
+    let life = power.rangePx ? (power.rangePx / v) * 1000 : (projectile.hitsLeft > 1 ? 2000 : 1000);
+    if (power.homing) {
+      projectile.isHoming = true;
+      projectile.homingTarget = homingTarget;
+      life = 2500;
+    }
+    if (power.bounces) {
+      projectile.isBounce = true;
+      projectile.bouncesLeft = power.bounces; // chaos bounce: more bounces over a longer life (bounceMs)
+      projectile.bounceIndex = 0;
+      projectile.body.setBounce(1, 1);
+      projectile.body.setCollideWorldBounds(true);
+      life = power.bounceMs || 3000;
+    }
+    if (power.returns) {
+      projectile.returns = true;
+      projectile.returning = false;
+      projectile.spawnedAt = this.time.now;
+      projectile.outMs = Math.max(250, ((weapon.range || 160) / v) * 1000 * 1.6);
+      projectile.hitsBudget = projectile.hitsLeft;
+      life = projectile.outMs * 2 + 1500;
+    }
+    if (lifetime) life = lifetime;
+    this.time.delayedCall(life, () => {
+      if (projectile.active) projectile.destroy();
+    });
+    return projectile;
+  }
+
+  /** Laser beam: instant line hit through everything, re-fired every ~100 ms; one reused stretched sprite. */
+  doBeam(weapon, damage, angle) {
+    const power = getPower(weapon);
+    const len = power.beamLength || 420;
+    const px = this.player.x;
+    const py = this.player.y;
+    this.enemies.children.each((enemy) => {
+      if (enemy.active && onLine(px, py, angle, len, enemy.isBoss ? 40 : 16, enemy.x, enemy.y)) {
+        this.dealWeaponHit(enemy, weapon, damage, { quiet: true });
+      }
+    });
+    let beam = this.beamFx;
+    if (!beam || !beam.scene) {
+      const key = weapon.texture && this.textures.exists(weapon.texture) ? weapon.texture : null;
+      beam = key ? this.add.sprite(px, py, key, 0) : this.add.rectangle(px, py, len, 10, weapon.color);
+      if (key && this.anims.exists(`${key}-anim`)) beam.play(`${key}-anim`);
+      beam.setOrigin(0, 0.5).setDepth(8);
+      this.beamFx = beam;
+    }
+    beam.setPosition(px, py).setRotation(angle).setDisplaySize(len, 18).setAlpha(0.95).setVisible(true);
+    if (this.beamFxTimer) this.beamFxTimer.remove(false);
+    this.beamFxTimer = this.time.delayedCall(140, () => {
+      if (beam.scene) beam.setVisible(false);
+    });
+  }
+
+  /** Sword family: every enemy inside the arc (deg) is hit at once + knockback; Excalibur adds a shockwave. */
+  doMeleeArc(weapon, damage, angle) {
+    const power = getPower(weapon);
+    const range = weapon.range || 80;
+    const deg = power.arcDeg || 120;
+    const px = this.player.x;
+    const py = this.player.y;
+    this.enemies.children.each((enemy) => {
+      if (!enemy.active) return;
+      if (!inArc(px, py, angle, deg, range + (enemy.isBoss ? 30 : 0), enemy.x, enemy.y)) return;
+      this.dealWeaponHit(enemy, weapon, damage);
+      if (power.knockback) this.knockback(enemy, px, py, power.knockback);
+    });
+    if (power.shockwave) {
+      this.explodeAt(px, py, power.shockwave.radius, damage * power.shockwave.mult, weapon);
+    }
+    this.spawnSwingFx(weapon, angle, range, deg);
+  }
+
+  /** Spear: long thrust skewering up to pierceCount enemies on a line (damage ramps via pierceIndex when the weapon has pierceRamp). */
+  doThrust(weapon, damage, angle) {
+    const power = getPower(weapon);
+    const range = weapon.range || 120;
+    const px = this.player.x;
+    const py = this.player.y;
+    const hits = [];
+    this.enemies.children.each((enemy) => {
+      if (enemy.active && onLine(px, py, angle, range, enemy.isBoss ? 46 : 22, enemy.x, enemy.y)) hits.push(enemy);
+    });
+    hits.sort((a, b) => Phaser.Math.Distance.Between(px, py, a.x, a.y) - Phaser.Math.Distance.Between(px, py, b.x, b.y));
+    hits.slice(0, power.pierceCount || 3).forEach((enemy, i) => {
+      this.dealWeaponHit(enemy, weapon, damage, { pierceIndex: i });
+      if (power.knockback) this.knockback(enemy, px, py, power.knockback);
+    });
+    this.spawnSwingFx(weapon, angle, range, 0);
+  }
+
+  /** Short-lived swing/thrust sprite (swing-* art; tinted slash fallback). */
+  spawnSwingFx(weapon, angle, range, deg) {
+    const key = weapon.texture && !weapon.texture.startsWith('aura-') && this.textures.exists(weapon.texture) ? weapon.texture : null;
+    const full = deg >= 360;
+    const d = full ? 0 : range * 0.45;
+    const x = this.player.x + Math.cos(angle) * d;
+    const y = this.player.y + Math.sin(angle) * d;
+    const fx = key ? this.add.sprite(x, y, key, 0) : this.add.image(x, y, 'slash').setTint(weapon.color);
+    if (key && this.anims.exists(`${key}-anim`)) fx.play(`${key}-anim`);
+    fx.setDepth(8);
+    fx.setScale((full ? range * 1.6 : range * 1.1) / Math.max(1, fx.width));
+    const sweep = deg > 0 && !full ? Phaser.Math.DegToRad(deg) * 0.35 : 0;
+    fx.setRotation(angle - sweep);
+    const tween = { targets: fx, alpha: { from: 1, to: 0 }, duration: full ? 260 : 200, onComplete: () => fx.destroy() };
+    if (full) tween.rotation = angle + Math.PI * 2;
+    else if (sweep) tween.rotation = angle + sweep;
+    else { tween.x = x + Math.cos(angle) * range * 0.25; tween.y = y + Math.sin(angle) * range * 0.25; }
+    this.tweens.add(tween);
+  }
+
+  /**
+   * Pixel-art skin for a projectile/swing created with the generic 'slash' texture. Weapons with a
+   * `texture` (proj-/swing- sheets) get their pre-coloured frames + anim; orb-/aura- keys and weapons
+   * without art keep the tinted slash. Never uses ADD blend (it erases the pixel outline). Art points +x,
+   * so the caller's rotation toward the velocity is kept; hitbox is re-applied after the frame-size change.
+   */
+  applyWeaponArt(projectile, weapon) {
+    const key = weapon && weapon.texture;
+    const isSkin = key && !key.startsWith('aura-') && !key.startsWith('orb-') && this.textures.exists(key);
+    if (!isSkin) {
+      projectile.setTint(weapon ? weapon.color : 0xffffff);
+      return projectile;
+    }
+    projectile.setTexture(key, 0);
+    projectile.clearTint();
+    projectile.setBlendMode(Phaser.BlendModes.NORMAL);
+    const animKey = `${key}-anim`;
+    if (this.anims.exists(animKey)) projectile.play(animKey);
+    if (projectile.body && projectile.body.setSize) projectile.body.setSize(40, 40, true);
+    return projectile;
   }
 
   doAoeAttack(weapon, stats) {
+    const power = getPower(weapon);
     const radius = weapon.radius || 100;
-    const damage = Math.floor(stats.attackDamage * weapon.damage);
-    const isFreeze = weapon.special === 'freezeAoe';
+    const damage = stats.attackDamage * weapon.damage;
+    // AoE blast lands on the nearest enemy (blizzard and auras stay centred on the player)
+    let cx = this.player.x;
+    let cy = this.player.y;
+    if (power.targeted) {
+      let best = 280;
+      this.enemies.children.each((enemy) => {
+        if (!enemy.active) return;
+        const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
+        if (d < best) {
+          best = d;
+          cx = enemy.x;
+          cy = enemy.y;
+        }
+      });
+    }
 
     // Visual effect - expanding ring
-    const ring = this.add.circle(this.player.x, this.player.y, 10, weapon.color, 0.3);
-    ring.setStrokeStyle(3, weapon.color, 0.8);
+    const auraKey = weapon.texture && weapon.texture.startsWith('aura-') && this.textures.exists(weapon.texture) ? weapon.texture : null;
+    if (auraKey) {
+      const ring = this.add.sprite(cx, cy, auraKey, 0).setDepth(7);
+      ring.setDisplaySize(radius * 2, radius * 2);
+      if (this.anims.exists(`${auraKey}-anim`)) ring.play(`${auraKey}-anim`);
+      this.tweens.add({ targets: ring, alpha: { from: 1, to: 0 }, duration: 300, onComplete: () => ring.destroy() });
+    } else {
+      this.spawnBlastFx(cx, cy, radius, weapon);
+    }
 
-    this.tweens.add({
-      targets: ring,
-      scale: radius / 10,
-      alpha: 0,
-      duration: 300,
-      onComplete: () => ring.destroy()
-    });
-
-    // Damage all enemies in radius
+    // Damage (and freeze/slow via the weapon power) every enemy in radius
+    const r2 = radius * radius;
     this.enemies.children.each((enemy) => {
       if (!enemy.active) return;
-      const dist = Phaser.Math.Distance.Between(
-        this.player.x, this.player.y,
-        enemy.x, enemy.y
-      );
-      if (dist < radius) {
-        enemy.health -= damage;
-        this.showDamageNumber(enemy.x, enemy.y, damage, false);
-
-        // Freeze effect
-        if (isFreeze && !enemy.isFrozen) {
-          this.applyFreeze(enemy, weapon.slowDuration || 2000);
-        }
-
-        // Flash
-        enemy.setTint(weapon.color);
-        this.time.delayedCall(100, () => {
-          if (enemy.active) enemy.clearTint();
-        });
-
-        // Check death
-        if (enemy.health <= 0) {
-          const xpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
-          window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * xpMult));
-          window.VIBE_CODER.kills++;
-          if (Math.random() < 0.1) this.spawnWeaponDrop(enemy.x, enemy.y);
-          this.tryBarkOnKill();
-          enemy.destroy();
-          this.updateHUD();
-        }
-      }
+      const dx = enemy.x - cx;
+      const dy = enemy.y - cy;
+      if (dx * dx + dy * dy < r2) this.dealWeaponHit(enemy, weapon, damage, { quiet: !power.slow });
     });
 
     Audio.playShoot();
   }
 
+  /** Legacy freeze entry point (kept for callers): freezes through the status system. */
   applyFreeze(enemy, duration) {
-    if (enemy.isFrozen) return;
+    if (!enemy || !enemy.active || isCcImmune(enemy)) return;
+    const s = { ...(enemy.wfx || createStatus()) };
+    s.frozenMs = Math.max(s.frozenMs, duration);
+    enemy.wfx = s;
+    this.trackStatus(enemy);
+    this.refreshStatusTint(enemy);
+  }
 
-    enemy.isFrozen = true;
-    enemy.originalSpeed = enemy.speed;
-    enemy.speed = enemy.speed * 0.3; // 70% slow
-    enemy.setTint(0x88ffff);
+  // ===================== WEAPON EFFECTS (systems/weaponEffects.js) =====================
 
-    this.time.delayedCall(duration, () => {
-      if (enemy.active) {
-        enemy.isFrozen = false;
-        enemy.speed = enemy.originalSpeed;
-        enemy.clearTint();
+  trackStatus(enemy) {
+    if (!this.statusEnemies) this.statusEnemies = new Set();
+    this.statusEnemies.add(enemy);
+  }
+
+  /**
+   * Single damage application through the weapon power system (crit, mark, execute, slow/freeze, burn,
+   * bleed) and the shared death path. `weapon` may be null (abilities/hazards): plain hit + player crit.
+   */
+  dealWeaponHit(enemy, weapon, baseDamage, extra = {}) {
+    if (!enemy || !enemy.active || enemy.health <= 0) return null;
+    const res = applyOnHit(weapon, enemy.wfx || createStatus(), {
+      damage: baseDamage,
+      critChance: this.getCritChance(),
+      isBoss: isCcImmune(enemy),
+      hpBefore: enemy.health,
+      maxHp: enemy.maxHealth || enemy.health,
+      ...extra
+    });
+    enemy.wfx = res.state;
+    enemy.health -= res.damage;
+    this.showDamageNumber(enemy.x, enemy.y, res.damage, res.isCrit);
+    if (res.applied.length) {
+      this.trackStatus(enemy);
+      if (res.applied.includes('freeze')) this.spawnBlastFx(enemy.x, enemy.y, 22, { color: STATUS_TINTS.frozen });
+      if (res.executed) this.floatText(enemy.x, enemy.y - 18, 'rm -rf', '#f43f5e', { size: 12, duration: 600, rise: 20 });
+    }
+    if (enemy.health <= 0) {
+      this.handleEnemyDeath(enemy);
+      return res;
+    }
+    if (!extra.quiet) {
+      enemy.setTint(0xffffff);
+      this.time.delayedCall(80, () => this.refreshStatusTint(enemy));
+    } else if (res.applied.length && enemy.wfxTint !== dominantStatus(res.state)) {
+      this.refreshStatusTint(enemy);
+    }
+    return res;
+  }
+
+  /** Tint by dominant status: blue frozen, orange burning, red bleeding, white marked. */
+  refreshStatusTint(enemy) {
+    if (!enemy || !enemy.active) return;
+    const st = dominantStatus(enemy.wfx);
+    if (st) enemy.setTint(STATUS_TINTS[st]);
+    else enemy.clearTint();
+    enemy.wfxTint = st;
+  }
+
+  /** Per-frame status tick: DoT damage, slow/freeze on velocity (after AI movement), tint upkeep. */
+  updateWeaponStatus(delta) {
+    if (!this.statusEnemies || this.statusEnemies.size === 0) return;
+    const dt = Math.min(100, delta || 16);
+    for (const enemy of this.statusEnemies) {
+      if (!enemy.active || !enemy.wfx) {
+        this.statusEnemies.delete(enemy);
+        continue;
       }
+      const t = tickStatus(enemy.wfx, dt);
+      enemy.wfx = t.state;
+      if (t.damage > 0) {
+        enemy.health -= t.damage;
+        if (enemy.health <= 0) {
+          this.statusEnemies.delete(enemy);
+          this.handleEnemyDeath(enemy);
+          continue;
+        }
+      }
+      const mult = speedMultiplier(t.state, isCcImmune(enemy));
+      if (mult < 1 && enemy.body) {
+        if (mult === 0) enemy.body.setVelocity(0, 0);
+        else enemy.body.velocity.scale(mult);
+      }
+      const st = dominantStatus(t.state);
+      if (st !== enemy.wfxTint) this.refreshStatusTint(enemy);
+      if (!st) this.statusEnemies.delete(enemy);
+    }
+  }
+
+  /** Shove an enemy away from (fromX, fromY); bosses/mini-bosses barely move. */
+  knockback(enemy, fromX, fromY, force) {
+    if (!enemy || !enemy.active) return;
+    const a = Math.atan2(enemy.y - fromY, enemy.x - fromX);
+    const d = force * 0.35 * (isCcImmune(enemy) ? 0.15 : 1);
+    enemy.x += Math.cos(a) * d;
+    enemy.y += Math.sin(a) * d;
+  }
+
+  spawnBlastFx(x, y, radius, weapon) {
+    const color = weapon && weapon.color != null ? weapon.color : 0xffffff;
+    const ring = this.add.circle(x, y, 10, color, 0.25).setDepth(7);
+    ring.setStrokeStyle(3, color, 0.9);
+    this.tweens.add({ targets: ring, scale: radius / 10, alpha: 0, duration: 260, onComplete: () => ring.destroy() });
+  }
+
+  /** Radius blast (seeking missile impact, plasma orb detonation, death aura pulse, Excalibur shockwave). */
+  explodeAt(x, y, radius, damage, weapon) {
+    this.spawnBlastFx(x, y, radius, weapon);
+    const r2 = radius * radius;
+    this.enemies.children.each((enemy) => {
+      if (!enemy.active) return;
+      const dx = enemy.x - x;
+      const dy = enemy.y - y;
+      if (dx * dx + dy * dy <= r2) this.dealWeaponHit(enemy, weapon, damage, { quiet: true });
     });
   }
 
-  showMusicStatus(isPlaying) {
-    const statusText = this.add.text(400, 500, isPlaying ? '🎵 MUSIC ON' : '🔇 MUSIC OFF', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
-      color: isPlaying ? '#00ff00' : '#ff6666',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setScrollFactor(0);
+  /** Chain lightning: jump to the nearest unvisited enemy up to `jumps` times (-falloff per jump). */
+  chainFrom(origin, weapon, baseDamage) {
+    const chain = getPower(weapon).chain;
+    const visited = new Set([origin]);
+    const pts = [[origin.x, origin.y]];
+    let cx = origin.x;
+    let cy = origin.y;
+    for (let k = 1; k <= chain.jumps; k++) {
+      let next = null;
+      let best = chain.range * chain.range;
+      this.enemies.children.each((enemy) => {
+        if (!enemy.active || visited.has(enemy)) return;
+        const dx = enemy.x - cx;
+        const dy = enemy.y - cy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < best) {
+          best = d2;
+          next = enemy;
+        }
+      });
+      if (!next) break;
+      visited.add(next);
+      cx = next.x;
+      cy = next.y;
+      pts.push([cx, cy]);
+      this.dealWeaponHit(next, weapon, baseDamage, { chainIndex: k, quiet: true });
+    }
+    if (pts.length < 2) return;
+    const g = this.add.graphics().setDepth(9);
+    g.lineStyle(3, weapon.color, 1);
+    g.beginPath();
+    g.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) {
+      const [ax, ay] = pts[i - 1];
+      const [bx, by] = pts[i];
+      g.lineTo((ax + bx) / 2 + Phaser.Math.Between(-10, 10), (ay + by) / 2 + Phaser.Math.Between(-10, 10));
+      g.lineTo(bx, by);
+    }
+    g.strokePath();
+    this.tweens.add({ targets: g, alpha: 0, duration: 180, onComplete: () => g.destroy() });
+  }
 
-    this.tweens.add({
-      targets: statusText,
-      alpha: 0,
-      duration: 1500,
-      onComplete: () => statusText.destroy()
+  /** Fork bomb: split into children (they can split again until power.split.generations). */
+  splitProjectile(projectile, weapon, enemy) {
+    const split = getPower(weapon).split;
+    for (let i = 0; i < split.children; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const child = this.spawnWeaponProjectile(weapon, projectile.x, projectile.y, angle,
+        projectile.damage * split.mult,
+        { splitDepth: (projectile.splitDepth || 0) + 1, speed: 300, lifetime: 500 });
+      if (child) {
+        child.hitSet.add(enemy);
+        child.setScale(0.75);
+      }
+    }
+  }
+
+  /** Redirect a bouncing projectile to the nearest other enemy (keeps flying if there is none). */
+  bounceToNext(projectile, from) {
+    let target = null;
+    let best = 280 * 280;
+    this.enemies.children.each((enemy) => {
+      if (!enemy.active || enemy === from) return;
+      const dx = enemy.x - projectile.x;
+      const dy = enemy.y - projectile.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < best) {
+        best = d2;
+        target = enemy;
+      }
     });
+    if (!target || !projectile.body) return;
+    const a = Phaser.Math.Angle.Between(projectile.x, projectile.y, target.x, target.y);
+    this.physics.velocityFromRotation(a, projectile.flySpeed || 400, projectile.body.velocity);
+    projectile.setRotation(a);
+  }
+
+  /** Boomerang family: turn around, refresh the per-pass hit budget so the way back hits again. */
+  startReturn(projectile) {
+    projectile.returning = true;
+    projectile.hitSet = new Set();
+    projectile.hitsLeft = projectile.hitsBudget || 1;
+    projectile.pierceIndex = 0;
+  }
+
+  showMusicStatus(isPlaying) {
+    this.showHudBanner(t(isPlaying ? 'hud.music_on' : 'hud.music_off'), { color: isPlaying ? HUD.green : HUD.textMutedNum, duration: 1000 });
   }
 
   togglePause() {
@@ -2646,84 +3044,72 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   pauseGame() {
-    if (this.isPaused) return;
+    if (this.isPaused || !canOpenPauseMenu(this)) return;
     this.isPaused = true;
     this.pauseSelectedOption = 0;
 
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2;
-    const uiScale = this.uiScale || 1;
+    const W = this.scale.width;
+    const H = this.scale.height;
+    const L = this.hudLayout || computeHudLayout({ w: W, h: H });
+    // 185 art px = panel height (title 3x + info + 4 buttons + hint): shrink the art pixel on short screens
+    const P = Math.max(1, Math.min(L.px || 2, Math.floor((H * 0.94) / 185)));
+    const cx = snapPx(W / 2, P);
+    const cy = snapPx(H / 2, P);
 
     // No pausar física ni timers: el juego sigue corriendo (más dificultad). Solo se muestra el menú y se bloquea input del jugador.
 
-    // Create pause menu container (fixed to camera)
+    // Pixel pause menu (ui/arena-pixel-v3): dithered veil, dark panel, "PAUSED" 3x, kit buttons + ▶ cursor.
     this.pauseMenu = this.add.container(cx, cy);
     this.pauseMenu.setDepth(1000);
     this.pauseMenu.setScrollFactor(0);
+    this.pausePx = P;
 
-    // Dim overlay (cubre toda la pantalla actual)
-    const overlay = this.add.rectangle(0, 0, this.scale.width, this.scale.height, 0x000000, 0.8);
-    this.pauseMenu.add(overlay);
+    const veil = this.add.rectangle(-cx, -cy, W, H, PX.ink, 0.45).setOrigin(0).setInteractive();
+    this.pauseMenu.add([veil, ditherFill(this, -cx, -cy, W, H, { px: P, color: PX.ink, alpha: 0.6 })]);
 
-    // Pause title
-    const pauseTitle = this.add.text(0, -150, t('hud.paused'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${48 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold',
-      stroke: '#003333',
-      strokeThickness: 4
-    }).setOrigin(0.5);
-    this.pauseMenu.add(pauseTitle);
-
-    // Wave info
-    const waveInfo = this.add.text(0, -90, `WAVE ${this.waveNumber} // KILLS: ${window.VIBE_CODER.kills}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${14 * uiScale}px`,
-      color: '#888888'
-    }).setOrigin(0.5);
-    this.pauseMenu.add(waveInfo);
-
-    // Menu options
     this.pauseMenuOptions = [t('pause.resume'), t('pause.settings'), t('pause.restart'), t('pause.quit')];
+    const title = this.pxText(0, 0, t('hud.paused'), { P, scale: 3, color: PX_CSS.cyan }).setOrigin(0.5, 0);
+    const info = this.pxText(0, 0, `${t('hud.wave')} ${this.waveNumber}  ·  ${t('gameover.kills')} ${window.VIBE_CODER.kills}`, { P, color: PX_CSS.periw }).setOrigin(0.5, 0);
+    const hint = this.pxText(0, 0, t('hud.select_confirm'), { P, color: PX_CSS.periw }).setOrigin(0.5, 0);
+    const labels = this.pauseMenuOptions.map((o) => this.pxText(0, 0, o, { P, color: PX_CSS.mist }).setOrigin(0.5, 0));
+    const btnW = Math.ceil((Math.max(96 * P, ...labels.map((l) => l.width + 24 * P))) / (2 * P)) * 2 * P;
+    const btnH = 18 * P;
+    const gap = 4 * P;
+    const pad = 16 * P;
+    const pw = Math.ceil(Math.max(btnW + 2 * pad, title.width + 2 * pad, hint.width + 2 * pad) / (2 * P)) * 2 * P;
+    const ph = pad + 21 * P + 6 * P + 7 * P + 12 * P + this.pauseMenuOptions.length * (btnH + gap) - gap + 12 * P + 7 * P + pad;
+    const top = -snapPx(ph / 2, P);
+    const panel = pixelPanel(this, -pw / 2, top, pw, ph, 'panel-dark', { px: P });
+    this.pauseMenu.add(panel);
+    let y = top + pad;
+    title.setY(y); y += 21 * P + 6 * P;
+    info.setY(y); y += 7 * P + 12 * P;
+    this.pauseMenu.add([title, info]);
+
     this.pauseMenuTexts = [];
-
-    this.pauseMenuOptions.forEach((option, index) => {
-      const text = this.add.text(0, -30 + index * 40 * uiScale, option, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: `${20 * uiScale}px`,
-        color: index === 0 ? '#00ffff' : '#666666',
-        fontStyle: index === 0 ? 'bold' : 'normal'
-      }).setOrigin(0.5);
-      this.pauseMenu.add(text);
-      this.pauseMenuTexts.push(text);
+    this.pauseButtons = [];
+    labels.forEach((label, index) => {
+      const bg = pixelPanel(this, -btnW / 2, y, btnW, btnH, buttonSkin('neutral', 'normal'), { px: P });
+      label.setY(y + 5 * P);
+      const hit = this.add.rectangle(-btnW / 2, y, btnW, btnH, 0x000000, 0).setOrigin(0).setInteractive({ useHandCursor: true });
+      hit.on('pointerover', () => { if (!this.settingsOverlayOpen && this.pauseSelectedOption !== index) { this.pauseSelectedOption = index; this.movePauseSelection(0); } });
+      hit.on('pointerdown', () => { if (this.settingsOverlayOpen) return; this.pauseSelectedOption = index; this.selectPauseOption(); });
+      this.pauseMenu.add([bg, label, hit]);
+      this.pauseMenuTexts.push(label);
+      this.pauseButtons.push({ bg, label, y });
+      y += btnH + gap;
     });
-
-    // Selector
-    this.pauseSelector = this.add.text(-140 * uiScale, -30, '>', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${20 * uiScale}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-    this.pauseMenu.add(this.pauseSelector);
-
-    // Blink selector
-    this.pauseSelectorTween = this.tweens.add({
-      targets: this.pauseSelector,
-      alpha: 0.3,
-      duration: 500,
-      yoyo: true,
-      repeat: -1
-    });
-
-    // Control hint
-    const hint = this.add.text(0, 150 * uiScale, t('hud.select_confirm'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: `${10 * uiScale}px`,
-      color: '#666666'
-    }).setOrigin(0.5);
+    y += 12 * P - gap;
+    hint.setY(y);
     this.pauseMenu.add(hint);
+
+    // ▶ cursor (kit sprite) left of the selected button, blinking on/off in hard steps
+    this.pauseSelector = uiSprite(this, -btnW / 2 - 7 * P, 0, 'cursor', { px: P });
+    this.pauseMenu.add(this.pauseSelector);
+    this.pauseSelectorTween = this.time.addEvent({
+      delay: 320, loop: true, callback: () => { if (this.pauseSelector?.scene) this.pauseSelector.setVisible(!this.pauseSelector.visible); }
+    });
+    this.movePauseSelection(0);
 
     // Setup pause menu input
     this.pauseUpKey = this.input.keyboard.on('keydown-UP', () => this.movePauseSelection(-1));
@@ -2741,23 +3127,18 @@ export default class ArenaScene extends Phaser.Scene {
     if (this.pauseSelectedOption < 0) this.pauseSelectedOption = this.pauseMenuOptions.length - 1;
     if (this.pauseSelectedOption >= this.pauseMenuOptions.length) this.pauseSelectedOption = 0;
 
-    // Update visuals
-    this.pauseMenuTexts.forEach((text, index) => {
-      if (index === this.pauseSelectedOption) {
-        text.setColor('#00ffff');
-        text.setFontStyle('bold');
-      } else {
-        text.setColor('#666666');
-        text.setFontStyle('normal');
-      }
+    // Selected = primary (violet) button + white label; others neutral + mist label
+    const P = this.pausePx || 2;
+    (this.pauseButtons || []).forEach((b, index) => {
+      const on = index === this.pauseSelectedOption;
+      b.bg.setSkin(buttonSkin(on ? 'violet' : 'neutral', on ? 'hover' : 'normal'));
+      b.label.setColor(on ? PX_CSS.white : PX_CSS.mist);
     });
-
-    // Move selector
-    const uiScale = this.uiScale || 1;
-    this.pauseSelector.setY(-30 + this.pauseSelectedOption * 40 * uiScale);
+    const sel = this.pauseButtons?.[this.pauseSelectedOption];
+    if (sel && this.pauseSelector) this.pauseSelector.setY(sel.y + 9 * P).setVisible(true);
 
     // Sound - respect SFX setting
-    if (window.VIBE_SETTINGS?.sfxEnabled) {
+    if (direction !== 0 && window.VIBE_SETTINGS?.sfxEnabled) {
       Audio.playXPGain();
     }
   }
@@ -2789,63 +3170,55 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   showPauseSettings() {
-    // Simple settings toggle in pause menu
+    // Simple settings toggle in pause menu (pixel panel + kit toggles)
     const settings = window.VIBE_SETTINGS;
     this.settingsOverlayOpen = true;
+    const P = this.pausePx || 2;
 
-    // Create settings overlay
     const settingsOverlay = this.add.container(0, 0);
     settingsOverlay.setDepth(1001);
     this.pauseMenu.add(settingsOverlay);
 
-    // Background
-    const bg = this.add.rectangle(0, 0, 350, 250, 0x000000, 0.95);
-    bg.setStrokeStyle(2, 0x00ffff);
-    settingsOverlay.add(bg);
-
-    const title = this.add.text(0, -100, t('settings.title'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '20px',
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-    settingsOverlay.add(title);
-
-    // Settings display
     const settingsItems = [
-      { key: 'musicEnabled', label: 'MUSIC' },
-      { key: 'sfxEnabled', label: 'SOUND FX' }
+      { key: 'musicEnabled', label: t('settings.MUSIC') },
+      { key: 'sfxEnabled', label: t('settings.SOUND_FX') }
     ];
+    const title = this.pxText(0, 0, t('settings.title'), { P, scale: 2, color: PX_CSS.cyan }).setOrigin(0.5, 0);
+    const hint = this.pxText(0, 0, t('prompt.settings_select'), { P, color: PX_CSS.periw }).setOrigin(0.5, 0);
+    const rowH = 18 * P;
+    const pad = 14 * P;
+    const pw = Math.ceil(Math.max(150 * P, hint.width + 2 * pad, title.width + 2 * pad) / (2 * P)) * 2 * P;
+    const ph = pad + 14 * P + 10 * P + settingsItems.length * (rowH + 4 * P) + 8 * P + 7 * P + pad;
+    const top = -snapPx(ph / 2, P);
+    settingsOverlay.add(this.add.rectangle(-this.scale.width, -this.scale.height, this.scale.width * 2, this.scale.height * 2, PX.ink, 0.55).setOrigin(0).setInteractive());
+    settingsOverlay.add(pixelPanel(this, -pw / 2, top, pw, ph, 'panel-accent', { px: P }));
+    let y = top + pad;
+    title.setY(y); y += 14 * P + 10 * P;
+    settingsOverlay.add(title);
 
     let selectedSetting = 0;
     const settingTexts = [];
-
-    settingsItems.forEach((item, index) => {
-      const value = settings[item.key] ? 'ON' : 'OFF';
-      const text = this.add.text(0, -50 + index * 35, `${item.label}: [${value}]`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
-        color: index === 0 ? '#00ffff' : '#888888'
-      }).setOrigin(0.5);
-      settingsOverlay.add(text);
-      settingTexts.push({ text, item });
+    settingsItems.forEach((item) => {
+      const bg = pixelPanel(this, -pw / 2 + pad, y, pw - 2 * pad, rowH, 'card', { px: P });
+      const text = this.pxText(-pw / 2 + pad + 8 * P, y + 5 * P, item.label, { P, color: PX_CSS.mist });
+      const tog = uiSprite(this, pw / 2 - pad - 8 * P - 11 * P, y + rowH / 2, settings[item.key] ? 'toggle-on' : 'toggle-off', { px: P });
+      settingsOverlay.add([bg, text, tog]);
+      settingTexts.push({ text, item, bg, tog });
+      y += rowH + 4 * P;
     });
-
-    const hint = this.add.text(0, 80, t('prompt.settings_select'), {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '10px',
-      color: '#666666'
-    }).setOrigin(0.5);
+    y += 8 * P - 4 * P;
+    hint.setY(y);
     settingsOverlay.add(hint);
 
-    // Update display
     const updateSettingsDisplay = () => {
       settingTexts.forEach((st, index) => {
-        const value = settings[st.item.key] ? 'ON' : 'OFF';
-        st.text.setText(`${st.item.label}: [${value}]`);
-        st.text.setColor(index === selectedSetting ? '#00ffff' : '#888888');
+        const on = index === selectedSetting;
+        st.text.setColor(on ? PX_CSS.white : PX_CSS.mist);
+        st.bg.setSkin(on ? 'card-selected' : 'card');
+        if (st.tog.setFrame) st.tog.setFrame(settings[st.item.key] ? 'toggle-on' : 'toggle-off');
       });
     };
+    updateSettingsDisplay();
 
     // Input handlers
     const settingUp = () => {
@@ -2913,9 +3286,12 @@ export default class ArenaScene extends Phaser.Scene {
       this.pauseMenu = null;
     }
     if (this.pauseSelectorTween) {
-      this.pauseSelectorTween.stop();
+      if (typeof this.pauseSelectorTween.remove === 'function') this.pauseSelectorTween.remove(false);
+      else if (typeof this.pauseSelectorTween.stop === 'function') this.pauseSelectorTween.stop();
+      this.pauseSelectorTween = null;
     }
     this.pauseMenuTexts = [];
+    this.pauseButtons = [];
   }
 
   restartGame() {
@@ -2942,13 +3318,23 @@ export default class ArenaScene extends Phaser.Scene {
     this.enemies.clear(true, true);
     this.projectiles.clear(true, true);
     this.weaponDrops.clear(true, true);
+    if (this.itemPickups) this.itemPickups.clear(true, true);
+    this.itemState = createItemState();
+    this.resetXpGems();
+    this.abilities?.reset();
+    this.itemPity = 0;
+    this.biomeDamageAcc = 0;
+    this.playerSlowUntil = 0;
 
-    // Reset game state
+    // Reset game state (runGeneration lets observers tell a restart from a score drop)
+    this.runGeneration = (this.runGeneration || 0) + 1;
     this.waveNumber = 1;
     this.currentStage = 0;
     this.currentBoss = null;
     this.invincible = false;
     this.playerDead = false; // FIX: Reset playerDead to prevent immortality bug on restart
+    this.hudMiniBoss = null;
+    if (this.hudContainer) this.hudContainer.setVisible(true);
     this.collectedWeapons = new Set(['basic']);
     this.currentWeapon = { type: 'basic', duration: Infinity };
     this.clearOrbitals();
@@ -2958,6 +3344,8 @@ export default class ArenaScene extends Phaser.Scene {
     window.VIBE_CODER.level = 1;
     window.VIBE_CODER.kills = 0;
     window.VIBE_CODER.streak = 1;
+    window.VIBE_CODER.totalXP = 0;
+    window.VIBE_CODER.score = 0;
 
     // Clear saved run (fresh restart)
     SaveManager.clearSave();
@@ -3079,6 +3467,7 @@ export default class ArenaScene extends Phaser.Scene {
         level: vibeState.level,
         xp: vibeState.xp,
         totalXP: vibeState.totalXP,
+        score: getRunScore(vibeState),
         health: this.player.health,
         maxHealth: this.player.maxHealth || this.baseStats.maxHealth,
         kills: vibeState.kills,
@@ -3418,7 +3807,7 @@ export default class ArenaScene extends Phaser.Scene {
     if (weaponType === 'rmrf') {
       // rm -rf: INSTANT KILL ALL ENEMIES ON SCREEN
       this.activateRmRf();
-      return;
+      // ...then equip rm -rf as an executioner weapon (falls through to the normal equip path)
     }
 
     if (weaponType === 'sudo') {
@@ -3468,23 +3857,8 @@ export default class ArenaScene extends Phaser.Scene {
       forkbomb: '💣 FORK BOMB'
     };
 
-    const textColor = isRare ? '#ffd700' : '#ffffff';
-    const pickupText = this.add.text(player.x, player.y - 50, (weaponNames[weaponType] || weaponType.toUpperCase()) + ` [${Math.floor(duration/1000)}s]`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: isRare ? '20px' : '16px',
-      color: textColor,
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 3
-    }).setOrigin(0.5);
-
-    this.tweens.add({
-      targets: pickupText,
-      y: pickupText.y - 40,
-      alpha: 0,
-      duration: 1500,
-      onComplete: () => pickupText.destroy()
-    });
+    const weaponLabel = String(weaponNames[weaponType] || weaponType.toUpperCase()).replace(/^[^A-Za-z0-9★]+\s*/u, '');
+    this.floatText(player.x, player.y - 50, weaponLabel, isRare ? HUD.amber : HUD.text, { size: isRare ? 17 : 15, duration: 1500, rise: 36 });
 
     // Weapon pickup sound
     Audio.playWeaponPickup();
@@ -3504,18 +3878,6 @@ export default class ArenaScene extends Phaser.Scene {
         this.clearOrbitals();
         this.weaponExpiryTimer = null;
 
-        const revertText = this.add.text(this.player.x, this.player.y - 30, 'WEAPON EXPIRED', {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '12px',
-          color: '#ff6666'
-        }).setOrigin(0.5);
-
-        this.tweens.add({
-          targets: revertText,
-          alpha: 0,
-          duration: 1000,
-          onComplete: () => revertText.destroy()
-        });
       }
     });
 
@@ -3530,23 +3892,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.shake(800, 0.04);
 
     // Big announcement
-    const rmrfText = this.add.text(400, 300, '💀 rm -rf /* 💀\nEXECUTED', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '36px',
-      color: '#ff0000',
-      fontStyle: 'bold',
-      align: 'center',
-      stroke: '#000000',
-      strokeThickness: 5
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    this.tweens.add({
-      targets: rmrfText,
-      scale: 2,
-      alpha: 0,
-      duration: 1500,
-      onComplete: () => rmrfText.destroy()
-    });
+    this.showHudBanner('rm -rf /*', { subtitle: t('hud.rmrf_executed'), color: PX.red, duration: 1800 });
 
     // Kill ALL enemies
     let killCount = 0;
@@ -3554,9 +3900,8 @@ export default class ArenaScene extends Phaser.Scene {
       if (!enemy.active) return;
 
       killCount++;
-      // Apply event and modifier XP multipliers
-      const xpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
-      window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * xpMult));
+      // XP drops as gems (event/modifier multipliers baked in)
+      this.dropXpGemForKill(enemy);
       window.VIBE_CODER.kills++;
 
       // Death particle
@@ -3586,18 +3931,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Show kill count
     if (killCount > 0) {
-      const killText = this.add.text(400, 400, `${killCount} PROCESSES TERMINATED`, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '18px',
-        color: '#ff6666'
-      }).setOrigin(0.5).setScrollFactor(0);
-
-      this.tweens.add({
-        targets: killText,
-        alpha: 0,
-        duration: 2000,
-        onComplete: () => killText.destroy()
-      });
+      this.floatText(this.player.x, this.player.y - 60, t('hud.processes_terminated').replace('{n}', killCount), PX.red, { size: 14, duration: 1400, rise: 26 });
     }
 
     this.updateHUD();
@@ -3607,23 +3941,7 @@ export default class ArenaScene extends Phaser.Scene {
     // SUDO MODE - 3x damage for 10 seconds (no invincibility)
     this.cameras.main.flash(300, 255, 215, 0);
 
-    const sudoText = this.add.text(400, 300, '👑 SUDO MODE ACTIVATED 👑\n3X DAMAGE', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '24px',
-      color: '#ffd700',
-      fontStyle: 'bold',
-      align: 'center',
-      stroke: '#000000',
-      strokeThickness: 4
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    this.tweens.add({
-      targets: sudoText,
-      scale: 1.3,
-      alpha: 0,
-      duration: 2000,
-      onComplete: () => sudoText.destroy()
-    });
+    this.showHudBanner(t('hud.sudo_mode'), { subtitle: t('hud.sudo_damage'), color: PX.amber, duration: 2000 });
 
     // Set sudo weapon (has 3x damage)
     this.currentWeapon = {
@@ -3640,18 +3958,7 @@ export default class ArenaScene extends Phaser.Scene {
         this.currentWeapon = { type: 'basic', duration: Infinity };
         this.player.clearTint();
 
-        const endText = this.add.text(this.player.x, this.player.y - 30, 'SUDO EXPIRED', {
-          fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '14px',
-          color: '#ff6666'
-        }).setOrigin(0.5);
-
-        this.tweens.add({
-          targets: endText,
-          alpha: 0,
-          duration: 1000,
-          onComplete: () => endText.destroy()
-        });
+        this.floatText(this.player.x, this.player.y - 30, t('hud.sudo_expired'), PX.red, { size: 14, duration: 1000, rise: 20 });
 
         this.updateHUD();
       }
@@ -3680,20 +3987,1179 @@ export default class ArenaScene extends Phaser.Scene {
     if (!weapon) weapon = this.weaponTypes.orbital;
 
     // Determine orbital count based on weapon type
-    const orbitalCount = weapon.orbitalCount || 3;
+    const orbitPower = getPower(weapon).orbit;
+    const orbitalCount = (orbitPower && orbitPower.count) || weapon.orbitalCount || 3;
+    this.orbitalWeaponDef = weapon;
+    this.lastOrbitalPulseAt = this.time.now;
     const angleStep = 360 / orbitalCount;
 
     // Create orbiting projectiles
+    const orbKey = weapon.texture && weapon.texture.startsWith('orb-') && this.textures.exists(weapon.texture) ? weapon.texture : null;
     for (let i = 0; i < orbitalCount; i++) {
-      const orbital = this.add.circle(0, 0, 12, weapon.color);
-      orbital.angle = (i * angleStep) * (Math.PI / 180);
-      orbital.damage = Math.floor(stats.attackDamage * weapon.damage);
+      let orbital;
+      if (orbKey) {
+        orbital = this.add.sprite(0, 0, orbKey, 0).setDepth(8);
+        if (this.anims.exists(`${orbKey}-anim`)) orbital.play(`${orbKey}-anim`);
+      } else {
+        orbital = this.add.circle(0, 0, 12, weapon.color);
+      }
+      orbital.orbAngle = (i * angleStep) * (Math.PI / 180); // not `angle`: that is degrees on Sprites
+      orbital.damage = stats.attackDamage * weapon.damage;
       this.orbitals.add(orbital);
+    }
+
+    // Following aura (ring of fire / death aura)
+    if (weapon.aura && this.textures.exists(weapon.aura)) {
+      const size = weapon.aura === 'aura-ringoffire' ? 176 : (weapon.radius || 100) * 2;
+      this.orbitalAura = this.add.sprite(this.player.x, this.player.y, weapon.aura, 0).setDepth(7);
+      this.orbitalAura.setDisplaySize(size, size);
+      if (this.anims.exists(`${weapon.aura}-anim`)) this.orbitalAura.play(`${weapon.aura}-anim`);
     }
   }
 
   clearOrbitals() {
     this.orbitals.clear(true, true);
+    if (this.orbitalAura) {
+      this.orbitalAura.destroy();
+      this.orbitalAura = null;
+    }
+  }
+
+  // ===================== ITEM PICKUPS =====================
+
+  /** Roll an item drop for a killed enemy (tier table + pity). */
+  tryItemDrop(enemy) {
+    if (!this.itemPickups || !enemy) return;
+    const result = rollDrop(Math.random, getEnemyTier(enemy), this.itemPity);
+    this.itemPity = result.pityCounter;
+    if (result.itemId) this.spawnItemPickup(enemy.x, enemy.y, result.itemId);
+  }
+
+  /**
+   * The game runs with pixelArt (NEAREST) filtering; the antialiased UI art (item medallions, glow,
+   * shrines, portals) is drawn at 2-3x and scaled down, which needs LINEAR filtering to stay crisp.
+   */
+  ensureSmoothTextures() {
+    const LINEAR = Phaser.Textures.FilterMode.LINEAR;
+    const keys = [
+      // item-* stay NEAREST: they are 32 px pixel art shown at whole css pixels (pickups + pixel HUD).
+      'fx-glow', 'shrine-pedestal', 'map-portal-a', 'map-portal-b',
+      ...['power', 'gamble', 'xp', 'shield', 'chaos'].map((id) => `shrine-${id}`)
+    ];
+    for (const key of keys) {
+      try {
+        if (this.textures.exists(key)) this.textures.get(key).setFilter(LINEAR);
+      } catch (_) { /* filtering is cosmetic */ }
+    }
+    for (const id of Object.keys(ITEMS)) {
+      try {
+        if (this.textures.exists(`item-${id}`)) this.textures.get(`item-${id}`).setFilter(Phaser.Textures.FilterMode.NEAREST);
+      } catch (_) { /* filtering is cosmetic */ }
+    }
+  }
+
+  spawnItemPickup(x, y, itemId) {
+    const item = ITEMS[itemId];
+    if (!item || !this.itemPickups) return;
+    const hasIcon = this.textures.exists(`item-${itemId}`);
+    const texKey = hasIcon ? `item-${itemId}` : 'slash';
+    const pickup = this.itemPickups.create(x, y, texKey);
+    pickup.itemId = itemId;
+    pickup.setDepth(5);
+    if (!hasIcon) {
+      pickup.setTint(item.color);
+    } else {
+      // Physics carrier stays invisible (36 px body); the visual (halo + bobbing icon) follows it in updateItems().
+      pickup.setDisplaySize(36, 36).setVisible(false);
+      const rarityColor = RARITY_GLOW[item.rarity] || RARITY_GLOW.common;
+      const strong = item.rarity === 'epic' || item.rarity === 'legendary';
+      const parts = [];
+      let halo = null;
+      if (this.textures.exists('fx-glow')) {
+        halo = this.add.image(0, 0, 'fx-glow').setTint(rarityColor).setBlendMode(Phaser.BlendModes.ADD)
+          .setDisplaySize(strong ? 92 : 76, strong ? 92 : 76).setAlpha(strong ? 0.75 : 0.55);
+        parts.push(halo);
+      }
+      const icon = this.add.image(0, 0, texKey).setDisplaySize(36, 36);
+      parts.push(icon);
+      const visual = this.add.container(x, y, parts).setDepth(5);
+      pickup.visual = visual;
+      if (halo) {
+        const base = halo.scaleX;
+        this.createTrackedTween({
+          targets: halo,
+          scaleX: { from: base * 0.82, to: base * 1.08 },
+          scaleY: { from: base * 0.82, to: base * 1.08 },
+          alpha: { from: halo.alpha * 0.6, to: halo.alpha },
+          duration: strong ? 700 : 1000,
+          yoyo: true,
+          repeat: -1,
+          ease: 'Sine.easeInOut'
+        });
+      }
+      this.createTrackedTween({ targets: icon, y: { from: 3, to: -3 }, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      // Appear: quick pop so drops read as "new"
+      visual.setScale(0.4);
+      this.tweens.add({ targets: visual, scale: 1, duration: 220, ease: 'Back.easeOut' });
+      pickup.once('destroy', () => {
+        if (halo) this.tweens.killTweensOf(halo);
+        this.tweens.killTweensOf(icon);
+        this.tweens.killTweensOf(visual);
+        visual.destroy();
+      });
+    }
+    if (!hasIcon) {
+      this.createTrackedTween({
+        targets: pickup,
+        scale: item.rarity === 'legendary' ? 1.35 : 1.15,
+        duration: item.rarity === 'common' ? 600 : 350,
+        yoyo: true,
+        repeat: -1
+      });
+    }
+    this.time.delayedCall(ITEM_LIFETIME_MS, () => {
+      if (pickup.active) this.destroyWithTweenCleanup(pickup);
+    });
+  }
+
+  /** Keep pickup visuals glued to their (possibly magnet-pulled) physics carriers. */
+  syncItemPickupVisuals() {
+    if (!this.itemPickups) return;
+    this.itemPickups.children.each((p) => {
+      if (p.visual && p.active) p.visual.setPosition(p.x, p.y);
+    });
+  }
+
+  pickupItem(player, pickup) {
+    const item = ITEMS[pickup.itemId];
+    this.destroyWithTweenCleanup(pickup);
+    if (!item) return;
+    const synced = { ...this.itemState, health: player.health, maxHealth: player.maxHealth };
+    const applied = applyItem(synced, item);
+    player.health = applied.health;
+    const { actions, state } = drainActions(applied);
+    this.itemState = state;
+    this.runItemActions(actions);
+    const label = t(item.nameKey);
+    this.showItemText(player.x, player.y - 40, label, RARITY_GLOW[item.rarity] || RARITY_GLOW.common);
+    Audio.playWeaponPickup();
+    this.updateHUD();
+  }
+
+  /** Execute scene-side item effects queued by ItemManager.applyItem. */
+  runItemActions(actions) {
+    for (const action of actions) {
+      if (action.type === 'xp') {
+        window.VIBE_CODER.addXP(Math.floor(action.value * (1 + this.waveNumber * 0.05)));
+      } else if (action.type === 'bits') {
+        if (window.VIBE_UPGRADES && window.VIBE_UPGRADES.addCurrency) window.VIBE_UPGRADES.addCurrency(action.value);
+      } else if (action.type === 'nuke') {
+        const dmg = Math.floor(this.getStats().attackDamage * action.value);
+        this.cameras.main.flash(250, 255, 0, 255);
+        this.cameras.main.shake(300, 0.02);
+        const view = this.cameras.main.worldView;
+        this.enemies.getChildren().slice().forEach((enemy) => {
+          if (!enemy.active || !view.contains(enemy.x, enemy.y)) return;
+          const hit = enemy.isBoss || enemy.isMiniBoss ? Math.floor(dmg * 0.5) : dmg;
+          this.hitEnemy({ damage: hit, pierce: true }, enemy);
+        });
+      } else if (action.type === 'gc') {
+        // Garbage Collector: frees "garbage" (weak, stationary or fake enemies) around the player
+        const radiusSq = action.value * action.value;
+        this.enemies.getChildren().slice().forEach((enemy) => {
+          if (!enemy.active || enemy.isBoss || enemy.isMiniBoss) return;
+          const dx = enemy.x - this.player.x;
+          const dy = enemy.y - this.player.y;
+          if (dx * dx + dy * dy > radiusSq) return;
+          const isGarbage = ['deathzone', 'fake', 'blocker'].includes(enemy.behavior) ||
+            enemy.health <= (enemy.maxHealth || enemy.health) * 0.35;
+          if (isGarbage) this.hitEnemy({ damage: enemy.health + 1, pierce: true }, enemy);
+        });
+      }
+    }
+  }
+
+  /** Hotfix item: revive once instead of dying. */
+  tryItemRevive() {
+    if (!this.itemState || !this.player) return false;
+    const r = consumeRevive({ ...this.itemState, maxHealth: this.player.maxHealth });
+    if (!r.revived) return false;
+    this.itemState = r.state;
+    this.player.health = r.state.health;
+    this.cameras.main.flash(400, 255, 255, 255);
+    this.showItemText(this.player.x, this.player.y - 50, t('items.revived'), 0xffffff);
+    this.updateHUD();
+    return true;
+  }
+
+  /** Pickup name: pixel text in a lightened rarity colour, stepped rise + fade (1.3 s). */
+  showItemText(x, y, text, color) {
+    const c = Phaser.Display.Color.ValueToColor(typeof color === 'number' ? color : 0xffffff);
+    const light = Phaser.Display.Color.Interpolate.ColorWithColor(c, Phaser.Display.Color.ValueToColor(0xffffff), 100, 45);
+    const rgb = (Math.round(light.r) << 16) | (Math.round(light.g) << 8) | Math.round(light.b);
+    return this.floatText(x, y, String(text), rgb, { size: 14, duration: 1300, rise: 30 });
+  }
+
+  /** Per-frame item upkeep: buff timers + magnet pull. */
+  updateItems(delta) {
+    this.syncItemPickupVisuals();
+    if (!this.itemState) return;
+    if (this.itemState.effects.length) this.itemState = tickEffects(this.itemState, delta);
+    const { magnetRadius } = getItemModifiers(this.itemState);
+    if (magnetRadius <= 0) return;
+    const pull = (group) => {
+      if (!group) return;
+      group.children.each((obj) => {
+        if (!obj.active || !obj.body) return;
+        const dx = this.player.x - obj.x;
+        const dy = this.player.y - obj.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist > magnetRadius || dist < 1) return;
+        obj.body.setVelocity((dx / dist) * 320, (dy / dist) * 320);
+      });
+    };
+    pull(this.itemPickups);
+    pull(this.weaponDrops);
+  }
+
+  // ===================== XP GEMS (systems/xpGems.js) =====================
+
+  /** Empty the floor: fresh gem state, every gem sprite back to the pool. Called on create / restart. */
+  resetXpGems() {
+    this.xpGemState = createGemState();
+    if (this.xpGemSprites) {
+      for (const spr of this.xpGemSprites.values()) this.releaseXpGemSprite(spr);
+      this.xpGemSprites.clear();
+    }
+    this.xpGemTutorialShown = false;
+    this.gemVacuumUntil = 0;
+  }
+
+  /** Gem for a kill: enemy.xpValue x event/modifier multipliers (streak/upgrade bonus applies on pickup in addXP). */
+  dropXpGemForKill(enemy) {
+    if (!enemy) return null;
+    const xpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
+    return this.dropXpGem(enemy.x, enemy.y, Math.floor((enemy.xpValue || 0) * xpMult));
+  }
+
+  /** Drop one gem on the floor (merges the oldest ones past XP_GEMS_MAX). */
+  dropXpGem(x, y, value) {
+    if (!this.xpGemState) this.xpGemState = createGemState();
+    const gem = dropGem(this.xpGemState, { x, y, value });
+    if (!gem) return null;
+    this.bindXpGemSprite(gem, true);
+    const { removed, gem: merged } = mergeIfOverflow(this.xpGemState);
+    for (const id of removed) {
+      const spr = this.xpGemSprites?.get(id);
+      if (spr) this.releaseXpGemSprite(spr);
+      this.xpGemSprites?.delete(id);
+    }
+    if (merged) this.bindXpGemSprite(merged, true);
+    if (!this.xpGemTutorialShown && this.floatText) {
+      // One-time hint per run: XP now lies on the floor
+      this.xpGemTutorialShown = true;
+      this.floatText(x, y - 18, 'XP', PX.cyan, { size: 12, duration: 1400, rise: 18 });
+    }
+    return gem;
+  }
+
+  /** Take a sprite from the pool (or grow it) and attach it to `gem`. */
+  bindXpGemSprite(gem, bounce) {
+    if (!this.xpGems || !this.xpGemSprites) return null;
+    const key = this.textures.exists(`xp-gem-${gem.tier}`) ? `xp-gem-${gem.tier}` : 'fx-glow';
+    let spr = this.xpGems.getFirstDead(false);
+    if (!spr) {
+      spr = this.add.sprite(gem.x, gem.y, key);
+      spr.setDepth(-1);
+      this.xpGems.add(spr);
+    } else {
+      spr.setTexture(key);
+    }
+    spr.setActive(true).setVisible(true).setAlpha(1).setPosition(gem.x, gem.y);
+    spr.setScale(key === 'fx-glow' ? 0.35 : 3);
+    const anim = `${key}-anim`;
+    if (this.anims.exists(anim)) spr.play({ key: anim, startFrame: gem.id % 2 });
+    spr.bornAt = bounce ? this.time.now : -Infinity;
+    this.xpGemSprites.set(gem.id, spr);
+    return spr;
+  }
+
+  releaseXpGemSprite(spr) {
+    if (!spr) return;
+    if (spr.anims) spr.anims.stop();
+    spr.setActive(false).setVisible(false);
+  }
+
+  /**
+   * Per frame: pull gems in pickup radius (or all of them under a magnet), grant XP for the ones that
+   * reached the player, and move the pooled sprites. No XP without pickup.
+   */
+  updateXpGems(delta) {
+    if (!this.xpGemState || !this.player || !this.xpGemSprites) return;
+    if (!this.playerDead && this.player.active !== false) {
+      const mods = this.itemState ? getItemModifiers(this.itemState) : null;
+      const magnetActive = !!(mods && mods.magnetGems) || this.time.now < (this.gemVacuumUntil || 0);
+      const pickupRadius = XP_PICKUP_RADIUS * (this.xpPickupRadiusMult || 1);
+      const { collected } = tickGems(this.xpGemState, this.player, delta, { pickupRadius, magnetActive });
+      if (collected.length) {
+        let total = 0;
+        for (const g of collected) {
+          total += g.value;
+          const spr = this.xpGemSprites.get(g.id);
+          if (spr) this.releaseXpGemSprite(spr);
+          this.xpGemSprites.delete(g.id);
+        }
+        if (total > 0) window.VIBE_CODER.addXP(total);
+      }
+    }
+    const now = this.time.now;
+    for (const g of this.xpGemState.gems) {
+      const spr = this.xpGemSprites.get(g.id);
+      if (!spr) continue;
+      const age = now - spr.bornAt;
+      // Drop bounce: one 10 px hop over 260 ms, then rest
+      const hop = age >= 0 && age < 260 ? -Math.sin((age / 260) * Math.PI) * 10 : 0;
+      spr.setPosition(g.x, g.y + hop);
+    }
+  }
+
+  /** typo (zigzag), spam-bot (wind-up + straight dash), lag-spike (slow / burst) movement. */
+  updateEarlyEnemyBehavior(enemy, angle, dist) {
+    const now = this.time.now;
+    if (enemy.behavior === 'zigzag') {
+      const a = angle + Math.sin(now * (enemy.zigzagFreq || 0.006) + (enemy.zigzagPhase || 0)) * (enemy.zigzagAmp || 0.9);
+      enemy.setVelocity(Math.cos(a) * enemy.speed, Math.sin(a) * enemy.speed);
+      return;
+    }
+    if (enemy.behavior === 'dash') {
+      const cfg = enemy.dashCfg || { mult: 3.4, ms: 420, windup: 550, cd: 1600 };
+      if (enemy.dashState === 'chase') {
+        enemy.setVelocity(Math.cos(angle) * enemy.speed * 0.6, Math.sin(angle) * enemy.speed * 0.6);
+        if (now >= (enemy.dashNextAt || 0) && dist < 420) {
+          enemy.dashState = 'windup';
+          enemy.dashPhaseEnd = now + cfg.windup;
+          enemy.dashDir = { x: Math.cos(angle), y: Math.sin(angle) };
+        }
+      } else if (enemy.dashState === 'windup') {
+        enemy.setVelocity(0, 0); // brake and aim
+        if (now >= enemy.dashPhaseEnd) {
+          enemy.dashState = 'dash';
+          enemy.dashPhaseEnd = now + cfg.ms;
+        }
+      } else {
+        const d = enemy.dashDir || { x: Math.cos(angle), y: Math.sin(angle) };
+        enemy.setVelocity(d.x * enemy.speed * cfg.mult, d.y * enemy.speed * cfg.mult);
+        if (now >= enemy.dashPhaseEnd) {
+          enemy.dashState = 'chase';
+          enemy.dashNextAt = now + cfg.cd;
+        }
+      }
+      return;
+    }
+    // burst
+    const cfg = enemy.burstCfg || { slow: 1200, fast: 520, mult: 3 };
+    if (now >= (enemy.burstPhaseEnd || 0)) {
+      enemy.burstFast = !enemy.burstFast;
+      enemy.burstPhaseEnd = now + (enemy.burstFast ? cfg.fast : cfg.slow);
+    }
+    const m = enemy.burstFast ? cfg.mult : 0.35;
+    enemy.setVelocity(Math.cos(angle) * enemy.speed * m, Math.sin(angle) * enemy.speed * m);
+  }
+
+  // ===================== BIOME MECHANICS =====================
+
+  /** Apply the current biome mechanic (slow/boost zones, teleport, pulse damage, wind, gravity). */
+  updateBiomeMechanic(delta) {
+    if (!this.mapManager || !this.player || this.playerDead) return;
+    const now = this.time.now;
+    const effect = this.mapManager.getBiomeEffect(this.currentStage, this.player, now, delta, this.lastBiomeTeleport);
+    const body = this.player.body;
+    if (body) {
+      const slow = now < this.playerSlowUntil ? this.playerSlowMult : 1;
+      const mult = effect.speedMult * slow;
+      body.velocity.x = body.velocity.x * mult + effect.pushX;
+      body.velocity.y = body.velocity.y * mult + effect.pushY;
+    }
+    if (effect.teleportTo) {
+      this.lastBiomeTeleport = now;
+      const fromX = this.player.x;
+      const fromY = this.player.y;
+      this.player.setPosition(effect.teleportTo.x + 70, effect.teleportTo.y);
+      if (this.mapManager.createTeleportEffect) {
+        // Zones pair as (0,1), (2,3)...: even index = cyan side A, odd = magenta side B.
+        const zones = this.mapManager.mechanicZones || [];
+        const toIdx = zones.findIndex((z) => z.x === effect.teleportTo.x && z.y === effect.teleportTo.y);
+        const toB = toIdx % 2 === 1;
+        this.mapManager.createTeleportEffect(fromX, fromY, toB ? 0x22d3ee : 0xe879f9);
+        this.mapManager.createTeleportEffect(effect.teleportTo.x, effect.teleportTo.y, toB ? 0xe879f9 : 0x22d3ee);
+      } else {
+        this.cameras.main.flash(120, 0, 255, 136);
+      }
+    }
+    if (effect.damage > 0) {
+      this.biomeDamageAcc += effect.damage;
+      if (this.biomeDamageAcc >= 1) {
+        const dmg = Math.floor(this.biomeDamageAcc);
+        this.biomeDamageAcc -= dmg;
+        this.player.health = Math.max(0, this.player.health - dmg);
+        if (this.player.health <= 0 && !this.tryItemRevive()) this.playerDeath();
+      }
+    }
+  }
+
+  // ===================== BOSS / MINI-BOSS AI =====================
+  // Brain (phases, attack choice, cooldowns, telegraph timing): systems/bossAI.js (pure, tested).
+  // Visuals: systems/bossFx.js. Data: `mechanics` in src/data/enemies.js. Docs: docs/BOSSES.md.
+  // Every attack is telegraphed before it can hurt; damage goes through playerHit() so contact i-frames apply.
+
+  /** Lazily (re)create boss state: survives in-scene restarts, rebuilt after a scene restart. */
+  ensureBossSystems() {
+    if (this.bossFx && this.bossWalls && this.bossWalls.scene) return;
+    this.bossFx = new BossFx(this);
+    this.bossFights = [];
+    this.bossHazards = [];
+    this.bossClones = [];
+    this.bossWalls = this.physics.add.staticGroup();
+    if (this.player) this.physics.add.collider(this.player, this.bossWalls);
+    this.bossSysGen = this.runGeneration || 0;
+    this.events.once('shutdown', () => {
+      this.bossFx = null;
+      this.bossWalls = null;
+      this.bossFights = [];
+      this.bossHazards = [];
+      this.bossClones = [];
+    });
+  }
+
+  /** Wipe every boss effect/hazard (run restart). */
+  resetBossSystems() {
+    for (const h of this.bossHazards || []) { try { h.destroy?.(); } catch (_) { /* already gone */ } }
+    this.bossHazards = [];
+    this.bossClones = [];
+    this.bossFights = [];
+    this.bossFx?.clearAll();
+    if (this.bossWalls?.scene) this.bossWalls.clear(true, true);
+    this.bossSysGen = this.runGeneration || 0;
+  }
+
+  bossRand() {
+    return this.spawnRng ? this.spawnRng() : Math.random();
+  }
+
+  attachBossBrain(enemy, mech) {
+    if (!enemy || !mech) return;
+    this.ensureBossSystems();
+    if (this.bossSysGen !== (this.runGeneration || 0)) this.resetBossSystems();
+    const seed = Math.floor(this.bossRand() * 0x7fffffff) || 1;
+    enemy.bossMech = mech;
+    enemy.bossBrain = createBossBrain(mech, { seed, now: this.time.now });
+    enemy.bossHpGuard = enemy.health;
+    enemy.bossAtk = {};
+    this.bossFights.push({ enemy });
+  }
+
+  /** A hazard is { update(now, dt) -> false to remove, destroy() }; owner death removes it unless survivesOwner. */
+  addBossHazard(owner, hazard) {
+    hazard.owner = owner;
+    this.bossHazards.push(hazard);
+    return hazard;
+  }
+
+  /** Telegraphed boss damage: routed through playerHit so contact i-frames / shields / revive all apply. */
+  bossDamagePlayer(owner, mult = 1) {
+    if (this.playerDead || !this.player?.active) return;
+    const dmg = owner?.attackDamage ?? owner?.damage;
+    const base = typeof dmg === 'number' && dmg > 0 ? dmg : 20;
+    this.playerHit(this.player, { damage: Math.max(1, Math.floor(base * mult)), active: false, x: this.player.x, y: this.player.y });
+  }
+
+  updateBossAI(delta) {
+    if (!this.bossFights || !this.player || !this.bossFx) return;
+    if (this.bossSysGen !== (this.runGeneration || 0)) { this.resetBossSystems(); return; }
+    const now = this.time.now;
+    const dt = Math.min(100, delta || 16);
+
+    for (let i = this.bossHazards.length - 1; i >= 0; i--) {
+      const h = this.bossHazards[i];
+      let keep = false;
+      try { keep = !this.playerDead && h.update(now, dt) !== false; } catch (err) { logger.warn('[boss] hazard failed', err); }
+      if (!keep) {
+        try { h.destroy?.(); } catch (_) { /* already gone */ }
+        this.bossHazards.splice(i, 1);
+      }
+    }
+
+    // Recursion clones explode (telegraphed) when they die, even after their boss.
+    for (let i = this.bossClones.length - 1; i >= 0; i--) {
+      const { clone, a, owner, damage } = this.bossClones[i];
+      if (clone.active) { clone.lastX = clone.x; clone.lastY = clone.y; continue; }
+      this.bossClones.splice(i, 1);
+      if (this.playerDead) continue;
+      const x = clone.lastX ?? clone.x;
+      const y = clone.lastY ?? clone.y;
+      this.bossFx.warnCircle(x, y, a.explodeRadius, 0xff3355, a.explodeTelegraphMs);
+      const at = now + a.explodeTelegraphMs;
+      this.addBossHazard(owner, {
+        survivesOwner: true,
+        update: (n) => {
+          if (n < at) return true;
+          this.bossFx.burst(x, y, 0x22c55e, 10, a.explodeRadius);
+          if (Phaser.Math.Distance.Between(x, y, this.player.x, this.player.y) <= a.explodeRadius) this.bossDamagePlayer({ damage }, a.damageMult);
+          return false;
+        }
+      });
+    }
+
+    for (let i = this.bossFights.length - 1; i >= 0; i--) {
+      const fight = this.bossFights[i];
+      if (!fight.enemy.active) {
+        this.endBossFight(fight);
+        this.bossFights.splice(i, 1);
+        continue;
+      }
+      this.stepBossFight(fight, now);
+    }
+  }
+
+  stepBossFight(fight, now) {
+    const e = fight.enemy;
+    // Null Zones: while the player stands in one, damage to this boss is undone.
+    if (e.bossNullActive && e.health > 0 && e.health < e.bossHpGuard) {
+      e.health = e.bossHpGuard;
+      if (!e.bossNullTextAt || now - e.bossNullTextAt > 450) {
+        e.bossNullTextAt = now;
+        this.floatText(e.x, e.y - 40, 'NULL', '#c084fc', { size: 12, duration: 500 });
+      }
+    }
+    e.bossHpGuard = e.health;
+
+    const dist = Phaser.Math.Distance.Between(e.x, e.y, this.player.x, this.player.y);
+    const { brain, events } = stepBoss(e.bossBrain, e.bossMech, { now, hp: e.health, maxHp: e.maxHealth, dist });
+    e.bossBrain = brain;
+    for (const ev of events) {
+      try {
+        if (ev.type === 'phase') this.onBossPhase(e, ev.phase);
+        else if (e.isMiniBoss) this.runMiniBossAbility(e, ev.type, ev.attack, now);
+        else this.runBossAttack(e, ev.type, ev.attack, now);
+      } catch (err) {
+        logger.warn('[boss] attack failed', ev, err);
+      }
+    }
+    // Attack-driven movement (holds, dashes) overrides the chase velocity set by the enemy loop.
+    if (e.bossMove && e.bossMove(now) === false) e.bossMove = null;
+  }
+
+  onBossPhase(e, phase) {
+    const color = e.bossColor ?? e.miniBossColor ?? 0xffffff;
+    this.bossFx.burst(e.x, e.y, color, 12, 80);
+    this.bossFx.warnSprite(e, 0xffffff, 600);
+    this.cameras.main.shake(250, 0.008);
+    this.floatText(e.x, e.y - 50, `${t('bosses.phase')} ${phase}`, '#fbbf24', { size: 16, duration: 1200, rise: 36 });
+    logger.debug('[boss] phase', e.enemyType, phase);
+  }
+
+  endBossFight(fight) {
+    const e = fight.enemy;
+    e.bossMove = null;
+    for (let i = this.bossHazards.length - 1; i >= 0; i--) {
+      const h = this.bossHazards[i];
+      if (h.owner !== e || h.survivesOwner) continue;
+      try { h.destroy?.(); } catch (_) { /* already gone */ }
+      this.bossHazards.splice(i, 1);
+    }
+    if (e.isBoss && !this.playerDead) this.onBossDefeated(e);
+  }
+
+  /** Guaranteed epic/legendary item + "BOSS DEFEATED" banner (the weapon drop stays in hitEnemy). */
+  onBossDefeated(e) {
+    const loot = Object.values(ITEMS).filter((it) => it.rarity === 'legendary' || it.rarity === 'epic');
+    if (loot.length) {
+      const r1 = nextRandom(e.bossBrain?.rngSeed ?? 1);
+      const legendary = loot.filter((it) => it.rarity === 'legendary');
+      const epic = loot.filter((it) => it.rarity === 'epic');
+      const from = (r1.value < 0.5 && legendary.length) || !epic.length ? legendary : epic;
+      const pick = from[Math.floor(nextRandom(r1.seed).value * from.length)] || loot[0];
+      const x = Phaser.Math.Clamp(e.x, 60, this.worldWidth - 60);
+      const y = Phaser.Math.Clamp(e.y + 24, 60, this.worldHeight - 60);
+      this.spawnItemPickup(x, y, pick.id);
+    }
+    const name = e.bossNameKey ? t(e.bossNameKey) : (e.bossName || '');
+    this.showHudBanner(t('bosses.defeated'), { subtitle: `${name} · ${t('bosses.defeated_sub')}`, color: HUD.amber, duration: 2600 });
+  }
+
+  /** Boss bar text: name + phase pips (●●○) + attack name for 1 s after its telegraph starts. */
+  bossBarLabel(b) {
+    const key = b.bossNameKey || b.miniBossDef?.nameKey;
+    const name = String((key ? t(key) : '') || b.bossName || b.miniBossName || '').trim();
+    if (!b.bossBrain || !b.bossMech) return name;
+    const info = bossBarInfo(b.bossBrain, b.bossMech, this.time.now);
+    return info.labelKey ? `${name} ${info.pips} › ${t(info.labelKey)}` : `${name} ${info.pips}`;
+  }
+
+  /** Hold a boss still (wind-ups) until `until`. */
+  holdBoss(e, until) {
+    e.bossMove = (n) => {
+      if (e.body) e.setVelocity(0, 0);
+      return n < until;
+    };
+  }
+
+  pointToSegmentDist(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const l2 = dx * dx + dy * dy;
+    const tt = l2 > 0 ? Phaser.Math.Clamp(((px - x1) * dx + (py - y1) * dy) / l2, 0, 1) : 0;
+    return Math.hypot(px - (x1 + tt * dx), py - (y1 + tt * dy));
+  }
+
+  clampToWorld(x, y, m = 60) {
+    return { x: Phaser.Math.Clamp(x, m, this.worldWidth - m), y: Phaser.Math.Clamp(y, m, this.worldHeight - m) };
+  }
+
+  /** Expanding ring with a safe gap; hits once if the player is on the band outside the gap. */
+  startBossRing(owner, { cx, cy, startAt, durMs, maxR, width, gap, gapRad, mult }) {
+    const g = this.bossFx.zone();
+    let hit = false;
+    this.addBossHazard(owner, {
+      update: (n) => {
+        if (n < startAt) return true;
+        const r = maxR * Math.min(1, (n - startAt) / durMs);
+        this.bossFx.drawRing(g, cx, cy, r, width, gap, gapRad);
+        if (!hit) {
+          const d = Phaser.Math.Distance.Between(cx, cy, this.player.x, this.player.y);
+          if (Math.abs(d - r) <= width / 2 + 10) {
+            const diff = Phaser.Math.Angle.Wrap(Math.atan2(this.player.y - cy, this.player.x - cx) - gap);
+            if (Math.abs(diff) > gapRad / 2) { hit = true; this.bossDamagePlayer(owner, mult); }
+          }
+        }
+        return n < startAt + durMs;
+      },
+      destroy: () => g.destroy()
+    });
+  }
+
+  /** Static zones (circles) drawn every frame; `onTick(n, inside)` runs gameplay. */
+  startBossZones(owner, spots, r, color, until, onTick, glyph = null) {
+    const gs = spots.map(() => this.bossFx.zone());
+    this.addBossHazard(owner, {
+      update: (n) => {
+        const inside = spots.some((s) => Phaser.Math.Distance.Between(s.x, s.y, this.player.x, this.player.y) <= (s.r ?? r));
+        const pulse = onTick ? onTick(n, inside) || 0 : 0;
+        spots.forEach((s, i) => this.bossFx.drawZone(gs[i], s.x, s.y, s.r ?? r, color, { pulse, glyph }));
+        return n < until;
+      },
+      destroy: () => gs.forEach((g) => g.destroy())
+    });
+  }
+
+  spotsAroundPlayer(count, spread) {
+    const spots = [{ ...this.clampToWorld(this.player.x, this.player.y) }];
+    const base = this.bossRand() * Math.PI * 2;
+    for (let i = 1; i < count; i++) {
+      const a = base + (Math.PI * 2 * i) / Math.max(1, count - 1);
+      spots.push(this.clampToWorld(this.player.x + Math.cos(a) * spread, this.player.y + Math.sin(a) * spread));
+    }
+    return spots;
+  }
+
+  runBossAttack(e, stage, id, now) {
+    const a = e.bossMech.attacks[id];
+    if (!a) return;
+    const st = e.bossAtk[id] || (e.bossAtk[id] = {});
+    const fx = this.bossFx;
+    const P = this.player;
+    const color = e.bossColor ?? 0xff3355;
+    const ms = e.bossBrain.current?.telegraphEnd ? e.bossBrain.current.telegraphEnd - now : a.telegraphMs;
+
+    switch (id) {
+      // ---------- STACK OVERFLOW ----------
+      case 'stackPush': {
+        if (stage === 'telegraph') {
+          const size = a.blockSize;
+          st.cells = [];
+          for (let c = 0; c < a.columns; c++) {
+            const x = P.x + (c - (a.columns - 1) / 2) * 150;
+            const gapIdx = Math.floor(this.bossRand() * a.blocks);
+            for (let k = 0; k < a.blocks; k++) {
+              if (k === gapIdx) continue;
+              const cell = this.clampToWorld(x, P.y + (k - (a.blocks - 1) / 2) * size);
+              st.cells.push(cell);
+              fx.warnRect(cell.x, cell.y, size, size, 0x000000, ms);
+            }
+          }
+        } else if (stage === 'execute') {
+          const size = a.blockSize;
+          const blocks = [];
+          for (const cell of st.cells || []) {
+            const blk = fx._track(this.add.rectangle(cell.x, cell.y - 140, size - 2, size - 2, 0x16a34a).setStrokeStyle(2, 0x052e16).setDepth(4));
+            blocks.push(blk);
+            this.tweens.add({
+              targets: blk,
+              y: cell.y,
+              duration: 140,
+              onComplete: () => {
+                if (!blk.scene) return;
+                if (Math.abs(P.x - cell.x) < size / 2 + 10 && Math.abs(P.y - cell.y) < size / 2 + 12) this.bossDamagePlayer(e, a.damageMult);
+                if (this.bossWalls?.scene) {
+                  this.bossWalls.add(blk);
+                  blk.body?.updateFromGameObject?.();
+                }
+                fx.burst(cell.x, cell.y + size / 2, 0x86efac, 4, 20);
+              }
+            });
+          }
+          const until = now + a.activeMs;
+          this.addBossHazard(e, {
+            update: (n) => n < until,
+            destroy: () => blocks.forEach((b) => { if (b.scene) b.destroy(); })
+          });
+        }
+        break;
+      }
+      case 'recursion': {
+        if (stage === 'telegraph') {
+          const ang = Phaser.Math.Angle.Between(e.x, e.y, P.x, P.y);
+          st.spots = [-1, 1].slice(0, a.clones).map((s) => this.clampToWorld(e.x + Math.cos(ang + s * Math.PI / 2) * 90, e.y + Math.sin(ang + s * Math.PI / 2) * 90));
+          st.spots.forEach((p) => fx.warnCircle(p.x, p.y, 34, color, ms));
+          fx.warnSprite(e, 0xffffff, ms);
+          this.holdBoss(e, now + ms);
+        } else if (stage === 'execute') {
+          for (const p of st.spots || []) {
+            if (this.enemies.countActive() >= (BALANCE.DIRECTOR_HARD_CAP ?? 360)) break;
+            const clone = this.enemies.create(p.x, p.y, e.texture.key);
+            clone.setScale(e.scaleX * 0.8);
+            const animKey = e.anims?.currentAnim?.key;
+            if (animKey) clone.play(animKey);
+            clone.setTint(0x86efac);
+            clone.health = Math.max(1, Math.floor(e.maxHealth * a.cloneHpPct));
+            clone.maxHealth = clone.health;
+            clone.speed = Math.floor(e.speed * 1.4);
+            clone.damage = Math.max(1, Math.floor((e.attackDamage ?? e.damage) * 0.4));
+            clone.xpValue = Math.floor(e.xpValue * 0.1);
+            clone.enemyType = 'stack-overflow';
+            clone.behavior = 'chase';
+            clone.isBossClone = true;
+            this.bossClones.push({ clone, a, owner: e, damage: e.attackDamage ?? e.damage });
+            fx.burst(p.x, p.y, 0x22c55e, 8, 40);
+          }
+        }
+        break;
+      }
+      case 'overflow': {
+        if (stage === 'telegraph') {
+          st.cx = e.x;
+          st.cy = e.y;
+          st.gap = Phaser.Math.Angle.Between(e.x, e.y, P.x, P.y) + (this.bossRand() - 0.5) * 1.6;
+          fx.warnRing(st.cx, st.cy, a.maxRadius, st.gap, a.gapRad, 0xff3355, ms);
+          fx.warnSprite(e, 0xff3355, ms);
+          this.holdBoss(e, now + ms + a.activeMs);
+        } else if (stage === 'execute') {
+          this.cameras.main.shake(200, 0.006);
+          this.startBossRing(e, { cx: st.cx, cy: st.cy, startAt: now, durMs: a.activeMs, maxR: a.maxRadius, width: a.ringWidth, gap: st.gap, gapRad: a.gapRad, mult: a.damageMult });
+        }
+        break;
+      }
+
+      // ---------- NULL POINTER ----------
+      case 'nullZones': {
+        if (stage === 'telegraph') {
+          st.spots = this.spotsAroundPlayer(a.zones, a.spread);
+          st.spots.forEach((p) => fx.warnCircle(p.x, p.y, a.radius, 0xa855f7, ms));
+        } else if (stage === 'execute') {
+          this.startBossZones(e, st.spots || [], a.radius, 0xa855f7, now + a.activeMs, (n, inside) => {
+            e.bossNullActive = inside && e.active;
+            if (e.active) e.setAlpha(inside ? 0.45 : 1);
+            return inside ? 0.6 : 0;
+          }, 'null');
+          // reset when the zones expire / boss dies
+          this.addBossHazard(e, {
+            update: (n) => n < now + a.activeMs,
+            destroy: () => { e.bossNullActive = false; if (e.active) e.setAlpha(1); }
+          });
+        }
+        break;
+      }
+      case 'dereference': {
+        if (stage === 'telegraph') {
+          st.ang = Phaser.Math.Angle.Between(e.x, e.y, P.x, P.y);
+          st.sx = e.x;
+          st.sy = e.y;
+          fx.warnLine(e.x, e.y, e.x + Math.cos(st.ang) * a.length, e.y + Math.sin(st.ang) * a.length, a.width, 0xff3355, ms);
+          fx.warnSprite(e, 0xff00ff, ms);
+          this.holdBoss(e, now + ms + 20);
+        } else if (stage === 'execute') {
+          const speed = a.length / (a.activeMs / 1000);
+          const vx = Math.cos(st.ang) * speed;
+          const vy = Math.sin(st.ang) * speed;
+          const end = now + a.activeMs;
+          e.setPosition(st.sx, st.sy);
+          e.bossMove = (n) => {
+            if (n >= end || e.x < 40 || e.y < 40 || e.x > this.worldWidth - 40 || e.y > this.worldHeight - 40) { e.setVelocity(0, 0); return false; }
+            e.setVelocity(vx, vy);
+            return true;
+          };
+          let hit = false;
+          this.addBossHazard(e, {
+            update: (n) => {
+              if (!hit && e.active && this.pointToSegmentDist(P.x, P.y, st.sx, st.sy, e.x, e.y) <= a.width / 2 + 8) {
+                hit = true;
+                this.bossDamagePlayer(e, a.damageMult);
+              }
+              return n < end + 50;
+            }
+          });
+          fx.burst(st.sx, st.sy, 0xff00ff, 8, 50);
+        }
+        break;
+      }
+      case 'glitchSwarm': {
+        if (stage === 'telegraph') {
+          st.spots = [];
+          for (let i = 0; i < a.count; i++) {
+            const ang = (Math.PI * 2 * i) / a.count;
+            st.spots.push(this.clampToWorld(e.x + Math.cos(ang) * a.radius, e.y + Math.sin(ang) * a.radius));
+          }
+          st.spots.forEach((p) => fx.warnMarker(p.x, p.y, 0xe879f9, ms));
+          this.holdBoss(e, now + ms);
+        } else if (stage === 'execute') {
+          for (const p of st.spots || []) {
+            this.spawnEnemy({ type: this.enemyTypes[a.minion] ? a.minion : 'bug', x: p.x, y: p.y, elite: false });
+            fx.burst(p.x, p.y, 0xe879f9, 6, 30);
+          }
+        }
+        break;
+      }
+
+      // ---------- MEMORY LEAK PRIME ----------
+      case 'leak': {
+        if (stage === 'telegraph') {
+          const mid = { x: (e.x + P.x) / 2, y: (e.y + P.y) / 2 };
+          st.spots = [this.clampToWorld(e.x, e.y), this.clampToWorld(P.x, P.y), this.clampToWorld(mid.x, mid.y)].slice(0, a.puddles);
+          st.spots.forEach((p) => fx.warnCircle(p.x, p.y, a.startRadius * 1.6, 0x7c3aed, ms));
+        } else if (stage === 'execute') {
+          const start = now;
+          const spots = (st.spots || []).map((p) => ({ ...p, r: a.startRadius }));
+          this.startBossZones(e, spots, a.startRadius, 0x7c3aed, now + a.activeMs, (n, inside) => {
+            const k = Math.min(1, ((n - start) / a.activeMs) * 1.6);
+            spots.forEach((s) => { s.r = a.startRadius + (a.endRadius - a.startRadius) * k; });
+            if (inside && !(this.playerSlowUntil > n && this.playerSlowMult < a.slowMult)) {
+              this.playerSlowUntil = n + 120;
+              this.playerSlowMult = a.slowMult;
+            }
+            return 0;
+          });
+        }
+        break;
+      }
+      case 'garbage': {
+        if (stage === 'telegraph') {
+          const cands = [];
+          this.enemies.children.each((o) => {
+            if (!o.active || o === e || o.isBoss || o.isMiniBoss || o.isBossClone || o.isBossFragment) return;
+            const d = Phaser.Math.Distance.Between(e.x, e.y, o.x, o.y);
+            if (d <= a.radius) cands.push({ o, d });
+          });
+          cands.sort((p, q) => p.d - q.d);
+          const targets = cands.slice(0, a.maxTargets).map((c) => c.o);
+          targets.forEach((o) => o.setTint(0xa855f7));
+          const g = fx.zone();
+          const absorbAt = now + ms + a.activeMs;
+          const activeAt = now + ms;
+          this.holdBoss(e, absorbAt);
+          this.addBossHazard(e, {
+            update: (n) => {
+              g.clear();
+              const alive = targets.filter((o) => o.active);
+              for (const o of alive) {
+                g.lineStyle(n < activeAt ? 1 : 3, 0xa855f7, n < activeAt ? fx._blink() : 0.9);
+                g.lineBetween(e.x, e.y, o.x, o.y);
+                if (n >= activeAt && o.body) {
+                  const ang = Phaser.Math.Angle.Between(o.x, o.y, e.x, e.y);
+                  o.setVelocity(Math.cos(ang) * 140, Math.sin(ang) * 140);
+                }
+              }
+              if (n < absorbAt) return true;
+              if (targets.length && !alive.length) {
+                this.floatText(e.x, e.y - 50, 'GC INTERRUPTED', '#34d399', { size: 13, duration: 900 });
+              }
+              let heal = 0;
+              for (const o of alive) {
+                heal += Math.floor(e.maxHealth * a.healPctEach);
+                fx.burst(o.x, o.y, 0xa855f7, 5, 25);
+                o.destroy();
+              }
+              if (heal > 0 && e.active) {
+                e.health = Math.min(e.maxHealth, e.health + heal);
+                e.bossHpGuard = e.health;
+                this.showItemText(e.x, e.y - 30, `+${heal}`, 0x00ff00);
+              }
+              return false;
+            },
+            destroy: () => {
+              g.destroy();
+              targets.forEach((o) => { if (o.active) o.clearTint(); });
+            }
+          });
+        }
+        break;
+      }
+      case 'fragmentation': {
+        if (stage === 'telegraph') {
+          st.base = this.bossRand() * Math.PI * 2;
+          for (let i = 0; i < a.fragments; i++) {
+            const ang = st.base + (Math.PI * 2 * i) / a.fragments;
+            fx.warnCircle(e.x + Math.cos(ang) * a.orbitRadius, e.y + Math.sin(ang) * a.orbitRadius, 20, 0xd946ef, ms);
+          }
+          fx.warnSprite(e, 0xd946ef, ms);
+        } else if (stage === 'execute') {
+          const tex = this.textures.exists('enemy-memory-leak-v2') ? 'enemy-memory-leak-v2' : e.texture.key;
+          const frags = [];
+          for (let i = 0; i < a.fragments; i++) {
+            if (this.enemies.countActive() >= (BALANCE.DIRECTOR_HARD_CAP ?? 360)) break;
+            const ang = st.base + (Math.PI * 2 * i) / a.fragments;
+            const f = this.enemies.create(e.x + Math.cos(ang) * a.orbitRadius, e.y + Math.sin(ang) * a.orbitRadius, tex);
+            if (this.anims.exists('enemy-memory-leak-v2-anim') && tex === 'enemy-memory-leak-v2') f.play('enemy-memory-leak-v2-anim');
+            f.health = Math.max(1, Math.floor(e.maxHealth * a.fragmentHpPct));
+            f.maxHealth = f.health;
+            f.speed = 0;
+            f.damage = Math.max(1, Math.floor((e.attackDamage ?? e.damage) * 0.4));
+            f.xpValue = 20;
+            f.enemyType = 'memory-leak';
+            f.behavior = 'chase';
+            f.isBossFragment = true;
+            f.nextShotAt = now + 700 + i * 420;
+            f.aiming = false;
+            frags.push(f);
+          }
+          let orbit = st.base;
+          const end = now + a.activeMs;
+          this.addBossHazard(e, {
+            update: (n, dt) => {
+              orbit += dt * 0.0016;
+              frags.forEach((f, i) => {
+                if (!f.active || !e.active) return;
+                const ang = orbit + (Math.PI * 2 * i) / frags.length;
+                f.setPosition(e.x + Math.cos(ang) * a.orbitRadius, e.y + Math.sin(ang) * a.orbitRadius);
+                if (f.body) f.setVelocity(0, 0);
+                if (!f.aiming && n >= f.nextShotAt - a.shotTelegraphMs) {
+                  f.aiming = true;
+                  fx.warnSprite(f, 0xffffff, a.shotTelegraphMs);
+                }
+                if (f.aiming && n >= f.nextShotAt) {
+                  f.aiming = false;
+                  f.nextShotAt += a.shotEveryMs;
+                  this.fireBossShot(e, f.x, f.y, Phaser.Math.Angle.Between(f.x, f.y, P.x, P.y), a.shotSpeed, a.damageMult);
+                }
+              });
+              return n < end && frags.some((f) => f.active);
+            },
+            destroy: () => frags.forEach((f) => {
+              if (!f.active) return;
+              fx.burst(f.x, f.y, 0xd946ef, 5, 25);
+              f.destroy();
+            })
+          });
+        }
+        break;
+      }
+
+      // ---------- KERNEL PANIC ----------
+      case 'panic': {
+        if (stage === 'telegraph') {
+          this.cameras.main.flash(140, 120, 0, 0);
+          this.time.delayedCall(Math.floor(ms / 2), () => { if (!this.playerDead) this.cameras.main.flash(140, 120, 0, 0); });
+          st.spots = this.spotsAroundPlayer(a.zones, a.spread);
+          st.spots.forEach((p) => fx.warnCircle(p.x, p.y, a.radius, 0xff3355, ms));
+        } else if (stage === 'execute') {
+          const start = now;
+          let lastPulse = -1;
+          let pulseAt = 0;
+          this.startBossZones(e, st.spots || [], a.radius, 0xff3355, now + a.activeMs, (n, inside) => {
+            const idx = Math.floor((n - start - 200) / a.pulseMs);
+            if (idx >= 0 && idx !== lastPulse) {
+              lastPulse = idx;
+              pulseAt = n;
+              if (inside) this.bossDamagePlayer(e, a.damageMult);
+            }
+            return Math.max(0, 1 - (n - pulseAt) / 220);
+          });
+        }
+        break;
+      }
+      case 'interrupt': {
+        if (stage === 'telegraph') {
+          const ang = Phaser.Math.Angle.Between(e.x, e.y, P.x, P.y);
+          st.dest = this.clampToWorld(e.x + Math.cos(ang) * a.landDistance, e.y + Math.sin(ang) * a.landDistance);
+          fx.warnCircle(P.x, P.y, 26, 0x22d3ee, ms);
+          fx.warnMarker(st.dest.x, st.dest.y, 0x22d3ee, ms, 14);
+          this.holdBoss(e, now + ms + a.activeMs);
+        } else if (stage === 'execute') {
+          fx.burst(P.x, P.y, 0x22d3ee, 8, 40);
+          P.setPosition(st.dest.x, st.dest.y);
+          fx.burst(P.x, P.y, 0x22d3ee, 8, 40);
+          this.cameras.main.shake(160, 0.006);
+          const gap = Phaser.Math.Angle.Between(e.x, e.y, st.dest.x, st.dest.y) + (this.bossRand() - 0.5) * 2.4;
+          fx.warnRing(e.x, e.y, a.maxRadius, gap, a.gapRad, 0xff3355, a.ringDelayMs);
+          this.startBossRing(e, { cx: e.x, cy: e.y, startAt: now + a.ringDelayMs, durMs: a.activeMs - a.ringDelayMs, maxR: a.maxRadius, width: a.ringWidth, gap, gapRad: a.gapRad, mult: a.damageMult });
+        }
+        break;
+      }
+      case 'halt': {
+        if (stage === 'telegraph') {
+          const g = fx.zone();
+          const until = now + ms;
+          this.floatText(P.x, P.y - 46, 'HALT', '#93c5fd', { size: 16, duration: ms, rise: 10 });
+          this.addBossHazard(e, {
+            update: (n) => {
+              g.clear();
+              const k = 1 - Math.min(1, (n - now) / ms);
+              const s = Math.round(22 + 26 * k);
+              g.lineStyle(3, 0x93c5fd, fx._blink());
+              for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+                g.lineBetween(P.x + sx * s, P.y + sy * s, P.x + sx * (s - 10), P.y + sy * s);
+                g.lineBetween(P.x + sx * s, P.y + sy * s, P.x + sx * s, P.y + sy * (s - 10));
+              }
+              return n < until;
+            },
+            destroy: () => g.destroy()
+          });
+        } else if (stage === 'execute') {
+          this.playerSlowUntil = now + a.freezeMs;
+          this.playerSlowMult = 0;
+          P.setTint(0x93c5fd);
+          this.time.delayedCall(a.freezeMs, () => { if (P.active) P.clearTint(); });
+          const sx = e.x;
+          const sy = e.y;
+          const ang = Phaser.Math.Angle.Between(sx, sy, P.x, P.y);
+          fx.warnLine(sx, sy, sx + Math.cos(ang) * a.beamLength, sy + Math.sin(ang) * a.beamLength, a.beamWidth, 0xff3355, a.beamDelayMs);
+          const fireAt = now + a.beamDelayMs;
+          this.holdBoss(e, fireAt + 150);
+          this.addBossHazard(e, {
+            update: (n) => {
+              if (n < fireAt) return true;
+              fx.beam(sx, sy, ang, a.beamLength, a.beamWidth, 0xff3355);
+              this.cameras.main.shake(180, 0.01);
+              const ex = sx + Math.cos(ang) * a.beamLength;
+              const ey = sy + Math.sin(ang) * a.beamLength;
+              if (this.pointToSegmentDist(P.x, P.y, sx, sy, ex, ey) <= a.beamWidth / 2 + 6) this.bossDamagePlayer(e, a.damageMult);
+              return false;
+            }
+          });
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  /** Slow, visible enemy shot (pixel square). */
+  fireBossShot(owner, x, y, ang, speed, mult) {
+    const shot = this.bossFx._track(this.add.rectangle(x, y, 8, 8, 0xd946ef).setStrokeStyle(2, 0xffffff).setDepth(6));
+    const vx = Math.cos(ang) * speed;
+    const vy = Math.sin(ang) * speed;
+    const dieAt = this.time.now + 3200;
+    const damage = owner?.attackDamage ?? owner?.damage;
+    this.addBossHazard(owner, {
+      survivesOwner: true,
+      update: (n, dt) => {
+        shot.x += (vx * dt) / 1000;
+        shot.y += (vy * dt) / 1000;
+        if (Phaser.Math.Distance.Between(shot.x, shot.y, this.player.x, this.player.y) <= 16) {
+          this.bossDamagePlayer({ damage }, mult);
+          return false;
+        }
+        return n < dieAt;
+      },
+      destroy: () => { if (shot.scene) shot.destroy(); }
+    });
+  }
+
+  /** Mini-boss abilities (original five) now telegraphed; phase 2 (50% HP) scales them by mechanics.intensity. */
+  runMiniBossAbility(enemy, stage, action, now) {
+    const def = enemy.miniBossDef;
+    const mech = enemy.bossMech;
+    if (!def || !mech) return;
+    const st = enemy.bossAtk[action] || (enemy.bossAtk[action] = {});
+    const k = (mech.intensity || [])[enemy.bossBrain.phase - 1] || 1;
+    const fx = this.bossFx;
+    const P = this.player;
+    const ms = enemy.bossBrain.current?.telegraphEnd ? enemy.bossBrain.current.telegraphEnd - now : 800;
+    const color = def.color ?? 0xff3355;
+
+    if (stage === 'telegraph') {
+      if (action === 'freeze') {
+        st.cx = enemy.x;
+        st.cy = enemy.y;
+        fx.warnCircle(enemy.x, enemy.y, def.abilityRange, 0x67e8f9, ms);
+        this.holdBoss(enemy, now + ms);
+      } else if (action === 'summon') {
+        const n = Math.round(def.minionCount * k);
+        st.spots = [];
+        for (let i = 0; i < n; i++) {
+          const a = (Math.PI * 2 * i) / n;
+          st.spots.push(this.clampToWorld(enemy.x + Math.cos(a) * 44, enemy.y + Math.sin(a) * 44));
+        }
+        st.spots.forEach((p) => fx.warnMarker(p.x, p.y, color, ms, 8));
+      } else if (action === 'dash') {
+        st.ang = Phaser.Math.Angle.Between(enemy.x, enemy.y, P.x, P.y);
+        st.speed = (enemy.baseSpeed || enemy.speed) * def.dashMult * k;
+        const len = Math.max(120, (st.speed * def.dashMs) / 1000);
+        fx.warnLine(enemy.x, enemy.y, enemy.x + Math.cos(st.ang) * len, enemy.y + Math.sin(st.ang) * len, 36, 0xff3355, ms);
+        this.holdBoss(enemy, now + ms);
+      } else if (action === 'regen') {
+        fx.warnSprite(enemy, 0x34d399, ms);
+        this.floatText(enemy.x, enemy.y - 36, 'PATCHING…', '#34d399', { size: 11, duration: ms });
+      } else if (action === 'blink') {
+        const a = this.bossRand() * Math.PI * 2;
+        const dist = def.blinkDistance / Math.max(1, k * 0.8);
+        st.dest = this.clampToWorld(P.x + Math.cos(a) * dist, P.y + Math.sin(a) * dist, 50);
+        fx.warnMarker(st.dest.x, st.dest.y, color, ms);
+        fx.warnSprite(enemy, 0xffffff, ms);
+      }
+      return;
+    }
+    if (stage !== 'execute') return;
+
+    if (action === 'freeze') {
+      if (Phaser.Math.Distance.Between(st.cx, st.cy, P.x, P.y) > def.abilityRange) return; // dodged
+      const slowMs = Math.floor(def.slowMs * k);
+      this.playerSlowUntil = now + slowMs;
+      this.playerSlowMult = def.slowMult / k;
+      P.setTint(0x88ffff);
+      this.time.delayedCall(slowMs, () => { if (P && P.active) P.clearTint(); });
+    } else if (action === 'summon') {
+      const minion = this.enemyTypes[def.minionType] || this.enemyTypes.bug;
+      for (const p of st.spots || []) {
+        if (this.enemies.countActive() >= (BALANCE.DIRECTOR_HARD_CAP ?? 360)) break;
+        const m = this.enemies.create(p.x, p.y, minion.texture || def.minionType);
+        m.health = Math.floor(minion.health * (1 + this.waveNumber * 0.05));
+        m.maxHealth = m.health;
+        m.speed = minion.speed;
+        m.damage = Math.max(1, Math.floor(minion.damage * (1 + this.waveNumber * BALANCE.WAVE_DAMAGE_FACTOR)));
+        m.xpValue = minion.xpValue;
+        m.enemyType = def.minionType;
+        m.behavior = 'chase';
+      }
+    } else if (action === 'dash') {
+      const end = now + def.dashMs;
+      const vx = Math.cos(st.ang) * st.speed;
+      const vy = Math.sin(st.ang) * st.speed;
+      enemy.bossMove = (n) => {
+        if (n >= end) return false;
+        if (enemy.body) enemy.setVelocity(vx, vy);
+        return true;
+      };
+    } else if (action === 'regen') {
+      const heal = Math.floor((enemy.maxHealth || enemy.health) * def.regenPct * k);
+      enemy.health = Math.min(enemy.maxHealth || enemy.health, enemy.health + heal);
+      enemy.bossHpGuard = enemy.health;
+      this.showItemText(enemy.x, enemy.y - 30, `+${heal}`, 0x00ff00);
+    } else if (action === 'blink') {
+      fx.burst(enemy.x, enemy.y, color, 6, 30);
+      enemy.setPosition(st.dest.x, st.dest.y);
+      fx.burst(enemy.x, enemy.y, color, 6, 30);
+    }
   }
 
   checkWeaponEvolution(newWeapon) {
@@ -3727,23 +5193,7 @@ export default class ArenaScene extends Phaser.Scene {
     this.cameras.main.flash(400, 255, 255, 255);
     this.cameras.main.shake(300, 0.02);
 
-    const evoText = this.add.text(400, 250, `⚡ WEAPON EVOLVED! ⚡\n${evolved.name}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
-      color: this.hexToColorStr(evolved.color),
-      fontStyle: 'bold',
-      align: 'center',
-      stroke: '#000000',
-      strokeThickness: 5
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    this.tweens.add({
-      targets: evoText,
-      scale: 1.5,
-      alpha: 0,
-      duration: 2500,
-      onComplete: () => evoText.destroy()
-    });
+    this.showHudBanner(t('hud.weapon_evolved'), { subtitle: String(evolved.name || ''), color: typeof evolved.color === 'number' ? evolved.color : PX.amber, duration: 2500 });
 
     // Particle burst
     for (let i = 0; i < 20; i++) {
@@ -3770,22 +5220,9 @@ export default class ArenaScene extends Phaser.Scene {
     // For now, give bonus XP and create visual magnet effect
     Audio.playMagnet();
 
-    const magnetText = this.add.text(400, 350, '🧲 XP MAGNET! 🧲', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '20px',
-      color: '#00ffff',
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 3
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    this.tweens.add({
-      targets: magnetText,
-      scale: 1.3,
-      alpha: 0,
-      duration: 1500,
-      onComplete: () => magnetText.destroy()
-    });
+    this.floatText(this.player.x, this.player.y - 56, t('hud.xp_magnet'), PX.cyan, { size: 14, duration: 1100, rise: 24 });
+    // Vacuum every XP gem on the floor for a moment (Vampire Survivors "vacuum")
+    this.gemVacuumUntil = this.time.now + 1500;
 
     // Create magnetic pull visual on nearby enemies
     const magnetRadius = 200;
@@ -3807,8 +5244,8 @@ export default class ArenaScene extends Phaser.Scene {
           ease: 'Quad.easeIn',
           onComplete: () => {
             if (enemy.active) {
-              // Award XP for magnetized enemies
-              window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * 0.5));
+              // Magnetized enemies drop half-value gems right on the player (picked up next frame)
+              this.dropXpGem(this.player.x, this.player.y, Math.floor(enemy.xpValue * 0.5));
               window.VIBE_CODER.kills++;
 
               // Death effect
@@ -3846,114 +5283,146 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   updateOrbitals() {
-    const orbitalWeapons = ['orbital', 'ringoffire', 'plasmaorb', 'deathaura'];
-    if (!orbitalWeapons.includes(this.currentWeapon.type) || this.orbitals.getLength() === 0) return;
+    if (!ORBITAL_WEAPON_IDS.includes(this.currentWeapon.type) || this.orbitals.getLength() === 0) return;
+    const weapon = this.orbitalWeaponDef || this.resolveWeaponDef(this.currentWeapon.type);
+    const power = getPower(weapon);
+    const radius = 64;
+    // Time-based orbit (~3 rad/s, one lap per ~2.1 s) so low-FPS devices don't lose orbital damage
+    const speed = 3 * Math.min(100, this.game.loop.delta || 16) / 1000;
+    const now = this.time.now;
+    const cooldown = (power.orbit && power.orbit.hitCooldownMs) || 250;
 
-    const radius = 80;
-    const speed = 0.05;
+    if (this.orbitalAura) this.orbitalAura.setPosition(this.player.x, this.player.y);
 
     this.orbitals.children.each((orbital) => {
-      orbital.angle += speed;
-      orbital.x = this.player.x + Math.cos(orbital.angle) * radius;
-      orbital.y = this.player.y + Math.sin(orbital.angle) * radius;
+      orbital.orbAngle += speed;
+      orbital.x = this.player.x + Math.cos(orbital.orbAngle) * radius;
+      orbital.y = this.player.y + Math.sin(orbital.orbAngle) * radius;
+      const times = orbital.hitTimes || (orbital.hitTimes = new WeakMap());
 
-      // Check collision with enemies
+      // Contact damage with a per-enemy cooldown (was every frame), burn/slow via the weapon power
       this.enemies.children.each((enemy) => {
         if (!enemy.active) return;
-        const dist = Phaser.Math.Distance.Between(orbital.x, orbital.y, enemy.x, enemy.y);
-        if (dist < 25) {
-          // Hit enemy
-          enemy.health -= orbital.damage;
-          enemy.setTint(0xffffff);
-          this.time.delayedCall(50, () => {
-            if (enemy.active) enemy.clearTint();
-          });
-
-          if (enemy.health <= 0) {
-            const xpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
-            window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * xpMult));
-            window.VIBE_CODER.kills++;
-            if (Math.random() < 0.1) this.spawnWeaponDrop(enemy.x, enemy.y);
-            this.tryBarkOnKill();
-            enemy.destroy();
-            this.updateHUD();
-          }
-        }
+        const dx = orbital.x - enemy.x;
+        const dy = orbital.y - enemy.y;
+        const reach = enemy.isBoss ? 50 : 34;
+        if (dx * dx + dy * dy >= reach * reach) return;
+        if (!hitReady(times.get(enemy), now, cooldown)) return;
+        times.set(enemy, now);
+        this.dealWeaponHit(enemy, weapon, orbital.damage, { quiet: true });
+        if (power.knockback && enemy.active) this.knockback(enemy, this.player.x, this.player.y, power.knockback);
       });
     });
+
+    // Pulses: plasma orbs detonate, death aura damages + slows around the player
+    if (power.pulse && now - (this.lastOrbitalPulseAt || 0) >= power.pulse.everyMs) {
+      this.lastOrbitalPulseAt = now;
+      const dmg = this.getStats().attackDamage * weapon.damage * power.pulse.mult;
+      if (power.pulse.fromOrbs) {
+        this.orbitals.children.each((o) => this.explodeAt(o.x, o.y, power.pulse.radius, dmg, weapon));
+      } else {
+        this.explodeAt(this.player.x, this.player.y, power.pulse.radius, dmg, weapon);
+      }
+    }
   }
 
   /**
-   * Pop-up animado para eventos importantes (leaderboard, santuarios, oleada).
-   * Animated pop-up for important events (leaderboard, shrines, wave).
+   * HUD banner (wave, stage, level up, modifier, music, boss defeated): pixel panel-accent, pixel font,
+   * retro entry in 2 frames (half width, then full size) and a stepped alpha fade (0.75/0.5/0.25).
    */
-  showEventPopUp(title, subtitle = '', duration = 2000) {
-    const cx = this.scale.width / 2;
-    const cy = this.scale.height / 2 - 30;
-    const panel = this.add.graphics();
-    panel.fillStyle(0x0a0a12, 0.9);
-    panel.fillRoundedRect(cx - 140, cy - 45, 280, subtitle ? 90 : 60, 8);
-    panel.lineStyle(2, 0x00ffff, 0.8);
-    panel.strokeRoundedRect(cx - 140, cy - 45, 280, subtitle ? 90 : 60, 8);
-    panel.setScrollFactor(0);
-
-    const titleText = this.add.text(cx, cy - 25, title, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '18px',
-      color: '#ffd700',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setScrollFactor(0);
+  showHudBanner(title, { subtitle = '', color = HUD.violet, duration = 1200 } = {}) {
+    if (!this.sys || !this.sys.isActive()) return null;
+    if (this._bannerTimers) this._bannerTimers.forEach((ev) => ev.remove(false));
+    this._bannerTimers = [];
+    if (this.hudBanner && this.hudBanner.scene) this.hudBanner.destroy();
+    const L = this.hudLayout || computeHudLayout({ w: this.scale.width, h: this.scale.height });
+    const P = L.px || 2;
+    const accent = typeof color === 'number' ? color : PX.violet;
+    const titleText = this.pxText(0, 6 * P, String(title).toUpperCase(), { P, scale: 2, color: PX_CSS.white }).setOrigin(0.5, 0);
     let subText = null;
     if (subtitle) {
-      subText = this.add.text(cx, cy + 5, subtitle, {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
-        color: '#aaaaaa'
-      }).setOrigin(0.5).setScrollFactor(0);
+      subText = this.pxText(0, 6 * P + 14 * P + 5 * P, String(subtitle), {
+        P, color: PX_CSS.mist, align: 'center', maxWidth: Math.min(this.scale.width - 4 * L.pad, 260 * P)
+      }).setOrigin(0.5, 0);
     }
-
-    this.tweens.add({
-      targets: [panel, titleText, ...(subText ? [subText] : [])],
-      alpha: 0,
-      duration: 400,
-      delay: duration,
-      onComplete: () => {
-        panel.destroy();
-        titleText.destroy();
-        if (subText) subText.destroy();
-      }
-    });
+    const contentW = Math.max(titleText.width + 18 * P, subText ? subText.width : 0);
+    const w = Math.ceil((contentW + 16 * P) / (2 * P)) * 2 * P;
+    const h = 6 * P + 14 * P + (subText ? 5 * P + Math.ceil(subText.height / P) * P : 0) + 8 * P;
+    const panel = pixelPanel(this, -w / 2, 0, w, h, 'panel-accent', { px: P });
+    const deco = this.add.graphics();
+    // accent: two pixel diamonds flanking the title + a short underline in the banner colour
+    const dy = 6 * P + 6 * P;
+    const diamond = (x) => {
+      deco.fillStyle(PX.ink, 1); deco.fillRect(x - 2 * P, dy - P, 4 * P, 4 * P);
+      deco.fillStyle(accent, 1); deco.fillRect(x - P, dy - 2 * P, 2 * P, 4 * P); deco.fillRect(x - 2 * P, dy - P, 4 * P, 2 * P);
+      deco.fillStyle(0xffffff, 1); deco.fillRect(x - P, dy - P, P, P);
+    };
+    const half = Math.round(titleText.width / 2 / P) * P;
+    diamond(-half - 6 * P);
+    diamond(half + 6 * P);
+    const ul = Math.max(8 * P, Math.round(w * 0.18 / P) * P);
+    deco.fillStyle(accent, 1); deco.fillRect(-ul, h - 5 * P, ul * 2, P);
+    const parts = [titleText, deco, subText].filter(Boolean);
+    const cx = snapPx(this.scale.width / 2, P);
+    const cy = snapPx(this.scale.height * 0.2, P);
+    const banner = this.add.container(cx, cy, [panel, ...parts]).setScrollFactor(0).setDepth(HUD_DEPTH + 20);
+    this.hudBanner = banner;
+    // frame 1: half-width shell, no text; frame 2: full size
+    panel.resize(Math.max(24 * P, Math.round(w / 2 / (2 * P)) * 2 * P), h).setX(-Math.max(24 * P, Math.round(w / 2 / (2 * P)) * 2 * P) / 2);
+    parts.forEach((p) => p.setVisible(false));
+    const step = 70;
+    const at = (ms, fn) => this._bannerTimers.push(this.time.delayedCall(ms, () => { if (banner.scene) fn(); }));
+    at(step, () => { panel.resize(w, h).setX(-w / 2); parts.forEach((p) => p.setVisible(true)); });
+    const alphas = fadeSteps(4).slice(1); // 0.75, 0.5, 0.25, 0
+    const outAt = Math.max(step * 2, duration - alphas.length * step);
+    alphas.forEach((a, i) => at(outAt + i * step, () => {
+      if (a <= 0) { if (this.hudBanner === banner) this.hudBanner = null; banner.destroy(); } else banner.setAlpha(a);
+    }));
+    return banner;
   }
 
-  showDamageNumber(x, y, damage, isCrit = false) {
-    const color = isCrit ? '#ffff00' : '#ffffff';
-    const size = isCrit ? '20px' : '14px';
-    const text = isCrit ? `${damage}!` : `${damage}`;
+  /** Legacy entry point (leaderboard, shrines): now a HUD banner. */
+  showEventPopUp(title, subtitle = '', duration = 2000) {
+    return this.showHudBanner(title, { subtitle, duration: duration + 400 });
+  }
 
-    const dmgText = this.add.text(
-      x + Phaser.Math.Between(-10, 10),
-      y - 10,
-      text,
-      {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: size,
-        color: color,
-        fontStyle: 'bold',
-        stroke: '#000000',
-        strokeThickness: 3
+  /** World-space art pixel: glyph pixels ~2 css px whatever the camera zoom. */
+  worldArtPx() {
+    const display = getDisplaySize(this);
+    const k = this.scale.width / Math.max(1, display.width || this.scale.width);
+    const zoom = this.cameras?.main?.zoom || 1;
+    return Math.max(1, Math.round((2 * k) / zoom));
+  }
+
+  /**
+   * Small world-space pixel text (pickups, crits, heals): rises in 4 hard steps, then a stepped fade.
+   * size >= 22 doubles the glyph scale.
+   */
+  floatText(x, y, str, color = '#f1f5f9', { size = 14, duration = 900, rise = 28 } = {}) {
+    const P = this.worldArtPx();
+    const label = this.pxText(Math.round(x), Math.round(y), String(str), { P, scale: size >= 22 ? 2 : 1, color }).setOrigin(0.5).setDepth(50);
+    const steps = 4;
+    let i = 0;
+    const tick = Math.max(40, Math.round(duration / (steps + 3)));
+    const ev = this.time.addEvent({
+      delay: tick,
+      repeat: steps + 2,
+      callback: () => {
+        if (!label.scene) { ev.remove(false); return; }
+        i++;
+        if (i <= steps) label.setY(Math.round(y - (rise * i) / steps));
+        else label.setAlpha(i === steps + 1 ? 0.75 : 0.4);
+        if (i >= steps + 3) label.destroy();
       }
-    ).setOrigin(0.5);
-
-    // Float up and fade
-    this.tweens.add({
-      targets: dmgText,
-      y: dmgText.y - 40,
-      alpha: 0,
-      scale: isCrit ? 1.5 : 1,
-      duration: 800,
-      ease: 'Power2',
-      onComplete: () => dmgText.destroy()
     });
+    this.time.delayedCall(duration + tick, () => { if (label.scene) label.destroy(); });
+    return label;
+  }
+
+  /** Damage numbers are noise; only crits float (ui/hud-minimal-v2). */
+  showDamageNumber(x, y, damage, isCrit = false) {
+    if (!isCrit) return;
+    this.floatText(x + Phaser.Math.Between(-10, 10), y - 12, `${damage}`, HUD.amber, { size: 18, duration: 700, rise: 32 });
   }
 
   // === LEGENDARY WEAPONS ===
@@ -3982,22 +5451,7 @@ export default class ArenaScene extends Phaser.Scene {
     }
 
     // Show equipped notification
-    const equipText = this.add.text(400, 150, `⚔️ ${equipped.name} EQUIPPED ⚔️`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '18px',
-      color: '#00ff66',
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 4
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    this.tweens.add({
-      targets: equipText,
-      alpha: 0,
-      y: 100,
-      duration: 3000,
-      onComplete: () => equipText.destroy()
-    });
+    this.showHudBanner(String(equipped.name || ''), { subtitle: t('hud.equipped'), color: PX.green, duration: 3000 });
   }
 
   async applyWeb3StartingBonus() {
@@ -4016,7 +5470,7 @@ export default class ArenaScene extends Phaser.Scene {
         unlockedWeapons = await weaponClient.getUnlockedWeapons(addr);
         if (!Array.isArray(unlockedWeapons)) unlockedWeapons = [1];
       } catch (_) {}
-      if (displayScore >= 10 && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
+      if (displayScore >= WEAPON_TIERS[2].threshold && !unlockedWeapons.includes(2)) unlockedWeapons = [...unlockedWeapons, 2];
       
       if (unlockedWeapons.length <= 1) return;
 
@@ -4064,12 +5518,12 @@ export default class ArenaScene extends Phaser.Scene {
               onComplete: () => bonusText.destroy()
             });
 
-            console.log(`[Web3] Starting bonus: ${weapon.name} (Rank ${rankName}, ${Math.round(bonusChance * 100)}% chance)`);
+            logger.log(`[Web3] Starting bonus: ${weapon.name} (Rank ${rankName}, ${Math.round(bonusChance * 100)}% chance)`);
           }
         }
       }
     } catch (e) {
-      console.warn('[ArenaScene] Failed to apply Web3 starting bonus:', e);
+      logger.warn('[ArenaScene] Failed to apply Web3 starting bonus:', e);
     }
   }
 
@@ -4112,8 +5566,7 @@ export default class ArenaScene extends Phaser.Scene {
               // Check for legendary drop (super rare)
               this.checkLegendaryDrop(enemy.x, enemy.y);
 
-              const xpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
-              window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * xpMult));
+              this.dropXpGemForKill(enemy);
               window.VIBE_CODER.kills++;
               if (Math.random() < 0.15) this.spawnWeaponDrop(enemy.x, enemy.y);
               enemy.destroy();
@@ -4149,39 +5602,8 @@ export default class ArenaScene extends Phaser.Scene {
     this.physics.pause();
     this.time.delayedCall(1500, () => this.physics.resume());
 
-    // Legendary announcement
-    const announceText = this.add.text(400, 200, '⚔️ LEGENDARY WEAPON ⚔️', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '32px',
-      color: '#ffd700',
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 6
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    const nameText = this.add.text(400, 250, weapon.name, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '28px',
-      color: '#00ff66',
-      fontStyle: 'bold',
-      stroke: '#000000',
-      strokeThickness: 4
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    const descText = this.add.text(400, 290, weapon.desc, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '14px',
-      color: '#ffffff',
-      stroke: '#000000',
-      strokeThickness: 2
-    }).setOrigin(0.5).setScrollFactor(0);
-
-    const equipText = this.add.text(400, 330, 'PERMANENTLY UNLOCKED!', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
-      color: '#ffff00',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setScrollFactor(0);
+    // Legendary announcement: pixel banner (name + description); the weapon sprite flies to the centre below.
+    this.showHudBanner(t('hud.legendary_weapon'), { subtitle: `${weapon.name}\n${weapon.desc || ''}\n${t('hud.permanently_unlocked')}`, color: PX.amber, duration: 4600 });
 
     // Spawn the weapon sprite at drop location
     const textureKey = `legendary-${key}`;
@@ -4198,16 +5620,12 @@ export default class ArenaScene extends Phaser.Scene {
       ease: 'Power2',
       onComplete: () => {
         this.tweens.add({
-          targets: [dropSprite, announceText, nameText, descText, equipText],
+          targets: [dropSprite],
           alpha: 0,
           duration: 2000,
           delay: 2000,
           onComplete: () => {
             dropSprite.destroy();
-            announceText.destroy();
-            nameText.destroy();
-            descText.destroy();
-            equipText.destroy();
           }
         });
       }
@@ -4218,219 +5636,236 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   hitEnemy(projectile, enemy) {
-    // Check for critical hit (base 10% + crit upgrade bonus)
-    const critChance = this.getCritChance();
-    const isCrit = Math.random() < critChance;
-    const finalDamage = isCrit ? projectile.damage * 2 : projectile.damage;
-
-    // Deal damage
-    enemy.health -= finalDamage;
-
-    // Show damage number
-    this.showDamageNumber(enemy.x, enemy.y, finalDamage, isCrit);
+    if (!enemy || !enemy.active || projectile.active === false) return;
+    if (projectile.hitSet) {
+      if (projectile.hitSet.has(enemy)) return; // pierce/bounce/return: one hit per enemy per pass
+      projectile.hitSet.add(enemy);
+    }
+    const weapon = projectile.weaponDef || null;
+    const power = getPower(weapon);
+    const px = projectile.x;
+    const py = projectile.y;
+    const res = this.dealWeaponHit(enemy, weapon, projectile.damage, {
+      pierceIndex: projectile.pierceIndex || 0,
+      bounceIndex: projectile.bounceIndex || 0
+    });
 
     // Play hit sound
     Audio.playHit();
 
-    // Fork bomb special: spawn 2 child projectiles on hit
-    if (projectile.isForkBomb && !projectile.isChild && projectile.forkDepth < 2) {
-      for (let i = 0; i < 2; i++) {
-        const angle = Math.random() * Math.PI * 2;
-        const child = this.projectiles.create(projectile.x, projectile.y, 'slash');
-        child.setRotation(angle);
-        child.damage = Math.floor(projectile.damage * 0.7);
-        child.pierce = false;
-        child.setTint(0xff00ff);
-        child.isForkBomb = true;
-        child.isChild = true;
-        child.forkDepth = (projectile.forkDepth || 0) + 1;
-        this.physics.velocityFromRotation(angle, 300, child.body.velocity);
-        this.time.delayedCall(500, () => {
-          if (child.active) child.destroy();
-        });
-      }
+    // On-hit powers: impact blast, chain lightning, fork split, knockback
+    if (weapon && res) {
+      if (power.explode) this.explodeAt(px, py, power.explode.radius, projectile.damage * power.explode.mult, weapon);
+      if (power.chain) this.chainFrom(enemy, weapon, projectile.damage);
+      if (canSplit(weapon, projectile.splitDepth || 0)) this.splitProjectile(projectile, weapon, enemy);
+      if (power.knockback) this.knockback(enemy, px, py, power.knockback);
     }
 
-    // Freeze special: slow enemy on hit
-    if (projectile.isFreeze && !enemy.isFrozen) {
-      this.applyFreeze(enemy, projectile.slowDuration || 2000);
+    // Legacy callers (abilities, hazards) pass plain objects: hit once, never consumed here
+    if (!projectile.hitSet) {
+      if (!projectile.pierce && typeof projectile.destroy === 'function') projectile.destroy();
+      return;
     }
-
-    // Only destroy non-piercing projectiles
-    if (!projectile.pierce) {
-      projectile.destroy();
+    projectile.pierceIndex = (projectile.pierceIndex || 0) + 1;
+    projectile.hitsLeft -= 1;
+    if (projectile.isBounce && projectile.bouncesLeft > 0) {
+      projectile.bouncesLeft -= 1;
+      projectile.bounceIndex = (projectile.bounceIndex || 0) + 1;
+      projectile.hitSet = new Set([enemy]);
+      projectile.hitsLeft = Math.max(1, projectile.hitsLeft);
+      this.bounceToNext(projectile, enemy);
+      return;
     }
+    if (projectile.hitsLeft > 0) return;
+    if (projectile.returns && !projectile.returning) {
+      this.startReturn(projectile);
+      return;
+    }
+    projectile.destroy();
+  }
 
-    // Flash enemy white then back
-    enemy.setTint(0xffffff);
-    this.time.delayedCall(100, () => {
-      if (enemy.active) {
-        enemy.clearTint();
-      }
-    });
+  /** Shared death path (XP, drops, splits, boss cleanup, fx) for every damage source. */
+  handleEnemyDeath(enemy) {
+    if (!enemy || !enemy.active || enemy.wfxDead) return;
+    enemy.wfxDead = true;
+    if (this.statusEnemies) this.statusEnemies.delete(enemy);
+    // Drop an XP gem (event/modifier multipliers baked in); XP is granted on pickup (updateXpGems).
+    // Bosses and mini-bosses go through here too: one big red gem worth their xpValue.
+    this.dropXpGemForKill(enemy);
+    window.VIBE_CODER.kills++;
+    this.tryItemDrop(enemy);
 
-    // Check death
-    if (enemy.health <= 0) {
-      // Award XP (apply event and modifier multipliers)
-      const xpMult = (this.xpEventMultiplier || 1) * (this.modifierEffects?.xpMult || 1);
-      window.VIBE_CODER.addXP(Math.floor(enemy.xpValue * xpMult));
-      window.VIBE_CODER.kills++;
-
-      // GIT CONFLICT: Split into 2 smaller enemies on death
-      if (enemy.behavior === 'split' && enemy.canSplit) {
-        for (let i = 0; i < 2; i++) {
-          const offsetX = Phaser.Math.Between(-30, 30);
-          const offsetY = Phaser.Math.Between(-30, 30);
-          const splitEnemy = this.enemies.create(
-            enemy.x + offsetX,
-            enemy.y + offsetY,
-            'enemy-git-conflict'
-          );
-          const parentMaxHealth = enemy.maxHealth || this.enemyTypes['git-conflict'].health;
-          splitEnemy.health = Math.floor(parentMaxHealth * 0.4) + 10;
-          splitEnemy.maxHealth = splitEnemy.health;
-          splitEnemy.speed = enemy.speed * 1.2;
-          splitEnemy.damage = Math.floor(enemy.damage * 0.7);
-          splitEnemy.xpValue = Math.floor(enemy.xpValue * 0.3);
-          splitEnemy.enemyType = 'git-conflict';
-          splitEnemy.behavior = 'split';
-          splitEnemy.canSplit = false; // Can't split again
-          splitEnemy.setScale(1.0);
-          splitEnemy.setTint(i === 0 ? 0xff6600 : 0x0066ff);
-          // Flash effect
-          const splitText = this.add.text(splitEnemy.x, splitEnemy.y - 15, 'MERGE CONFLICT!', {
-            fontFamily: '"Segoe UI", system-ui, sans-serif',
-            fontSize: '8px',
-            color: '#ffff00'
-          }).setOrigin(0.5);
-          this.tweens.add({
-            targets: splitText,
-            y: splitText.y - 10,
-            alpha: 0,
-            duration: 600,
-            onComplete: () => splitText.destroy()
-          });
-        }
-      }
-
-      // Boss death - special handling
-      if (enemy.isBoss) {
-        // Epic boss death sound!
-        Audio.playBossDeath();
-
-        // Guaranteed rare weapon drop!
-        this.spawnWeaponDrop(enemy.x, enemy.y, true);
-
-        // Clear current boss reference
-        if (this.currentBoss === enemy) {
-          this.currentBoss = null;
-        }
-
-        // Return to stage music
-        Audio.setTrack(this.currentStage);
-
-        // Epic death effect
-        this.cameras.main.shake(500, 0.03);
-        this.cameras.main.flash(300, 255, 255, 255);
-
-        // Boss death announcement (fixed to camera center)
-        const deathText = this.add.text(400, 300, `${enemy.bossName}\n${t('game.defeated')}`, {
+    // GIT CONFLICT / COOKIE: Split into smaller copies of the same type on death
+    if (enemy.behavior === 'split' && enemy.canSplit) {
+      const splitType = this.enemyTypes[enemy.enemyType] ? enemy.enemyType : 'git-conflict';
+      const splitCount = this.enemyTypes[splitType]?.splitCount || 2;
+      for (let i = 0; i < splitCount; i++) {
+        const offsetX = Phaser.Math.Between(-30, 30);
+        const offsetY = Phaser.Math.Between(-30, 30);
+        const gitData = this.enemyTypes[splitType] || {};
+        const splitTexture = gitData.texture && this.textures.exists(gitData.texture) ? gitData.texture : 'enemy-git-conflict';
+        const splitEnemy = this.enemies.create(
+          enemy.x + offsetX,
+          enemy.y + offsetY,
+          splitTexture
+        );
+        if (gitData.anim && this.anims.exists(gitData.anim)) splitEnemy.play(gitData.anim);
+        const parentMaxHealth = enemy.maxHealth || gitData.health || 30;
+        splitEnemy.health = Math.floor(parentMaxHealth * 0.4) + 10;
+        splitEnemy.maxHealth = splitEnemy.health;
+        splitEnemy.speed = enemy.speed * 1.2;
+        splitEnemy.damage = Math.floor(enemy.damage * 0.7);
+        splitEnemy.xpValue = Math.floor(enemy.xpValue * 0.3);
+        splitEnemy.enemyType = splitType;
+        splitEnemy.behavior = 'split';
+        splitEnemy.canSplit = false; // Can't split again
+        splitEnemy.setScale(1.0);
+        if (!isV2Texture(splitTexture)) splitEnemy.setTint(i === 0 ? 0xff6600 : 0x0066ff);
+        if (splitType !== 'git-conflict') continue; // cookie crumbs: no banner text
+        // Flash effect
+        const splitText = this.add.text(splitEnemy.x, splitEnemy.y - 15, 'MERGE CONFLICT!', {
           fontFamily: '"Segoe UI", system-ui, sans-serif',
-          fontSize: '32px',
-          color: '#ffd700',
-          fontStyle: 'bold',
-          align: 'center',
-          stroke: '#000000',
-          strokeThickness: 4
-        }).setOrigin(0.5).setScrollFactor(0);
-
+          fontSize: '8px',
+          color: '#ffff00'
+        }).setOrigin(0.5);
         this.tweens.add({
-          targets: deathText,
-          scale: 1.5,
+          targets: splitText,
+          y: splitText.y - 10,
           alpha: 0,
-          duration: 2000,
-          onComplete: () => deathText.destroy()
+          duration: 600,
+          onComplete: () => splitText.destroy()
         });
+      }
+    }
 
-        // Massive particle explosion (scale down at high waves)
-        const bossParticleCount = this.waveNumber > 50 ? 3 : 5;
-        for (let i = 0; i < bossParticleCount; i++) {
-          const particle = this.add.circle(
-            enemy.x + Phaser.Math.Between(-50, 50),
-            enemy.y + Phaser.Math.Between(-50, 50),
-            Phaser.Math.Between(5, 15),
-            enemy.bossColor
-          );
-          this.tweens.add({
-            targets: particle,
-            x: particle.x + Phaser.Math.Between(-100, 100),
-            y: particle.y + Phaser.Math.Between(-100, 100),
-            alpha: 0,
-            scale: 0,
-            duration: 800,
-            onComplete: () => particle.destroy()
-          });
-        }
-      } else {
-        // Normal enemy death sound
-        Audio.playEnemyDeath();
+    // Boss death - special handling
+    if (enemy.isBoss) {
+      // Epic boss death sound!
+      Audio.playBossDeath();
 
-        // Chance to drop weapon: base by type, fallback if enemyType missing; tuned so drops are noticeable
-        const type = enemy.enemyType || 'bug';
-        const dropChance = type === 'bug' ? 0.18 : type === 'glitch' ? 0.28 : 0.38;
-        if (Math.random() < dropChance && this.spawnWeaponDrop) {
-          this.spawnWeaponDrop(enemy.x, enemy.y);
-        }
+      // Guaranteed rare weapon drop!
+      this.spawnWeaponDrop(enemy.x, enemy.y, true);
 
-        // Normal death effect
-        this.cameras.main.shake(100, 0.005);
-
-        // Particle burst (simple)
-        const particleColors = {
-          'bug': 0x00ff00,
-          'glitch': 0xff00ff,
-          'memory-leak': 0xaa00ff,
-          'syntax-error': 0xff6600,
-          'infinite-loop': 0x00ffff,
-          'race-condition': 0xffff00,
-          'miniboss-deadlock': 0xff6600
-        };
-        const particleCount = this.waveNumber > 50 ? 3 : 5;
-        for (let i = 0; i < particleCount; i++) {
-          const particle = this.add.circle(
-            enemy.x + Phaser.Math.Between(-20, 20),
-            enemy.y + Phaser.Math.Between(-20, 20),
-            Phaser.Math.Between(3, 8),
-            particleColors[enemy.enemyType] || 0x00ff00
-          );
-          this.tweens.add({
-            targets: particle,
-            alpha: 0,
-            scale: 0,
-            duration: 300,
-            onComplete: () => particle.destroy()
-          });
-        }
+      // Clear current boss reference
+      if (this.currentBoss === enemy) {
+        this.currentBoss = null;
       }
 
-      this.tryBarkOnKill();
-      enemy.destroy();
-      this.updateHUD();
+      // Return to stage music
+      Audio.setTrack(this.currentStage);
+
+      // Epic death effect
+      this.cameras.main.shake(500, 0.03);
+      this.cameras.main.flash(300, 255, 255, 255);
+
+      // Boss death announcement (fixed to camera center)
+      const deathText = this.add.text(400, 300, `${enemy.bossName}\n${t('game.defeated')}`, {
+        fontFamily: '"Segoe UI", system-ui, sans-serif',
+        fontSize: '32px',
+        color: '#ffd700',
+        fontStyle: 'bold',
+        align: 'center',
+        stroke: '#000000',
+        strokeThickness: 4
+      }).setOrigin(0.5).setScrollFactor(0);
+
+      this.tweens.add({
+        targets: deathText,
+        scale: 1.5,
+        alpha: 0,
+        duration: 2000,
+        onComplete: () => deathText.destroy()
+      });
+
+      // Massive particle explosion (scale down at high waves)
+      const bossParticleCount = this.waveNumber > 50 ? 3 : 5;
+      for (let i = 0; i < bossParticleCount; i++) {
+        const particle = this.add.circle(
+          enemy.x + Phaser.Math.Between(-50, 50),
+          enemy.y + Phaser.Math.Between(-50, 50),
+          Phaser.Math.Between(5, 15),
+          enemy.bossColor
+        );
+        this.tweens.add({
+          targets: particle,
+          x: particle.x + Phaser.Math.Between(-100, 100),
+          y: particle.y + Phaser.Math.Between(-100, 100),
+          alpha: 0,
+          scale: 0,
+          duration: 800,
+          onComplete: () => particle.destroy()
+        });
+      }
+    } else {
+      // Normal enemy death sound
+      Audio.playEnemyDeath();
+
+      // Chance to drop weapon: base by type, fallback if enemyType missing; tuned so drops are noticeable
+      const type = enemy.enemyType || 'bug';
+      const dropChance = type === 'bug' ? 0.18 : type === 'glitch' ? 0.28 : 0.38;
+      if (Math.random() < dropChance && this.spawnWeaponDrop) {
+        this.spawnWeaponDrop(enemy.x, enemy.y);
+      }
+
+      // Normal death effect
+      this.cameras.main.shake(100, 0.005);
+
+      // Particle burst (simple)
+      const particleColors = {
+        'bug': 0x00ff00,
+        'glitch': 0xff00ff,
+        'memory-leak': 0xaa00ff,
+        'syntax-error': 0xff6600,
+        'infinite-loop': 0x00ffff,
+        'race-condition': 0xffff00,
+        'miniboss-deadlock': 0xff6600
+      };
+      const particleCount = this.waveNumber > 50 ? 3 : 5;
+      for (let i = 0; i < particleCount; i++) {
+        const particle = this.add.circle(
+          enemy.x + Phaser.Math.Between(-20, 20),
+          enemy.y + Phaser.Math.Between(-20, 20),
+          Phaser.Math.Between(3, 8),
+          particleColors[enemy.enemyType] || enemy.miniBossColor || 0x00ff00
+        );
+        this.tweens.add({
+          targets: particle,
+          alpha: 0,
+          scale: 0,
+          duration: 300,
+          onComplete: () => particle.destroy()
+        });
+      }
     }
+
+    this.tryBarkOnKill();
+    enemy.destroy();
+    this.updateHUD();
   }
 
   playerHit(player, enemy) {
     if (this.playerDead) return; // Evitar más hits durante game over
-    // No invincibility: player can always be hit
 
     let damage = typeof enemy.damage === 'number' && !isNaN(enemy.damage) ? enemy.damage : 1;
     if (damage <= 0) return; // e.g. hallucination (fake) — no damage, no i-frames
+    // Contact i-frames: overlap fires every frame, so one touch opens a short invulnerability window.
+    if (!canTakeContactDamage(this.lastContactHitAt, this.time.now)) return;
+    this.lastContactHitAt = this.time.now;
     if (enemy.canCritPlayer && Math.random() < 0.3) {
       damage = Math.floor(damage * BALANCE.ELITE_CRIT_DAMAGE_MULT);
     }
     const isCriticalHit = damage >= player.maxHealth * BALANCE.CRITICAL_THRESHOLD_PERCENT;
 
-    player.health -= damage;
+    // Firewall item: shield absorbs damage first; HP is clamped to >= 0 before the death check
+    const shield = this.itemState?.shield > 0 ? this.itemState.shield : 0;
+    const result = applyDamage(player.health, damage, { shield });
+    if (shield > 0) {
+      this.itemState = absorbDamage(this.itemState, damage).state;
+    }
+    if (shield > 0 && damage <= shield) {
+      return; // fully absorbed by shield
+    }
+    player.health = result.health;
 
     // Impacto visual: flash rojo al recibir daño / Damage impact: red screen flash
     this.cameras.main.flash(120, 255, 0, 0);
@@ -4457,9 +5892,8 @@ export default class ArenaScene extends Phaser.Scene {
     // Play damage sound
     Audio.playPlayerHit();
 
-    // Brief flash only (no i-frames)
-    player.setAlpha(0.4);
-    this.time.delayedCall(150, () => { if (player && player.setAlpha) player.setAlpha(1); });
+    // Blink while the contact i-frames last
+    this.startIFrameBlink(player);
 
     // Screen shake — stronger on critical hit / Feedback de dificultad
     if (isCriticalHit) {
@@ -4490,15 +5924,39 @@ export default class ArenaScene extends Phaser.Scene {
 
     this.updateHUD();
 
-    // Check death
-    if (player.health <= 0) {
+    // Check death (Hotfix item revives once)
+    if (result.died && !this.tryItemRevive()) {
       this.playerDeath();
     }
+  }
+
+  startIFrameBlink(player) {
+    if (this.iFrameFlashTimer) { this.iFrameFlashTimer.destroy(); this.iFrameFlashTimer = null; }
+    const blinkMs = 75;
+    const repeats = Math.max(1, Math.floor((BALANCE.CONTACT_IFRAMES_MS ?? 600) / blinkMs) - 1);
+    player.setAlpha(0.35);
+    playHitFlash(this, player, BALANCE.CONTACT_IFRAMES_MS ?? 600);
+    this.iFrameFlashTimer = this.time.addEvent({
+      delay: blinkMs,
+      repeat: repeats,
+      callback: () => {
+        if (!player || !player.setAlpha || this.playerDead) return;
+        const last = this.iFrameFlashTimer && this.iFrameFlashTimer.getRepeatCount() === 0;
+        player.setAlpha(last ? 1 : (player.alpha < 1 ? 1 : 0.35));
+      }
+    });
   }
 
   playerDeath() {
     if (this.playerDead) return; // Evitar múltiples ejecuciones (explota el PC)
     this.playerDead = true;
+    if (this.hudContainer) this.hudContainer.setVisible(false); // Game over screen owns the screen
+    if (this.shrineManager?.interactPrompt) this.shrineManager.interactPrompt.setVisible(false);
+    // Dying while the pause menu is open (the world keeps running when paused) must not leave it over GAME OVER.
+    if (this.isPaused) {
+      this.destroyPauseMenu();
+      this.isPaused = false;
+    }
     Audio.playGameOverMusic();
 
     // Parar spawn y limpiar enemigos de inmediato — evita más overlaps/hits
@@ -4526,18 +5984,18 @@ export default class ArenaScene extends Phaser.Scene {
     const state = window.VIBE_CODER;
     const settings = window.VIBE_SETTINGS;
 
-    console.log('[Cosmic Coder] Game over: wave=' + this.waveNumber + ' score=' + Math.floor(state.totalXP));
+    logger.log('[Cosmic Coder] Game over: wave=' + this.waveNumber + ' score=' + getRunScore(state));
 
     // Save high score before going to menu
     const isNewHighWave = this.waveNumber > this.highWave;
-    const isNewHighScore = state.totalXP > this.highScore;
+    const isNewHighScore = getRunScore(state) > this.highScore;
 
     if (isNewHighWave) {
       this.highWave = this.waveNumber;
       progressStore.highWave = this.highWave;
     }
     if (isNewHighScore) {
-      this.highScore = state.totalXP;
+      this.highScore = getRunScore(state);
       progressStore.highScore = this.highScore;
     }
     stellarWallet.getAddress().then((addr) => {
@@ -4550,7 +6008,7 @@ export default class ArenaScene extends Phaser.Scene {
     const char = typeof window !== 'undefined' && window.VIBE_CHARACTERS ? window.VIBE_CHARACTERS[charId] : null;
     const characterDisplayName = char ? (char.displayName_en || char.displayName || char.name || '') : '';
     const localName = (settings.playerName && String(settings.playerName).trim()) || characterDisplayName || 'Anonymous';
-    const runScore = Math.floor(state.totalXP);
+    const runScore = getRunScore(state);
     const runWave = this.waveNumber;
     const runDate = Date.now();
     LeaderboardManager.addEntry(localName, runWave, runScore);
@@ -4589,7 +6047,7 @@ export default class ArenaScene extends Phaser.Scene {
     // Award currency (BITS) based on performance (balance.js: más difícil conseguir)
     const waveBits = this.waveNumber * (BALANCE.BITS_PER_WAVE ?? 3);
     const killBits = Math.floor(state.kills * (BALANCE.BITS_PER_KILL ?? 0.3));
-    const xpBits = Math.floor(state.totalXP * ((BALANCE.BITS_PER_100_XP ?? 0.5) / 100));
+    const xpBits = Math.floor(getRunScore(state) * ((BALANCE.BITS_PER_100_XP ?? 0.5) / 100));
     let totalBits = waveBits + killBits + xpBits;
 
     // Award bits immediately (don't defer — scene may be destroyed before promise resolves)
@@ -4603,22 +6061,6 @@ export default class ArenaScene extends Phaser.Scene {
     const score = runScore;
     const wave = runWave;
 
-    // Random phrases
-    const phrases = [
-      'The code compiles... but at what cost?',
-      'Every bug fixed makes you stronger.',
-      'You fought well, coder.',
-      'The frontier awaits your return.',
-      '404: Survival not found.',
-      'Segfault in sector 7. Rebooting...',
-      'git commit -m "died heroically"',
-      'Runtime error. But you will be back.',
-      'The stars remember your name.',
-      'Connection lost. Reconnecting soul...',
-      'Even the best coders need a respawn.',
-      'Your legacy echoes through the cluster.'
-    ];
-    const phrase = phrases[Math.floor(Math.random() * phrases.length)];
 
     // Ensure player stays hidden and behind overlay so it never appears on top of GAME OVER
     try {
@@ -4630,60 +6072,37 @@ export default class ArenaScene extends Phaser.Scene {
       }
     } catch (_) {}
 
-    // Create game over container - scroll-factor 0 so it stays on screen; high depth so nothing draws on top
+    // Game over v3 (ui/arena-pixel-v3): the arena stays visible but frozen behind a dithered ink veil;
+    // one pixel panel holds everything. Geometry: systems/hud/gameOverLayout.js (snapped to the art grid).
     const gameOverContainer = this.add.container(0, 0);
     gameOverContainer.setDepth(3000).setScrollFactor(0);
+    try { this.physics.pause(); } catch (_) {}
+    this.events.once('shutdown', () => this.releaseGameOverTextures());
+    const goDisplay = getDisplaySize(this);
+    const GL = computeGameOverLayout({ w, h, displayW: goDisplay.width, displayH: goDisplay.height });
+    // Retro entry: an object appears half-transparent 1 art px low, then snaps into place (2 frames).
+    const stepIn = (obj, delay, px) => {
+      const y0 = obj.y;
+      this.time.delayedCall(delay, () => {
+        if (!obj.scene) return;
+        obj.setVisible(true).setAlpha(0.5).setY(y0 + px);
+        this.time.delayedCall(70, () => { if (obj.scene) obj.setAlpha(1).setY(y0); });
+      });
+    };
+    const veil = this.add.rectangle(0, 0, w, h, PX.ink, 0.62).setOrigin(0);
+    veil.setInteractive({ useHandCursor: false });
+    const veilDither = ditherFill(this, 0, 0, w, h, { px: GL.px, color: PX.ink, alpha: 0.75 });
+    gameOverContainer.add([veil, veilDither]);
+    [[0, 0.33], [90, 0.66], [180, 1]].forEach(([d, a]) => {
+      veil.setAlpha(0); veilDither.setAlpha(0);
+      this.time.delayedCall(d, () => { if (veil.scene) { veil.setAlpha(a); veilDither.setAlpha(0.8 * a); } });
+    });
 
-    // Full black background (opaque immediately; do not show gameplay background)
-    const blackBg = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 1);
-    blackBg.setInteractive({ useHandCursor: false });
-    gameOverContainer.add(blackBg);
-
-    // Leaderboard panel: left side, larger so names and scores fit (same source as menu)
-    const leaderboardLeftX = 24;
-    const leaderboardWidth = 300;
-    const leaderboardTopY = Math.max(72, Math.floor(h * 0.12));
-    const uiScale = getUIScale(this);
-    const lineHeight = Math.round(22 * uiScale);
-    const rankFontSize = `${Math.round(13 * uiScale)}px`;
-    const titleFontSize = `${Math.round(16 * uiScale)}px`;
-
-    const leaderboardPanelHeight = 16 + 28 + 15 * lineHeight + 20;
-    const leaderboardBg = this.add.rectangle(
-      leaderboardLeftX + leaderboardWidth / 2,
-      leaderboardTopY + leaderboardPanelHeight / 2,
-      leaderboardWidth + 20,
-      leaderboardPanelHeight,
-      0x0a0a12,
-      0.94
-    );
-    leaderboardBg.setStrokeStyle(1, 0x333355);
-    gameOverContainer.add(leaderboardBg);
-
-    const leaderboardTitle = this.add.text(leaderboardLeftX + 12, leaderboardTopY + 12, 'RANKING', {
-      fontFamily: 'monospace',
-      fontSize: titleFontSize,
-      color: '#00aaff',
-      fontStyle: 'bold'
-    }).setOrigin(0, 0);
-    gameOverContainer.add(leaderboardTitle);
-
-    const leaderboardLoading = this.add.text(leaderboardLeftX + 12, leaderboardTopY + 40, 'Loading...', {
-      fontFamily: 'monospace',
-      fontSize: rankFontSize,
-      color: '#666666'
-    }).setOrigin(0, 0);
-    gameOverContainer.add(leaderboardLoading);
-
-    const leaderboardRowObjects = [];
+    // Clean game over (ui/hud-minimal-v2): the full leaderboard lives in the title menu;
+    // here we only resolve the player's rank from the same source.
     const playerNameFromSettings = () => (window.VIBE_SETTINGS?.playerName || 'Anonymous').trim() || 'Anonymous';
 
     const renderLeaderboard = async (onRankReady) => {
-      while (leaderboardRowObjects.length) {
-        const obj = leaderboardRowObjects.pop();
-        try { obj?.destroy(); } catch (_) {}
-      }
-
       let addr = null;
       try { addr = await stellarWallet.getAddress(); } catch (_) {}
       const currentPlayerName = playerNameFromSettings();
@@ -4719,7 +6138,7 @@ export default class ArenaScene extends Phaser.Scene {
             source = 'ranked';
           }
         } catch (e) {
-          console.warn('[Leaderboard] Ranked fetch failed:', e?.message || e);
+          logger.warn('[Leaderboard] Ranked fetch failed:', e?.message || e);
         }
         if (entries.length === 0) {
           try {
@@ -4788,85 +6207,23 @@ export default class ArenaScene extends Phaser.Scene {
       const idx = entries.findIndex(isYouEntry);
       if (idx >= 0) myRank = idx + 1;
       if (typeof onRankReady === 'function') onRankReady(myRank, source);
-
-      if (!gameOverContainer.scene) return;
-      try { leaderboardLoading?.destroy(); } catch (_) {}
-
-      if (entries.length === 0) {
-        const msg = 'Connect wallet and play to appear on the leaderboard.';
-        const noRank = this.add.text(leaderboardLeftX + 12, leaderboardTopY + 40, msg, {
-          fontFamily: 'monospace', fontSize: rankFontSize, color: '#555555',
-          wordWrap: { width: leaderboardWidth - 24 }
-        }).setOrigin(0, 0);
-        gameOverContainer.add(noRank);
-        leaderboardRowObjects.push(noRank);
-        return;
-      }
-
-      const rankStartY = leaderboardTopY + 44;
-      const sourceLabel = source === 'ranked' ? 'ON-CHAIN' : source === 'casual' ? 'CASUAL' : 'SCORE';
-      const srcText = this.add.text(leaderboardLeftX + leaderboardWidth - 12, leaderboardTopY + 14, sourceLabel, {
-        fontFamily: 'monospace', fontSize: `${Math.round(10 * uiScale)}px`, color: '#555577'
-      }).setOrigin(1, 0);
-      gameOverContainer.add(srcText);
-      leaderboardRowObjects.push(srcText);
-
-      for (let i = 0; i < entries.length; i++) {
-        const e = entries[i];
-        const isYou = isYouEntry(e);
-        const displayName = (e.displayName != null ? e.displayName : (e.player && e.player.length <= 20 ? e.player : (e.player ? stellarWallet.shortAddress(e.player, 6) : '???'))).slice(0, 18);
-        const scoreStr = e.score > 0 ? String(Math.floor(e.score)) : '-';
-        const y = rankStartY + i * lineHeight;
-        const nameObj = this.add.text(leaderboardLeftX + 12, y, `#${i + 1}  ${displayName}`, {
-          fontFamily: 'monospace', fontSize: rankFontSize, color: isYou ? '#00ff88' : '#cccccc'
-        }).setOrigin(0, 0);
-        if (isYou) nameObj.setStyle({ fontStyle: 'bold' });
-        gameOverContainer.add(nameObj);
-        leaderboardRowObjects.push(nameObj);
-
-        const scoreObj = this.add.text(leaderboardLeftX + leaderboardWidth - 12, y, scoreStr, {
-          fontFamily: 'monospace', fontSize: rankFontSize, color: isYou ? '#00ff88' : '#aaaaaa'
-        }).setOrigin(1, 0);
-        gameOverContainer.add(scoreObj);
-        leaderboardRowObjects.push(scoreObj);
-      }
-
-      if (addr && !entries.some(isYouEntry)) {
-        const y = rankStartY + entries.length * lineHeight;
-        const notInTop = this.add.text(leaderboardLeftX + 12, y, "You're not in top 15", {
-          fontFamily: 'monospace', fontSize: rankFontSize, color: '#666666'
-        }).setOrigin(0, 0);
-        gameOverContainer.add(notInTop);
-        leaderboardRowObjects.push(notInTop);
-      }
     };
 
-    let rankLabelRef = null;
-    const onRankReady = (myRank, _source) => {
-      if (!rankLabelRef || !rankLabelRef.scene) return;
-      rankLabelRef.setText(myRank != null ? `RANK: #${myRank}` : 'RANK: --');
-      rankLabelRef.setColor('#00ff88');
-    };
+    // ---- panel geometry (logical px) + pixel panel (ui/arena-pixel-v3)
+    const L = GL;
+    const S = L.s; // design css px -> logical px
+    const A = L.px; // logical units per art pixel
+    const sn = (v) => snapPx(v, A);
+    const P = { x: sn(L.panel.x), y: sn(L.panel.y), w: sn(L.panel.w), h: sn(L.panel.h) };
+    const rel = (x, y) => ({ x: sn(x) - P.x, y: sn(y) - P.y });
+    const panelC = this.add.container(P.x, P.y);
+    gameOverContainer.add(panelC);
+    panelC.add(pixelPanel(this, 0, 0, P.w, P.h, 'panel-dark', { px: A }));
+    const uiDelay = 380;
+    panelC.setVisible(false);
+    stepIn(panelC, uiDelay, A);
 
-    this._refreshGameOverLeaderboard = () => renderLeaderboard(onRankReady);
-    renderLeaderboard(onRankReady);
-
-    const gameOverTopY = Math.max(86, Math.floor(h * 0.18));
-    // Put the death animation clearly below the title
-    const deathBaseY = Math.min(Math.floor(h * 0.52), gameOverTopY + 260);
-    // Stats block always below the death sprite (avoid overlap)
-    const statsStartY = Math.min(h - 210, deathBaseY + 200);
-
-    // Rank label: real rank from same leaderboard as panel (updated when renderLeaderboard finishes)
-    rankLabelRef = this.add.text(cx, statsStartY + 86, 'RANK: ...', {
-      fontFamily: 'monospace',
-      fontSize: '15px',
-      color: '#00ff88'
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(rankLabelRef);
-
-    // --- Phase 1: Death animation (standing → fall → lying on ground), freeze on last frame ---
-    // Use keys stored at createPlayer() so we always show the character you actually played (VoidNull vs SyncStorm etc)
+    // ---- death sprite (final frame = lying down) on a pixel floor plate
     let deathSpriteKey = this.gameOverDeathSpriteKey ?? null;
     let deathAnimKey = this.gameOverDeathAnimKey ?? null;
     if (!deathSpriteKey || !deathAnimKey) {
@@ -4875,161 +6232,296 @@ export default class ArenaScene extends Phaser.Scene {
       else if (characterId === 'swordsman') { deathSpriteKey = 'swordsman-death'; deathAnimKey = 'swordsman-death'; }
       else { deathSpriteKey = 'vibecoder-death'; deathAnimKey = 'vibecoder-death'; }
     }
-
-    let animDurationMs = 1200;
-    const hasDeathTexture = deathSpriteKey && this.textures.exists(deathSpriteKey);
-    const hasDeathAnim = deathAnimKey && this.anims.exists(deathAnimKey);
-
-    if (hasDeathTexture && hasDeathAnim) {
-      // Phaser frameTotal includes __BASE → actual last numbered frame = frameTotal - 2
+    const spriteP = rel(L.sprite.x, L.sprite.y);
+    const feetY = sn(spriteP.y + L.sprite.size * 0.32);
+    const plate = this.add.graphics();
+    pixelDisc(this, spriteP.x, feetY, Math.max(8 * A, L.sprite.size * 0.62), { ry: Math.max(2 * A, L.sprite.size * 0.1), fill: PX.night, line: PX.ink, px: A, g: plate });
+    panelC.add(plate);
+    if (deathSpriteKey && this.textures.exists(deathSpriteKey)) {
       const texture = this.textures.get(deathSpriteKey);
       const frameTotal = Math.max(1, texture?.frameTotal ?? 1);
-      const lastFrameIndex = Math.max(0, frameTotal - 2);
-
-      const spriteY = Math.round(deathBaseY);
-
-      const deathSprite = this.add.sprite(Math.round(cx), spriteY, deathSpriteKey, 0);
-      deathSprite.setOrigin(0.5, 0.5).setScale(2).setDepth(3001).setAlpha(0);
-      gameOverContainer.add(deathSprite);
-
-      let frozen = false;
-      const freezeOnGround = () => {
-        if (frozen) return;
-        frozen = true;
-        deathSprite.anims.stop();
-        deathSprite.setFrame(lastFrameIndex);
-      };
-
-      // Fade in then play death animation once
-      this.tweens.add({
-        targets: deathSprite,
-        alpha: 1,
-        duration: 350,
-        delay: 300,
-        ease: 'Power2',
-        onComplete: () => {
-          deathSprite.play(deathAnimKey);
-        }
-      });
-
-      // Freeze on last frame (lying on ground) when animation completes — never transition back
-      deathSprite.once(`animationcomplete-${deathAnimKey}`, freezeOnGround);
-      deathSprite.once('animationcomplete', freezeOnGround);
-      // Safety backup
-      this.time.delayedCall(3000, freezeOnGround);
-
-      animDurationMs = 2800;
-    } else if (hasDeathTexture) {
-      // No animation available — show last frame directly
-      const texture = this.textures.get(deathSpriteKey);
-      const frameTotal = Math.max(1, texture?.frameTotal ?? 1);
-      const lastFrameIndex = Math.max(0, frameTotal - 2);
-      const spriteY = Math.round(deathBaseY);
-      const groundSprite = this.add.sprite(Math.round(cx), spriteY, deathSpriteKey, lastFrameIndex);
-      groundSprite.setOrigin(0.5, 0.5).setScale(2).setDepth(3001).setAlpha(0);
-      gameOverContainer.add(groundSprite);
-      this.tweens.add({ targets: groundSprite, alpha: 1, duration: 500, delay: 400, ease: 'Power2' });
-      animDurationMs = 1200;
+      const lastFrameIndex = Math.max(0, frameTotal - 2); // frameTotal includes __BASE
+      const hasDeathAnim = deathAnimKey && this.anims.exists(deathAnimKey);
+      // Final (lying) pose bbox in the 128px frames: centre x / width, feet at the frame bottom.
+      const POSE = { 'vibecoder-death': [0.31, 76], 'destroyer-death': [0.69, 69], 'swordsman-death': [0.35, 65] };
+      const [ox, poseW] = POSE[deathSpriteKey] || [0.5, 72];
+      // whole css pixels per texel (A / 2 logical = 1 css px) so the sprite stays crisp
+      const texel = A / 2;
+      const scale = Math.max(1, Math.round((L.sprite.size * 1.5) / poseW / texel)) * texel;
+      const deathSprite = this.add.sprite(spriteP.x, feetY + A, deathSpriteKey, hasDeathAnim ? 0 : lastFrameIndex);
+      deathSprite.setOrigin(ox, 1).setScale(scale);
+      panelC.add(deathSprite);
+      if (hasDeathAnim) {
+        let frozen = false;
+        const freezeOnGround = () => {
+          if (frozen || !deathSprite.scene) return;
+          frozen = true;
+          deathSprite.anims.stop();
+          deathSprite.setFrame(lastFrameIndex);
+        };
+        this.time.delayedCall(uiDelay + 150, () => { if (deathSprite.scene) deathSprite.play(deathAnimKey); });
+        deathSprite.once(`animationcomplete-${deathAnimKey}`, freezeOnGround);
+        deathSprite.once('animationcomplete', freezeOnGround);
+        this.time.delayedCall(uiDelay + 3200, freezeOnGround);
+      }
     }
 
-    // --- Phase 2: GAME OVER UI (appears after death animation) ---
-    const uiDelay = animDurationMs;
+    // ---- title: amber pixel letters 3x with a hard 2-step shadow (amber-dark + ink) + stage line
+    const titleMaxW = L.compact ? P.w * 0.42 : P.w * 0.86;
+    const titleStr = t('game.game_over');
+    let titleScale = 3;
+    const probe = this.pxText(0, 0, titleStr, { P: A, scale: titleScale });
+    while (titleScale > 1 && probe.width > titleMaxW) { titleScale--; probe.setPixelSize(8 * titleScale * A); }
+    probe.destroy();
+    const tp = rel(L.title.x, L.title.y - (7 * titleScale * A) / 2 - 3 * A);
+    const titleBack = this.pxText(tp.x, tp.y + titleScale * A, titleStr, { P: A, scale: titleScale, color: PX_CSS.amberD }).setOrigin(0.5, 0);
+    const titleText = this.pxText(tp.x, tp.y, titleStr, { P: A, scale: titleScale, color: PX_CSS.amber, shadow: false }).setOrigin(0.5, 0);
+    titleBack.setPixelShadow?.(true);
+    panelC.add([titleBack, titleText]);
 
-    // GAME OVER title — appears after death animation, positioned below death sprite
-    const goTextY = Math.round(gameOverTopY + 30);
-    const gameOverText = this.add.text(cx, goTextY, 'GAME OVER', {
-      fontFamily: 'monospace',
-      fontSize: '68px',
-      color: '#ff0000',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(gameOverText);
-    this.tweens.add({ targets: gameOverText, alpha: 1, duration: 800, delay: uiDelay, ease: 'Power2' });
+    const biome = BIOMES[this.currentStage] || BIOMES[0];
+    const stageName = String(biome?.name || '').toLowerCase().replace(/\b([a-z])/g, (m) => m.toUpperCase());
+    const sp0 = rel(L.subtitle.x, L.subtitle.y - 2 * A);
+    const subtitle = this.pxText(sp0.x, sp0.y, t('gameover.reached').replace('{stage}', stageName), { P: A, color: PX_CSS.periw, align: 'center', maxWidth: titleMaxW }).setOrigin(0.5, 0);
+    panelC.add(subtitle);
+    if (!L.compact) {
+      const dvY = sn(L.cards[0].y - 10 * A) - P.y;
+      panelC.add(pixelDivider(this, sn(L.cards[0].x) - P.x, dvY, sn(L.cards[3].x + L.cards[3].w) - sn(L.cards[0].x), { px: A }));
+    }
 
-    this.time.delayedCall(uiDelay + 200, () => {
-      if (!gameOverText.scene) return;
+    // ---- stat tiles: tile-<family> + kit icon + 2x number + one word, stepped in with a count-up
+    const stats = [
+      { icon: 'wave', fam: 'violet', value: wave, label: t('gameover.wave') },
+      { icon: 'star', fam: 'amber', value: score, label: t('gameover.score') },
+      { icon: 'skull', fam: 'red', value: state.kills || 0, label: t('gameover.kills') },
+      { icon: 'gem', fam: 'cyan', value: totalBits, label: t('gameover.bits'), prefix: '+' }
+    ];
+    const fmt = (v) => Math.round(v).toLocaleString('en-US');
+    stats.forEach((st, i) => {
+      const c0 = L.cards[i];
+      const c = { x: sn(c0.x) - P.x, y: sn(c0.y) - P.y, w: sn(c0.w), h: sn(c0.h) };
+      const cardC = this.add.container(0, 0).setVisible(false);
+      cardC.add(pixelPanel(this, c.x, c.y, c.w, c.h, tileSkin(st.fam), { px: A }));
+      let num;
+      let label;
+      let textRoom;
+      if (L.cardStyle === 'stacked') {
+        cardC.add(uiIcon(this, c.x + c.w / 2, c.y + sn(c.h * 0.24), st.icon, { px: A }));
+        num = this.pxText(c.x + c.w / 2, c.y + sn(c.h * 0.44), `${st.prefix || ''}0`, { P: A, scale: 2 }).setOrigin(0.5, 0);
+        label = this.pxText(c.x + c.w / 2, c.y + sn(c.h * 0.76), st.label, { P: A, color: PX_CSS.periw }).setOrigin(0.5, 0);
+        textRoom = c.w - 8 * A;
+      } else {
+        const ix = c.x + 6 * A + 8 * A;
+        cardC.add(uiIcon(this, ix, c.y + c.h / 2, st.icon, { px: A }));
+        const tx = ix + 8 * A + 5 * A;
+        const block = 14 * A + 3 * A + 7 * A;
+        const ty = c.y + sn((c.h - block) / 2);
+        num = this.pxText(tx, ty, `${st.prefix || ''}0`, { P: A, scale: 2 });
+        label = this.pxText(tx, ty + 17 * A, st.label, { P: A, color: PX_CSS.periw });
+        textRoom = c.x + c.w - tx - 4 * A;
+      }
+      cardC.add([num, label]);
+      if (label.width > textRoom) label.setVisible(false);
+      panelC.add(cardC);
+      const delay = uiDelay + 250 + i * 90;
+      stepIn(cardC, delay, A);
+      const fitNum = (str) => {
+        num.setText(`${st.prefix || ''}${str}`);
+        if (num.width > textRoom && num.fontSize > 8 * A) { // fall back to 1x glyphs, label below
+          num.setPixelSize(8 * A);
+          if (L.cardStyle !== 'stacked') { num.setY(c.y + sn((c.h - 17 * A) / 2)); label.setY(num.y + 10 * A); }
+        }
+      };
+      const counter = { v: 0 };
       this.tweens.add({
-        targets: gameOverText,
-        x: { from: cx - 2, to: cx + 2 },
-        y: { from: goTextY - 2, to: goTextY + 2 },
-        duration: 120,
-        yoyo: true,
-        repeat: -1,
-        ease: 'Sine.easeInOut'
+        targets: counter, v: Number(st.value) || 0, duration: 600, delay: delay + 60, ease: 'Cubic.easeOut',
+        onUpdate: () => { if (num.scene) fitNum(fmt(counter.v)); },
+        onComplete: () => { if (num.scene) fitNum(fmt(Number(st.value) || 0)); }
       });
     });
 
-    // Random phrase (italic, dimmer) — below GAME OVER
-    const phraseText = this.add.text(cx, goTextY + 70, phrase, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '18px',
-      color: '#777777',
-      fontStyle: 'italic',
-      align: 'center',
-      wordWrap: { width: Math.min(520, w - 60) }
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(phraseText);
-    this.tweens.add({ targets: phraseText, alpha: 1, duration: 800, delay: uiDelay + 300, ease: 'Power2' });
+    // ---- rank badge: chip with the tier icon + name, leaderboard position appended when it resolves
+    const tier = this.getGameOverRankTier();
+    const rankRow = this.add.container(0, 0).setVisible(false);
+    panelC.add(rankRow);
+    const rankNameText = this.pxText(0, 0, tier ? displayRankName(tier.name) : '—', { P: A, color: tier ? PX_CSS.white : PX_CSS.periw });
+    const rankPosText = this.pxText(0, 0, '', { P: A, color: PX_CSS.periw });
+    const rankH = 15 * A;
+    const rankChip = pixelPanel(this, 0, 0, 40 * A, rankH, 'chip', { px: A });
+    const hasRankIcon = !!(tier && tier.sprite && this.textures.exists(tier.sprite));
+    const rankIcon = hasRankIcon ? this.add.image(0, 0, tier.sprite) : null;
+    if (rankIcon) {
+      const fr = this.textures.getFrame(tier.sprite);
+      const sz = Math.max(fr?.width || 16, fr?.height || 16);
+      const texel = A / 2; // 1 css px
+      if (sz * texel > 11 * A) rankIcon.setDisplaySize(11 * A, 11 * A);
+      else rankIcon.setScale(Math.max(1, Math.floor((11 * A) / sz / texel)) * texel);
+    }
+    const layoutRankRow = () => {
+      if (!rankRow.scene) return;
+      const padX = 5 * A;
+      const gap = 3 * A;
+      const iconW = rankIcon ? 11 * A + gap : 0;
+      const posW = rankPosText.text ? rankPosText.width + gap : 0;
+      const bw = sn(padX + iconW + rankNameText.width + posW + padX);
+      rankChip.resize(bw, rankH);
+      const rp = rel(L.rank.x, L.rank.y);
+      const x0 = rp.x - sn(bw / 2);
+      const y0 = sn(rp.y - rankH / 2);
+      rankRow.removeAll(false);
+      rankRow.add([rankChip, rankIcon, rankNameText, rankPosText].filter(Boolean));
+      rankChip.setPosition(x0, y0);
+      let x = x0 + padX;
+      if (rankIcon) { rankIcon.setPosition(x + 5.5 * A, y0 + rankH / 2); x += iconW; }
+      rankNameText.setPosition(x, y0 + 4 * A);
+      x += rankNameText.width + gap;
+      rankPosText.setPosition(x, y0 + 4 * A);
+    };
+    layoutRankRow();
+    stepIn(rankRow, uiDelay + 620, A);
 
-    // Game name branding
-    const gameBrandText = this.add.text(cx, h - 22, 'Cosmic Coder', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#444466'
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(gameBrandText);
-    this.tweens.add({ targets: gameBrandText, alpha: 1, duration: 600, delay: uiDelay + 400, ease: 'Power2' });
+    const onRankReady = (myRank) => {
+      if (!rankPosText.scene) return;
+      rankPosText.setText(myRank != null ? `#${myRank}` : '');
+      layoutRankRow();
+    };
+    this._refreshGameOverLeaderboard = () => renderLeaderboard(onRankReady);
+    renderLeaderboard(onRankReady);
 
-    // Stats: SCORE and WAVE
-    const scoreLabel = this.add.text(cx, statsStartY, `SCORE: ${score}   |   WAVE: ${wave}`, {
-      fontFamily: 'monospace',
-      fontSize: '17px',
-      color: '#ffffff'
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(scoreLabel);
-    this.tweens.add({ targets: scoreLabel, alpha: 1, duration: 600, delay: uiDelay + 200, ease: 'Power2' });
-
-    // BITS earned (green)
-    const bitsLabel = this.add.text(cx, statsStartY + 28, `+${totalBits} BITS`, {
-      fontFamily: 'monospace',
-      fontSize: '15px',
-      color: '#00ff88'
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(bitsLabel);
-    this.tweens.add({ targets: bitsLabel, alpha: 1, duration: 600, delay: uiDelay + 300, ease: 'Power2' });
-
-    const kills = Math.floor(state.kills || 0);
-    const killsLabel = this.add.text(cx, statsStartY + 56, `KILLS: ${kills}`, {
-      fontFamily: 'monospace',
-      fontSize: '17px',
-      color: '#ffffff'
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(killsLabel);
-    this.tweens.add({ targets: killsLabel, alpha: 1, duration: 600, delay: uiDelay + 350, ease: 'Power2' });
-
-    // RANK label is created above and updated by renderLeaderboard(onRankReady); show it with stats
-    if (rankLabelRef) {
-      this.tweens.add({ targets: rankLabelRef, alpha: 1, duration: 600, delay: uiDelay + 420, ease: 'Power2' });
+    // ---- NEW BEST: amber chip (button-amber skin) + ink star, blinks twice when it lands
+    if ((isNewHighWave || isNewHighScore) && score > 0) {
+      const nbText = this.pxText(0, 0, t('gameover.new_best').toUpperCase(), { P: A, color: PX_CSS.ink, shadow: false });
+      const bh = 15 * A;
+      const bw = sn(5 * A + 12 * A + nbText.width + 6 * A);
+      const nbp = rel(L.newBest.x, L.newBest.y);
+      const nx = Math.min(P.w - bw - 6 * A, sn(nbp.x - bw / 2));
+      const ny = sn(nbp.y - bh / 2);
+      const nbC = this.add.container(0, 0).setVisible(false);
+      nbC.add(pixelPanel(this, nx, ny, bw, bh, 'button-amber-normal', { px: A }));
+      nbC.add(uiIcon(this, nx + 5 * A + 4 * A, ny + bh / 2 - A, 'star', { px: A / 2 * 1, tint: PX.ink }));
+      nbText.setPosition(nx + 5 * A + 12 * A, ny + 4 * A);
+      nbC.add(nbText);
+      panelC.add(nbC);
+      const at = uiDelay + 900;
+      [0, 140, 280, 420].forEach((d, i) => this.time.delayedCall(at + d, () => { if (nbC.scene) nbC.setVisible(i % 2 === 0); }));
+      this.time.delayedCall(at + 560, () => { if (nbC.scene) nbC.setVisible(true); });
     }
 
-    // BACK TO MENU button (only shown after ZK submission completes or fails)
-    const returnMenuBtn = this.add.text(cx, statsStartY + 146, 'BACK TO MENU', {
-      fontFamily: 'monospace',
-      fontSize: '18px',
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
-    gameOverContainer.add(returnMenuBtn);
-    // Do NOT fade in yet; will be shown after ZK submission
+    // ---- buttons: kit 9-slices, "Play again" primary (violet) + "Menu" neutral; focus = ▶ cursor + hover skin
+    const goCursor = uiSprite(this, 0, 0, 'cursor', { px: A }).setVisible(false);
+    let cursorOwner = null;
+    const makeButton = (rect, label, primary) => {
+      const r = { x: sn(rect.x) - P.x, y: sn(rect.y) - P.y, w: sn(rect.w), h: sn(rect.h) };
+      const fam = primary ? 'violet' : 'neutral';
+      const panel = pixelPanel(this, r.x, r.y, r.w, r.h, buttonSkin(fam, 'normal'), { px: A });
+      const txt = this.pxText(r.x + r.w / 2, r.y + sn((r.h - 7 * A) / 2) - A, label, { P: A, color: primary ? PX_CSS.white : PX_CSS.mist }).setOrigin(0.5, 0);
+      const hit = this.add.rectangle(r.x, r.y, r.w, r.h, 0x000000, 0).setOrigin(0).setInteractive({ useHandCursor: true });
+      const group = this.add.container(0, 0, [panel, txt, hit]);
+      panelC.add(group);
+      const btn = {
+        bg: hit, panel, txt, group, enabled: true, focused: false,
+        setFocus(on) {
+          btn.focused = on;
+          if (!btn.enabled) return;
+          panel.setSkin(buttonSkin(fam, on ? 'hover' : 'normal'));
+          txt.setColor(on || primary ? PX_CSS.white : PX_CSS.mist);
+          if (on) { cursorOwner = btn; goCursor.setPosition(r.x - 6 * A, r.y + r.h / 2).setVisible(true); } else if (cursorOwner === btn) { goCursor.setVisible(false); }
+        },
+        press() { if (btn.enabled) panel.setSkin(buttonSkin(fam, 'pressed')); }
+      };
+      return btn;
+    };
+    const playBtn = makeButton(L.buttons.primary, t('gameover.play_again'), true);
+    const menuBtn = makeButton(L.buttons.secondary, t('gameover.menu'), false);
+    panelC.add(goCursor);
+    [playBtn, menuBtn].forEach((b, i) => {
+      b.group.setVisible(false);
+      stepIn(b.group, uiDelay + 700 + i * 90, A);
+    });
+    this.time.addEvent({ delay: 320, loop: true, callback: () => { if (goCursor.scene && cursorOwner?.focused) goCursor.setVisible(!goCursor.visible); } });
+    const setButtonsEnabled = (on) => {
+      [playBtn, menuBtn].forEach((b) => {
+        b.enabled = on;
+        if (!on) b.panel.setSkin('button-disabled');
+        else b.setFocus(b.focused);
+        b.txt.setAlpha(on ? 1 : 0.5);
+      });
+    };
+
+    // ---- status line (ZK / ranked state): kit icon + one short phrase; long errors collapse into "Details"
+    const statusRow = this.add.container(0, 0);
+    panelC.add(statusRow);
+    let detailsBox = null;
+    const statusLinks = [];
+    const TONES = {
+      neutral: { css: PX_CSS.periw, icon: 'shield' },
+      progress: { css: PX_CSS.violet, icon: 'hourglass' },
+      ok: { css: PX_CSS.green, icon: 'check' },
+      warn: { css: PX_CSS.amber, icon: 'shield' },
+      error: { css: PX_CSS.red, icon: 'close' }
+    };
+    const toggleDetails = (detail) => {
+      if (detailsBox) { detailsBox.destroy(); detailsBox = null; return; }
+      const maxW = sn(Math.min(L.status.maxW, 460 * S));
+      const body = this.pxText(0, 0, detail, { P: A, color: PX_CSS.mist, maxWidth: maxW - 16 * A });
+      const bw = sn(body.width + 16 * A);
+      const bh = sn(body.height + 14 * A);
+      const sp = rel(L.status.x, L.status.y);
+      detailsBox = this.add.container(sn(sp.x - bw / 2), sn(sp.y - 10 * A - bh));
+      detailsBox.add(pixelPanel(this, 0, 0, bw, bh, 'panel-dark', { px: A }));
+      body.setPosition(8 * A, 7 * A);
+      detailsBox.add(body);
+      panelC.add(detailsBox);
+    };
+    const setStatus = ({ text, tone = 'neutral', detail = null, link = null }) => {
+      if (!statusRow.scene) return;
+      statusRow.removeAll(true);
+      statusLinks.length = 0;
+      if (detailsBox) { detailsBox.destroy(); detailsBox = null; }
+      if (!text) return;
+      const tn = TONES[tone] || TONES.neutral;
+      const items = [];
+      const icon = uiIcon(this, 0, 0, tn.icon, { px: A, tint: tn.css });
+      if (tone === 'progress') {
+        const blinkEv = this.time.addEvent({ delay: 400, loop: true, callback: () => { if (icon.scene) icon.setVisible(!icon.visible); else blinkEv.remove(false); } });
+      }
+      items.push({ obj: icon, w: 16 * A, icon: true });
+      items.push({ obj: this.pxText(0, 0, text, { P: A, color: tn.css }) });
+      const addLink = (label, action) => {
+        const lt = this.pxText(0, 0, label, { P: A, color: PX_CSS.cyan });
+        const ul = this.add.rectangle(0, 0, lt.width, A, PX.cyanD).setOrigin(0);
+        lt.setInteractive({ useHandCursor: true });
+        lt.on('pointerdown', (_p, _x, _y, ev) => { try { ev?.stopPropagation?.(); } catch (_) {} action(); });
+        lt.underline = ul;
+        statusLinks.push({ target: lt, action });
+        items.push({ obj: lt, extra: ul });
+      };
+      if (link) addLink(link.label, link.action);
+      if (detail) addLink(t('gameover.details'), () => toggleDetails(detail));
+      const gap = 5 * A;
+      const widths = items.map((it) => it.w ?? sn(it.obj.width));
+      const total = widths.reduce((a, b) => a + b, 0) + gap * (items.length - 1) + (items.length > 2 ? gap : 0);
+      let x = sn(-total / 2);
+      items.forEach((it, i) => {
+        const wIt = widths[i];
+        if (it.icon) it.obj.setPosition(x + wIt / 2, 0);
+        else it.obj.setPosition(x, -4 * A);
+        if (it.extra) { it.extra.setPosition(x, 4 * A); statusRow.add(it.extra); }
+        x += wIt + gap + (i === 1 ? gap : 0);
+        statusRow.add(it.obj);
+      });
+      const sp = rel(L.status.x, L.status.y);
+      statusRow.setPosition(sp.x, sp.y);
+    };
+    statusRow.setVisible(false);
+    stepIn(statusRow, uiDelay + 820, A);
 
     let handleKeydown = null;
-
-    // goToMenu — reliable scene transition
     let returned = false;
-    const goToMenu = () => {
-      if (returned) return;
-      if (this._openingZkLinkUntil && Date.now() < this._openingZkLinkUntil) return;
-      if (this._ignoreGameOverInputUntil && Date.now() < this._ignoreGameOverInputUntil) return;
+    const leaveGameOver = () => {
+      if (returned) return false;
+      if (this._openingZkLinkUntil && Date.now() < this._openingZkLinkUntil) return false;
+      if (this._ignoreGameOverInputUntil && Date.now() < this._ignoreGameOverInputUntil) return false;
       returned = true;
       if (this._gameOverKeydown) {
         try { this.input.keyboard.off('keydown', this._gameOverKeydown); } catch (_) {}
@@ -5038,36 +6530,64 @@ export default class ArenaScene extends Phaser.Scene {
       if (handleKeydown) this.input.keyboard.off('keydown', handleKeydown);
       gameOverContainer.destroy();
       SaveManager.clearSave();
+      return true;
+    };
+    // goToMenu — reliable scene transition
+    const goToMenu = () => {
+      if (!menuBtn.enabled || !leaveGameOver()) return;
       this.cameras.main.fade(400, 0, 0, 0);
       this.time.delayedCall(400, () => {
         this.scene.start('TitleScene');
       });
     };
-
-    returnMenuBtn.on('pointerdown', (_pointer, _lx, _ly, event) => {
-      try { event?.stopPropagation?.(); } catch (_) {}
-      goToMenu();
-    });
-
-    // Only allow click-anywhere-to-exit and keyboard after ZK submission completes
-    // We'll enable these in the ZK promise resolution/failure
+    // Play again: fresh run, same character (progressStore) and same mode.
+    const playAgain = () => {
+      if (!playBtn.enabled || !leaveGameOver()) return;
+      try { window.VIBE_CODER.reset(); } catch (_) {}
+      const gameMode = this.gameMode;
+      this.cameras.main.fade(300, 0, 0, 0);
+      this.time.delayedCall(300, () => {
+        this.scene.start('ArenaScene', { continueGame: false, gameMode });
+      });
+    };
 
     // On-chain submit runs fully in background — always attempt ZK when possible
-    const runZkProof =
+    // Client-side rule gate: never ask the wallet to sign / never hit RPC for a run the contract must reject.
+    const runIsSubmittable = validateGameRules(wave, score).valid;
+    // GameRunV3 private witness: kills bound the provable score (same rule as the circuit).
+    const runKills = Math.max(0, Math.floor(Number(window.VIBE_CODER?.kills) || 0));
+    const runProvable = BigInt(Math.max(0, Math.floor(score))) <= maxProvableScore(runKills, wave);
+    const runZkEligible =
+      runIsSubmittable &&
       !this.isContinuedGame &&
       score > 0 &&
       !this.zkProofSubmitted &&
       gameClient.isZkProverConfigured() &&
       gameClient.isContractConfigured();
+    const runZkProof = runZkEligible && runProvable;
+    if (runZkEligible && !runProvable) {
+      // The witness cannot be generated: skip ranked, fall back to the casual submit.
+      logger.warn(`[ZK Submit] run not provable: score ${score} > max(kills=${runKills}, wave=${wave})`);
+      this.showHudBanner(t('hud.run_not_provable'), { color: HUD.amber, duration: 2200 });
+    }
 
     const submitTimeoutMs = runZkProof ? 90000 : 25000;
 
-    const zkStatusText = this.add.text(cx, statsStartY + 110, '', {
-      fontFamily: 'monospace',
-      fontSize: '12px',
-      color: '#777777'
-    }).setOrigin(0.5).setAlpha(0);
-    gameOverContainer.add(zkStatusText);
+    // Submission progress goes to the status line (short phrase); the raw message is kept for "Details".
+    let lastSubmitMessage = '';
+    const zkStatusText = {
+      setText: (msg) => {
+        lastSubmitMessage = String(msg || '');
+        setStatus(this.summarizeSubmitMessage(lastSubmitMessage));
+        return zkStatusText;
+      },
+      setAlpha: () => zkStatusText
+    };
+    if (gameClient.isContractConfigured()) {
+      // Leaving before the submit settles would cancel it (scene timers die with the scene).
+      setButtonsEnabled(false);
+      setStatus({ text: t('gameover.saving'), tone: 'progress' });
+    }
     new Promise((resolve) => {
       let timeoutId = null;
       const clear = () => {
@@ -5093,15 +6613,25 @@ export default class ArenaScene extends Phaser.Scene {
         try {
           if (runZkProof) {
             this.zkProofSubmitted = true;
-            console.log('[ZK Submit V2] Starting ZK prover flow');
+            logger.log('[ZK Submit V2] Starting ZK prover flow');
             try { zkStatusText.setText('Compiling ZK Proof of Survival... Please wait.').setAlpha(1); } catch (_) {}
             // Ensure we have a valid session in Game Hub before submit_zk calls end_game().
+            // Skip start_match when the player already has an open session (avoids a wasted signature/fee).
+            let activeSession = null;
             try {
-              await gameClient.startMatch(addr, sign);
+              activeSession = await gameClient.getActiveSession(addr);
             } catch (e) {
-              const em = e?.message || e;
-              console.error('[ZK Submit] start_match failed; aborting zk submit:', em);
-              throw new Error(`[ZK Submit] start_match failed: ${em}`);
+              logger.debug('[ZK Submit] get_active_session read failed, calling start_match:', e?.message || e);
+            }
+            if (activeSession == null) {
+              try {
+                await gameClient.startMatch(addr, sign);
+              } catch (e) {
+                logger.error('[ZK Submit] start_match failed; aborting zk submit:', e?.message || e);
+                throw e;
+              }
+            } else {
+              logger.log('[ZK Submit] Reusing active Game Hub session:', activeSession);
             }
             // Derive run_hash_hi/lo from computeGameHash
             const runHashHex = await computeGameHash(addr, wave, score, this.runSeed, Date.now());
@@ -5123,6 +6653,9 @@ export default class ArenaScene extends Phaser.Scene {
               wave,
               nonce,
               season_id: seasonId,
+              // GameRunV3 private witness (docs/ZK_CIRCUIT_STATUS.md)
+              seed: this.runSeed,
+              kills: runKills,
               challenge_id: challengeId,
               player_address: addr,
               contract_id: contractId,
@@ -5136,18 +6669,18 @@ export default class ArenaScene extends Phaser.Scene {
             const submitOnce = async (p) => {
               if (useTrustless) {
                 // TRUSTLESS MODE (like xray-games): Generate proof locally, no server needed
-                console.log('[ZK Trustless] Generating local proof...');
+                logger.log('[ZK Trustless] Generating local proof...');
                 try { zkStatusText.setText('Generating local ZK proof...').setAlpha(1); } catch (_) {}
                 const r = await gameClient.submitZkTrustless(addr, sign, p);
-                console.log('[ZK Trustless] Local proof submitted:', r);
+                logger.log('[ZK Trustless] Local proof submitted:', r);
                 return r;
               }
               // SERVER MODE: Backend generates proof
               const vkHash = '0000000000000000000000000000000000000000000000000000000000000000';
-              console.log('[ZK Submit] Starting ZK submission...');
-              console.log('[ZK Submit] Payload:', JSON.stringify(p, null, 2));
+              logger.log('[ZK Submit] Starting ZK submission...');
+              logger.log('[ZK Submit] Payload:', JSON.stringify(p, null, 2));
               const r = await gameClient.submitZkFromProverV2(addr, sign, undefined, p, vkHash);
-              console.log('[ZK Submit] submitZkFromProverV2 success:', r);
+              logger.log('[ZK Submit] submitZkFromProverV2 success:', r);
               return r;
             };
 
@@ -5155,21 +6688,20 @@ export default class ArenaScene extends Phaser.Scene {
             try {
               txResult = await submitOnce(payload);
             } catch (firstErr) {
-              const msg = String(firstErr?.message || '');
-              // Retry once with a fresh nonce if chain trapped (commonly replay panic path).
-              if (msg.includes('UnreachableCodeReached') || msg.includes('proof already used')) {
+              // Retry once with a fresh nonce on Replay (contract error #2).
+              if (parseContractError(firstErr)?.code === 2) {
                 const retryNonce = (BigInt(Date.now()) * 1_000_000n + BigInt(Math.floor(Math.random() * 1_000_000))).toString();
                 const retryPayload = { ...payload, nonce: retryNonce };
-                console.warn('[ZK Submit] Retrying once with fresh nonce:', retryNonce);
+                logger.warn('[ZK Submit] Retrying once with fresh nonce:', retryNonce);
                 txResult = await submitOnce(retryPayload);
               } else {
                 throw firstErr;
               }
             }
             const finalTxHash = txResult?.txHash || txResult?.hash;
-            console.log('[ZK Submit V2] Transaction hash:', finalTxHash);
+            logger.log('[ZK Submit V2] Transaction hash:', finalTxHash);
             if (finalTxHash) {
-              console.log('[ZK Submit V2] Stellar Expert:', `https://stellar.expert/explorer/testnet/tx/${finalTxHash}`);
+              logger.log('[ZK Submit V2] Stellar Expert:', `https://stellar.expert/explorer/testnet/tx/${finalTxHash}`);
             }
             try { zkStatusText.setText('ZK Submitted').setAlpha(1); } catch (_) {}
             // Mark that user has signed ZK at least once — enables weapon drops from then on
@@ -5178,138 +6710,120 @@ export default class ArenaScene extends Phaser.Scene {
             try { if (this._refreshGameOverLeaderboard) this._refreshGameOverLeaderboard(); } catch (_) {}
             clear();
             resolve({ status: 'zk', txHash: finalTxHash });
+          } else if (!runIsSubmittable) {
+            try { zkStatusText.setText(`Run kept local (score must be >= wave x ${MIN_SCORE_PER_WAVE}).`).setAlpha(1); } catch (_) {}
+            clear();
+            resolve('casual');
           } else {
-            console.log('[Score Submit] submitResult starting');
+            logger.log('[Score Submit] submitResult starting');
             await gameClient.submitResult(addr, sign, wave, score);
-            console.log('[Score Submit] submitResult success');
+            logger.log('[Score Submit] submitResult success');
             try { if (this._refreshGameOverLeaderboard) this._refreshGameOverLeaderboard(); } catch (_) {}
             clear();
             resolve('casual');
           }
         } catch (e) {
-          console.error('ZK ERROR DETAILS:', e);
-          console.error('ZK ERROR STACK:', e?.stack);
-          console.error('ZK ERROR MESSAGE:', e?.message);
-          console.warn('[Cosmic Coder] Submit failed:', e?.message || e);
-          
+          const contractErr = e?.i18nKey && e?.code != null ? { code: e.code, i18nKey: e.i18nKey } : parseContractError(e);
+          logger.error('[Cosmic Coder] Submit failed:', contractErr ? `#${contractErr.code} ${contractErr.i18nKey}` : '', e?.message || e, e?.stack);
+
           // Check for wrong network (txBadAuth / Freighter on Mainnet)
           const msg = e?.message || '';
           const isChunk404 = msg.includes('Failed to fetch dynamically imported module') || msg.includes('dynamically imported module');
           if (isChunk404) {
-            console.warn('[Cosmic Coder] ZK chunk 404 (stale cache). Hard refresh. Prover URL:', gameClient.getZkProverUrl());
+            logger.warn('[Cosmic Coder] ZK chunk 404 (stale cache). Hard refresh. Prover URL:', gameClient.getZkProverUrl());
             try {
               zkStatusText.setText('Hard refresh to load ZK (Ctrl+Shift+R). Prover: cosmic-coder-zk-prover.onrender.com').setAlpha(1);
             } catch (_) {}
           } else if (msg.includes('Freighter is on') || msg.includes('txBadAuth') || msg.includes('Stellar Testnet')) {
             try { zkStatusText.setText('Switch Freighter to Testnet, then try again. Using local leaderboard.').setAlpha(1); } catch (_) {}
-          } else if (this.zkContractMissing || msg.includes('not found') || msg.includes('404')) {
-            try { zkStatusText.setText('ZK Contract not deployed. Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else if (msg.includes('txBadSeq') || msg.includes('Sequence number expired')) {
             try { zkStatusText.setText('Sequence expired. Try submitting again (or refresh). Using local leaderboard.').setAlpha(1); } catch (_) {}
-          } else if (msg.includes('Cannot satisfy constraint')) {
-            try { zkStatusText.setText('ZK circuit constraint failed (score >= wave*5?). Using local leaderboard.').setAlpha(1); } catch (_) {}
-          } else if (msg.includes('BigInt') || msg.includes('verification key')) {
-            try { zkStatusText.setText('ZK Backend Issue. Using local leaderboard.').setAlpha(1); } catch (_) {}
-          } else if (score < 5) {
-            try { zkStatusText.setText('Partida guardada localmente (puntuación < 5 para ranking).').setAlpha(1); } catch (_) {}
+          } else if (contractErr) {
+            // Typed contract error (ContractError from gameClient, or a raw `Error(Contract, #N)`).
+            try { zkStatusText.setText(t(contractErr.i18nKey)).setAlpha(1); } catch (_) {}
+          } else if (this.zkContractMissing) {
+            try { zkStatusText.setText('ZK Contract not deployed. Using local leaderboard.').setAlpha(1); } catch (_) {}
           } else {
-            try { zkStatusText.setText('ZK Submission Failed. Falling back to local leaderboard.').setAlpha(1); } catch (_) {}
+            try { zkStatusText.setText(t('contract_error.unknown')).setAlpha(1); } catch (_) {}
           }
           
-          try {
-            await gameClient.submitResult(addr, sign, wave, score);
-          } catch (_) {}
+          // Replay means it is already on-chain; anything else falls back to the casual submit.
+          if (runIsSubmittable && contractErr?.code !== 2) {
+            try {
+              await gameClient.submitResult(addr, sign, wave, score);
+            } catch (fallbackErr) {
+              logger.warn('[Score Submit] casual fallback failed:', fallbackErr?.message || fallbackErr);
+            }
+          }
           clear();
           resolve({ status: 'zk_failed', error: e?.message || 'Unknown error', contractMissing: this.zkContractMissing });
         }
       }).catch(() => { clear(); resolve(null); });
       });
     }).then((status) => {
-      // Show BACK TO MENU button and enable exit after ZK submission completes or fails
-      this.tweens.add({ targets: returnMenuBtn, alpha: 1, duration: 600, ease: 'Power2' });
-      // Casual mode: hint to connect Freighter for verifiable runs
-      if (this.gameMode === 'casual') {
-        const casualHint = this.add.text(cx, returnMenuBtn.y - 32, t('leaderboard.casual_verifiable_hint'), {
-          fontFamily: 'monospace',
-          fontSize: `${Math.round(11 * (this.uiScale || 1))}px`,
-          color: '#00aaff',
-          align: 'center',
-          wordWrap: { width: Math.min(420, w - 80) }
-        }).setOrigin(0.5);
-        gameOverContainer.add(casualHint);
-      }
-      // Show ZK Proof UI based on submission result
+      if (!panelC.scene) return; // scene already left/restarted
+      setButtonsEnabled(true);
+
+      // Final status line
       let zkUi = null;
       if (status && (status.status === 'zk' || status.status === 'zk_failed')) {
-        zkUi = this.showZkProofResultUI(status, cx, cy, gameOverContainer, statsStartY, score);
-        if (zkUi?.menuY != null) {
-          returnMenuBtn.setY(zkUi.menuY);
-        } else if (zkUi?.buttonY) {
-          const menuY = Math.min(this.scale.height - 24, zkUi.buttonY + Math.round(74 * (this.uiScale || 1)));
-          returnMenuBtn.setY(menuY);
-        }
+        zkUi = this.showZkProofResultUI(status, setStatus, score);
+      } else if (status === 'casual' && /^Run kept local/.test(lastSubmitMessage)) {
+        // keep the "saved locally" line produced by the submit flow
+      } else if (status === 'casual') {
+        setStatus({ text: t('gameover.score_saved'), tone: 'ok' });
+      } else if (status === 'timeout') {
+        setStatus({ text: t('hud.run_unverified'), tone: 'warn', detail: t('gameover.timeout_detail') });
+      } else {
+        setStatus({ text: t('hud.run_unverified'), tone: 'warn' });
       }
 
-      // Game-over selector (same UX style as title menu).
-      const options = [];
-      if (zkUi?.zkProofBtn && zkUi?.openExplorer) {
-        options.push({ target: zkUi.zkProofBtn, action: zkUi.openExplorer });
-      }
-      options.push({ target: returnMenuBtn, action: goToMenu });
-
+      // Focus ring navigation: Play again (default) / Menu / status links.
+      const options = [
+        { button: playBtn, action: playAgain },
+        { button: menuBtn, action: goToMenu },
+        ...statusLinks.map((l) => ({ link: l.target, action: l.action }))
+      ];
       let selectedIndex = 0;
-      const selector = this.add.text(0, 0, '▶', {
-        fontFamily: 'monospace',
-        fontSize: '20px',
-        color: '#00ffff',
-        fontStyle: 'bold'
-      }).setOrigin(0.5).setAlpha(0);
-      gameOverContainer.add(selector);
-      this.tweens.add({ targets: selector, alpha: 1, duration: 600, ease: 'Power2' });
-
       const updateSelectionVisuals = () => {
         options.forEach((opt, i) => {
-          if (!opt?.target) return;
           const selected = i === selectedIndex;
-          opt.target.setColor('#00ffff');
-          opt.target.setAlpha(selected ? 1 : 0.75);
-          opt.target.setScale(selected ? 1.05 : 1);
+          if (opt.button) opt.button.setFocus(selected);
+          if (opt.link && opt.link.scene) opt.link.setColor(selected ? PX_CSS.white : PX_CSS.cyan);
         });
-        const target = options[selectedIndex]?.target;
-        if (target && selector) {
-          selector.setY(target.y);
-          selector.setX(target.x - target.width / 2 - 22);
-        }
       };
       updateSelectionVisuals();
-
       const moveSelection = (delta) => {
         const len = options.length;
         selectedIndex = (selectedIndex + delta + len) % len;
         updateSelectionVisuals();
       };
-
       options.forEach((opt, index) => {
-        opt.target.setInteractive({ useHandCursor: true });
-        opt.target.on('pointerover', () => {
+        if (!opt.button) {
+          if (opt.link) opt.link.on('pointerover', () => { selectedIndex = index; updateSelectionVisuals(); });
+          return;
+        }
+        const { bg } = opt.button;
+        bg.on('pointerover', () => {
           selectedIndex = index;
           updateSelectionVisuals();
         });
-        opt.target.on('pointerdown', (_pointer, _lx, _ly, event) => {
+        bg.on('pointerdown', (_pointer, _lx, _ly, event) => {
           try { event?.stopPropagation?.(); } catch (_) {}
           selectedIndex = index;
           updateSelectionVisuals();
+          opt.button.press();
           opt.action();
         });
       });
-
       handleKeydown = (event) => {
         const k = event?.key?.toLowerCase?.() || event?.code;
         if (k === 'arrowup' || k === 'up' || k === 'w' || k === 'a' || k === 'arrowleft') {
           moveSelection(-1);
           return;
         }
-        if (k === 'arrowdown' || k === 'down' || k === 's' || k === 'd' || k === 'arrowright') {
+        if (k === 'arrowdown' || k === 'down' || k === 's' || k === 'd' || k === 'arrowright' || k === 'tab') {
+          event?.preventDefault?.();
           moveSelection(1);
           return;
         }
@@ -5336,155 +6850,100 @@ export default class ArenaScene extends Phaser.Scene {
     });
   }
 
-  showZkProofResultUI(result, cx, cy, gameOverContainer, statsStartY, runScore = null) {
-    const uiScale = this.uiScale || 1;
-    const h = this.scale.height;
+  /** Short status-line phrase for a raw submit-flow message (the raw text goes to "Details"). */
+  summarizeSubmitMessage(msg) {
+    const m = String(msg || '');
+    if (/^(Compiling|Generating)/i.test(m)) return { text: t('gameover.proving'), tone: 'progress' };
+    if (m === 'ZK Submitted') return { text: t('gameover.submitted'), tone: 'ok' };
+    if (/^Run kept local/i.test(m)) return { text: t('gameover.local_only'), tone: 'warn', detail: m };
+    if (m.length <= 44) return { text: m, tone: 'error' };
+    return { text: t('gameover.submit_failed'), tone: 'error', detail: m };
+  }
+
+  /** Best tier reached from local bests (RankManager thresholds); null when unranked. */
+  getGameOverRankTier() {
+    const hs = Number(this.highScore) || 0;
+    const hw = Number(this.highWave) || 0;
+    for (let id = 4; id >= 1; id--) {
+      const r = getRankById(id);
+      if (hs >= (r.minScore || 0) && hw >= (r.minWave || 0)) return r;
+    }
+    return null;
+  }
+
+  /**
+   * Canvas-backed texture for game over UI: drawn antialiased at GO_TEX_Q x the logical size and
+   * LINEAR-filtered (the game is pixelArt). Keys are unique per call and released on shutdown.
+   * draw(ctx, canvasW, canvasH, q)
+   */
+  makeGoTexture(name, w, h, draw, q = GO_TEX_Q) {
+    this._goTexSeq = (this._goTexSeq || 0) + 1;
+    const key = `go-${name}-${this._goTexSeq}`;
+    const cw = Math.max(2, Math.ceil(w * q));
+    const ch = Math.max(2, Math.ceil(h * q));
+    try {
+      const tex = this.textures.createCanvas(key, cw, ch);
+      if (!tex) return null;
+      const ctx = tex.getContext();
+      draw(ctx, cw, ch, q);
+      tex.refresh();
+      try { tex.setFilter(Phaser.Textures.FilterMode.LINEAR); } catch (_) {}
+      (this._goTextures = this._goTextures || []).push(key);
+      return key;
+    } catch (e) {
+      logger.warn('[GameOver] canvas texture failed:', e?.message || e);
+      return null;
+    }
+  }
+
+  releaseGameOverTextures() {
+    for (const key of this._goTextures || []) {
+      try { if (this.textures.exists(key)) this.textures.remove(key); } catch (_) {}
+    }
+    this._goTextures = [];
+  }
+
+  /**
+   * Final ZK state on the game over status line. Success: verified/unverified + "View proof" link.
+   * Failure: one short phrase; the explanation lives behind "Details".
+   * @returns {{openExplorer: Function}|null}
+   */
+  showZkProofResultUI(result, setStatus, runScore = null) {
     const lowScore = runScore != null && runScore < 5;
-
     if (result.status === 'zk' && result.txHash) {
-      const buttonY = Math.min(cy + 360, h - 70);
-      // SUCCESS: Show verifier so reviewers can open and check the proof on-chain
-      const zkProofBtn = this.add.text(cx, buttonY, '[ VIEW ZK PROOF // STELLAR EXPERT ]', {
-        fontFamily: '"Press Start 2P", monospace',
-        fontSize: `${Math.round(14 * uiScale)}px`,
-        color: '#00ffff',
-        fontStyle: 'bold',
-        stroke: '#001a1a',
-        strokeThickness: 5,
-        shadow: {
-          offsetX: 0,
-          offsetY: 0,
-          color: '#00ffff',
-          blur: 8,
-          fill: true
-        },
-        padding: { x: 8, y: 4 }
-      }).setOrigin(0.5).setAlpha(0);
-      zkProofBtn.setResolution(2);
-
-      const zkLabel = this.add.text(cx, buttonY - 35, '✅ ZK Proof of Survival Verified On-Chain', {
-        fontFamily: '"Press Start 2P", monospace',
-        fontSize: `${Math.round(10 * uiScale)}px`,
-        color: '#00ff88',
-        fontStyle: 'bold',
-        stroke: '#001100',
-        strokeThickness: 4
-      }).setOrigin(0.5).setAlpha(0);
-      zkLabel.setResolution(2);
-
-      const verifierHint = this.add.text(cx, buttonY - 58, '▶ Verifier: open link to review proof (Enter)', {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(10 * uiScale)}px`,
-        color: '#88aacc'
-      }).setOrigin(0.5).setAlpha(0);
-
-      gameOverContainer.add(verifierHint);
-      gameOverContainer.add(zkLabel);
-      gameOverContainer.add(zkProofBtn);
-
-      this.tweens.add({ targets: [verifierHint, zkLabel, zkProofBtn], alpha: 1, duration: 800, delay: 400, ease: 'Power2' });
-      
+      // Honest labelling: only claim on-chain verification when a real verifier is deployed (gameClient.isRankedVerified).
+      const rankedVerified = gameClient.isRankedVerified();
       const openExplorer = () => {
         this._openingZkLinkUntil = Date.now() + 4000;
         this._ignoreGameOverInputUntil = Date.now() + 4000;
-        const network = 'testnet';
-        const url = `https://stellar.expert/explorer/${network}/tx/${result.txHash}`;
-        console.log('[GameOver] Opening Stellar Expert:', url);
+        const url = `https://stellar.expert/explorer/testnet/tx/${result.txHash}`;
+        logger.log('[GameOver] Opening Stellar Expert:', url);
         const opened = window.open(url, '_blank', 'noopener,noreferrer');
         // Fallback for popup blockers/webviews: redirect current tab.
-        if (!opened) {
-          window.location.assign(url);
-        }
+        if (!opened) window.location.assign(url);
       };
-
-      zkProofBtn.setInteractive({ useHandCursor: true });
-      
-      return { zkProofBtn, openExplorer, buttonY };
-      
-    } else if (result.status === 'zk_failed') {
-      // FAILURE: vertical stack below status line so nothing overlaps
-      const baseY = (statsStartY != null ? statsStartY : cy) + 132;
-      let errorMessage = result.error || 'Unknown error';
-      let buttonText = '⚠️ ZK Proof Failed - Click to Retry';
-      let errorTitle = '❌ ZK Proof Submission Failed';
-      let hideRetry = false;
-
+      setStatus({
+        text: rankedVerified ? t('gameover.zk_verified') : t('hud.run_unverified'),
+        tone: rankedVerified ? 'ok' : 'warn',
+        link: { label: t('gameover.view_proof'), action: openExplorer }
+      });
+      return { openExplorer };
+    }
+    if (result.status === 'zk_failed') {
+      const err = result.error || 'Unknown error';
       if (lowScore) {
-        errorTitle = 'Partida no registrada en el ranking';
-        errorMessage = 'Tu puntuación fue demasiado baja para el ranking on-chain (mínimo 5 puntos). Tu partida se guardó localmente. ¡Sigue jugando para mejorar!';
-        hideRetry = true;
-      } else if (result.contractMissing || errorMessage.includes('not found') || errorMessage.includes('404')) {
-        errorTitle = '⚠️ ZK Contract Not Deployed';
-        buttonText = '🔄 Retry When Contract is Deployed';
-        errorMessage = 'The ZK smart contract is not currently deployed on testnet. Your score was saved locally.';
-      } else if (errorMessage.includes('txBadSeq') || errorMessage.includes('Sequence number expired')) {
-        errorTitle = '⚠️ Sequence Expired';
-        buttonText = '🔄 Try Again';
-        errorMessage = 'The transaction sequence expired (e.g. another tx was sent). Your score was saved locally. Click to retry submission.';
-      } else if (errorMessage.includes('BigInt') || errorMessage.includes('verification key')) {
-        errorTitle = '⚠️ ZK Backend Issue';
-        buttonText = '🔄 Retry When Backend is Fixed';
-        errorMessage = 'The ZK backend has a technical issue with Stellar addresses. Your score was saved locally.';
+        setStatus({ text: t('gameover.local_only'), tone: 'warn', detail: t('gameover.low_score_detail') });
+        return null;
       }
-
-      const labelColor = lowScore ? '#00aaff' : '#ff4444';
-      const msgColor = lowScore ? '#88aacc' : '#cc6666';
-      const boxStroke = lowScore ? 0x0088aa : 0xff6600;
-      const btnColor = lowScore ? '#00aaff' : '#ff6600';
-
-      const errorLabel = this.add.text(cx, baseY, errorTitle, {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(13 * uiScale)}px`,
-        color: labelColor,
-        fontStyle: 'bold'
-      }).setOrigin(0.5).setAlpha(0);
-
-      const errorMsg = this.add.text(cx, baseY + 28, errorMessage, {
-        fontFamily: 'monospace',
-        fontSize: `${Math.round(10 * uiScale)}px`,
-        color: msgColor,
-        align: 'center',
-        wordWrap: { width: 420 }
-      }).setOrigin(0.5, 0).setAlpha(0);
-
-      gameOverContainer.add(errorLabel);
-      gameOverContainer.add(errorMsg);
-
-      let errorBtnY = baseY + 28 + 44;
-      if (!hideRetry) {
-        const errorBg = this.add.rectangle(cx, errorBtnY, 420, 44, 0x1a0a0a, 0.92);
-        errorBg.setStrokeStyle(2, boxStroke, 0.85);
-        errorBg.setOrigin(0.5).setAlpha(0);
-
-        const errorBtn = this.add.text(cx, errorBtnY, buttonText, {
-          fontFamily: 'monospace',
-          fontSize: `${Math.round(12 * uiScale)}px`,
-          color: btnColor,
-          fontStyle: 'bold'
-        }).setOrigin(0.5).setInteractive({ useHandCursor: true }).setAlpha(0);
-
-        gameOverContainer.add(errorBg);
-        gameOverContainer.add(errorBtn);
-
-        this.tweens.add({ targets: [errorLabel, errorMsg, errorBg, errorBtn], alpha: 1, duration: 600, delay: 300, ease: 'Power2' });
-
-        errorBtn.on('pointerover', () => {
-          errorBtn.setColor('#ffaa00');
-          errorBg.setStrokeStyle(2, 0xffaa00, 1);
-        });
-        errorBtn.on('pointerout', () => {
-          errorBtn.setColor(btnColor);
-          errorBg.setStrokeStyle(2, boxStroke, 0.85);
-        });
-        errorBtn.on('pointerdown', () => {
-          window.location.reload();
-        });
-      } else {
-        this.tweens.add({ targets: [errorLabel, errorMsg], alpha: 1, duration: 600, delay: 300, ease: 'Power2' });
+      let detail = err;
+      if (result.contractMissing || err.includes('not found') || err.includes('404')) {
+        detail = 'The ZK contract is not deployed on testnet. Your score was saved locally.';
+      } else if (err.includes('txBadSeq') || err.includes('Sequence number expired')) {
+        detail = 'The transaction sequence expired (another transaction was sent). Your score was saved locally.';
+      } else if (err.includes('BigInt') || err.includes('verification key')) {
+        detail = 'The ZK backend could not build the proof. Your score was saved locally.';
       }
-
-      const menuY = hideRetry ? Math.max(baseY + 28 + 60, h - 44) : Math.max(errorBtnY + 52, h - 44);
-      return { buttonY: errorBtnY, menuY };
+      setStatus({ text: t('gameover.submit_failed'), tone: 'error', detail });
     }
     return null;
   }
@@ -5494,7 +6953,7 @@ export default class ArenaScene extends Phaser.Scene {
       const contractId = gameClient.getContractId();
       if (!contractId) return false;
       
-      console.log('[ZK Config] Checking contract:', contractId);
+      logger.log('[ZK Config] Checking contract:', contractId);
       
       // Try a simpler approach - just check if we can make any RPC call
       try {
@@ -5503,7 +6962,7 @@ export default class ArenaScene extends Phaser.Scene {
         
         // First, try to get the latest ledger to ensure RPC works
         const latestLedger = await server.getLatestLedger();
-        console.log('[ZK Config] RPC connection successful, latest ledger:', latestLedger.sequence);
+        logger.log('[ZK Config] RPC connection successful, latest ledger:', latestLedger.sequence);
         
         // Try to get contract data using the correct method for contracts
         const ledgerData = await server.getLedgerEntries({
@@ -5511,41 +6970,41 @@ export default class ArenaScene extends Phaser.Scene {
         });
         
         if (ledgerData.entries && ledgerData.entries.length > 0) {
-          console.log('[ZK Config] ✅ Contract found via ledger entries:', contractId);
-          console.log('[ZK Config] Contract entries:', ledgerData.entries.length);
-          console.log('[ZK Config] First entry key:', ledgerData.entries[0].key);
+          logger.log('[ZK Config] ✅ Contract found via ledger entries:', contractId);
+          logger.log('[ZK Config] Contract entries:', ledgerData.entries.length);
+          logger.log('[ZK Config] First entry key:', ledgerData.entries[0].key);
           return true;
         } else {
-          console.log('[ZK Config] ❌ No ledger entries found for contract');
+          logger.log('[ZK Config] ❌ No ledger entries found for contract');
           return false;
         }
       } catch (rpcError) {
-        console.log('[ZK Config] ❌ RPC Error:', rpcError?.message || rpcError);
-        console.log('[ZK Config] RPC Error details:', rpcError);
+        logger.log('[ZK Config] ❌ RPC Error:', rpcError?.message || rpcError);
+        logger.log('[ZK Config] RPC Error details:', rpcError);
         
         // Try alternative: check if it's a regular account (for debugging)
         try {
           const account = await server.getAccount(contractId);
-          console.log('[ZK Config] ⚠️ Found regular account instead of contract:', account.accountId());
-          console.log('[ZK Config] This suggests the contract ID might be wrong or not deployed as contract');
+          logger.log('[ZK Config] ⚠️ Found regular account instead of contract:', account.accountId());
+          logger.log('[ZK Config] This suggests the contract ID might be wrong or not deployed as contract');
           return false;
         } catch (accountError) {
-          console.log('[ZK Config] ❌ Not found as account either:', accountError?.message || accountError);
+          logger.log('[ZK Config] ❌ Not found as account either:', accountError?.message || accountError);
           return false;
         }
       }
     } catch (e) {
-      console.log('[ZK Config] Contract check failed:', e?.message || e);
-      console.log('[ZK Config] Full error:', e);
+      logger.log('[ZK Config] Contract check failed:', e?.message || e);
+      logger.log('[ZK Config] Full error:', e);
       return false;
     }
   }
 
   async testZKConnection() {
-    console.log('[ZK Test] Testing ZK connection...');
+    logger.log('[ZK Test] Testing ZK connection...');
     try {
       const health = await gameClient.checkZkProverHealth();
-      console.log('[ZK Test] Prover health:', health);
+      logger.log('[ZK Test] Prover health:', health);
       
       // Test with minimal payload using REAL Stellar addresses
       const testPayload = {
@@ -5561,14 +7020,14 @@ export default class ArenaScene extends Phaser.Scene {
         domain_separator: "0000000000000000000000000000000000000000000000000000000000000000"
       };
       
-      console.log('[ZK Test] Testing proof generation...');
-      console.log('[ZK Test] Using contract ID:', testPayload.contract_id);
+      logger.log('[ZK Test] Testing proof generation...');
+      logger.log('[ZK Test] Using contract ID:', testPayload.contract_id);
       const proof = await gameClient.requestZkProofV2(undefined, testPayload);
-      console.log('[ZK Test] ✅ Proof generation successful:', proof);
+      logger.log('[ZK Test] ✅ Proof generation successful:', proof);
       return true;
     } catch (e) {
-      console.error('[ZK Test] ❌ ZK connection failed:', e);
-      console.error('[ZK Test] Error details:', e?.message);
+      logger.error('[ZK Test] ❌ ZK connection failed:', e);
+      logger.error('[ZK Test] Error details:', e?.message);
       return false;
     }
   }
@@ -5733,6 +7192,10 @@ export default class ArenaScene extends Phaser.Scene {
     // HUD actualizado cada frame: vida, enemigos, puntuación, modo / HUD updated every frame
     this.updateHUD();
 
+    // Item buffs (boss / mini-boss AI runs in updateBossAI after the enemy loop)
+    this.updateItems(this.game.loop.delta);
+    this.updateXpGems(this.game.loop.delta);
+
     // Cuando está pausado el jugador no se mueve ni ataca; el mundo sigue (enemigos, oleadas)
     if (this.isPaused) {
       this.player.setVelocity(0, 0);
@@ -5774,8 +7237,8 @@ export default class ArenaScene extends Phaser.Scene {
         if (manualRight) vx = 1;
         if (manualUp) vy = -1;
         if (manualDown) vy = 1;
-      } else if (!hasTouchInput && window.VIBE_SETTINGS.autoMove && window.VIBE_CODER.isCodingActive()) {
-        // Auto-move: find safest direction (away from enemies)
+      } else if (!hasTouchInput && window.VIBE_SETTINGS?.autoMove !== false) {
+        // Auto-play always works; live coding activity (XP server) only adds a speed bonus below.
         const autoMove = this.calculateAutoMove();
         vx = autoMove.x;
         vy = autoMove.y;
@@ -5787,7 +7250,9 @@ export default class ArenaScene extends Phaser.Scene {
         vy *= 0.707;
       }
 
-      this.player.setVelocity(vx * stats.speed, vy * stats.speed);
+      const codingBonus = window.VIBE_CODER?.isCodingActive?.() ? (BALANCE.CODING_ACTIVE_SPEED_MULT ?? 1) : 1;
+      this.player.setVelocity(vx * stats.speed * codingBonus, vy * stats.speed * codingBonus);
+      this.updateBiomeMechanic(this.game.loop.delta);
 
       // Update bark position: left of player, slight float up (capped so it doesn't drift far)
       if (this.barkText && this.barkText.active && this.barkBubble && this.barkBubble.active) {
@@ -5814,7 +7279,7 @@ export default class ArenaScene extends Phaser.Scene {
       }
 
       // Update auto-move indicator position and mode emoji
-      const isAutoMoving = !hasKeyboardInput && !hasTouchInput && window.VIBE_SETTINGS?.autoMove && window.VIBE_CODER?.isCodingActive();
+      const isAutoMoving = !hasKeyboardInput && !hasTouchInput && window.VIBE_SETTINGS?.autoMove !== false;
       this.hudMode = hasKeyboardInput || hasTouchInput ? 'manual' : (isAutoMoving ? this.autoPlayMode : 'idle');
 
       if (this.autoMoveIndicator) {
@@ -5823,6 +7288,7 @@ export default class ArenaScene extends Phaser.Scene {
         if (isAutoMoving) {
           if (this.autoPlayMode === 'hunt') this.autoMoveIndicator.setText('⚔️');
           else if (this.autoPlayMode === 'evade') this.autoMoveIndicator.setText('🛡️');
+          else if (this.autoPlayMode === 'collect') this.autoMoveIndicator.setText('💎');
           else this.autoMoveIndicator.setText('😴');
         }
       }
@@ -5949,7 +7415,7 @@ export default class ArenaScene extends Phaser.Scene {
         case 'spawner':
           // DEPENDENCY HELL: Spawns minion bugs periodically
           // === FREEZE BUG FIX: Respect global MAX_ENEMIES cap ===
-          const MAX_ENEMIES = 30;
+          const MAX_ENEMIES = BALANCE.DIRECTOR_HARD_CAP ?? 360;
           const canSpawnMinion = this.time.now - enemy.lastSpawn > enemy.spawnInterval &&
                                   enemy.minionCount < enemy.maxMinions &&
                                   this.enemies.countActive() < MAX_ENEMIES;
@@ -6142,6 +7608,12 @@ export default class ArenaScene extends Phaser.Scene {
           );
           break;
 
+        case 'zigzag':
+        case 'dash':
+        case 'burst':
+          this.updateEarlyEnemyBehavior(enemy, angle, dist);
+          break;
+
         case 'split':
           // GIT CONFLICT: Normal chase, splits on death (handled in hitEnemy)
           enemy.setVelocity(
@@ -6206,6 +7678,15 @@ export default class ArenaScene extends Phaser.Scene {
           );
           break;
 
+        case 'march':
+          // HORDE (spawn director): straight line across the screen, then back to chasing
+          if (this.time.now > enemy.marchUntil || !enemy.marchDir) {
+            enemy.behavior = 'chase';
+          } else {
+            enemy.setVelocity(enemy.marchDir.x * enemy.speed * 1.4, enemy.marchDir.y * enemy.speed * 1.4);
+          }
+          break;
+
         case 'chase':
         default:
           // Standard chase behavior
@@ -6259,17 +7740,26 @@ export default class ArenaScene extends Phaser.Scene {
       }
     });
 
+    // Boss / mini-boss AI (after the enemy loop so attack movement overrides chase velocity)
+    this.updateBossAI(this.game.loop.delta);
+
     // Update homing projectiles
     this.updateHomingProjectiles();
 
     // Auto attack
     this.autoAttack();
 
+    // Weapon statuses: DoT, slow/freeze, tints (systems/weaponEffects.js)
+    this.updateWeaponStatus(this.game.loop.delta);
+
     // Update orbital weapons
     this.updateOrbitals();
 
     // Update legendary weapons (permanent spinning melee)
     this.updateLegendaryWeapons();
+
+    // Spawn director: time-driven waves + continuous spawning (systems/spawnDirector.js)
+    this.updateSpawnDirector(this.game.loop.delta);
 
     // Update EventManager (timer bar, event effects)
     if (this.eventManager) {
@@ -6316,7 +7806,12 @@ export default class ArenaScene extends Phaser.Scene {
 
   updateHomingProjectiles() {
     this.projectiles.children.each((projectile) => {
-      if (!projectile.active || !projectile.isHoming) return;
+      if (!projectile.active) return;
+      if (projectile.returns) {
+        this.steerReturning(projectile);
+        return;
+      }
+      if (!projectile.isHoming) return;
 
       // Find nearest enemy to home in on
       let target = projectile.homingTarget;
@@ -6363,6 +7858,17 @@ export default class ArenaScene extends Phaser.Scene {
         projectile.setRotation(newAngle);
       }
     });
+  }
+
+  /** Boomerang / Gungnir / Ricochet Blade: fly out for outMs, then home back to the player and vanish. */
+  steerReturning(projectile) {
+    if (!projectile.returning && this.time.now - projectile.spawnedAt >= projectile.outMs) this.startReturn(projectile);
+    projectile.rotation += 0.35;
+    if (!projectile.returning || !projectile.body) return;
+    const a = Phaser.Math.Angle.Between(projectile.x, projectile.y, this.player.x, this.player.y);
+    const v = (projectile.flySpeed || 400) * 1.15;
+    projectile.setVelocity(Math.cos(a) * v, Math.sin(a) * v);
+    if (Phaser.Math.Distance.Between(projectile.x, projectile.y, this.player.x, this.player.y) < 26) projectile.destroy();
   }
 
   /**

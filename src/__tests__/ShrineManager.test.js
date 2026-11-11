@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import ShrineManager from '../systems/ShrineManager.js';
 
 /**
@@ -231,5 +231,17 @@ describe('ShrineManager', () => {
       expect(mgr.interactRadius).toBe(60);
       expect(mgr.nearbyShrine).toBeNull();
     });
+  });
+});
+
+describe('ShrineManager XP cost vs score', () => {
+  it('paying an XP cost spends the pool but never lowers the run score', () => {
+    globalThis.window = { VIBE_CODER: { totalXP: 800, score: 800, xp: 0, level: 1 } };
+    const scene = { player: { health: 100, maxHealth: 100 }, currentWeapon: { type: 'spread' }, updateHUD: vi.fn() };
+    const mgr = new ShrineManager(scene);
+    expect(mgr.canPayCost({ type: 'xp', amount: 500 })).toBe(true);
+    mgr.payCost({ type: 'xp', amount: 500 });
+    expect(window.VIBE_CODER.totalXP).toBe(300);
+    expect(window.VIBE_CODER.score).toBe(800);
   });
 });

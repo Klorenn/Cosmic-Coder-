@@ -15,6 +15,8 @@ let settings = null;
 let currentWindowMode = 'floating';
 let appIsReady = false;
 
+// Must match server.port in vite.config.js (override with VITE_DEV_PORT).
+const DEV_PORT = Number(process.env.VITE_DEV_PORT) || 3001;
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
 
 function createWindow() {
@@ -46,7 +48,7 @@ function createWindow() {
 
   // Load the game
   if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.loadURL(`http://localhost:${DEV_PORT}`);
     // Open DevTools in dev mode
     // mainWindow.webContents.openDevTools();
   } else {

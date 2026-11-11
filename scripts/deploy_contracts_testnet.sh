@@ -1,69 +1,142 @@
 #!/usr/bin/env bash
-# Deploy groth16_verifier and cosmic_coder to Stellar Testnet, then init policy.
-# Requires: stellar CLI, SOURCE_ACCOUNT with XLM on testnet, WASM built (rustup).
+# Deploy the Cosmic Coder contract set to Stellar Testnet and wire it up.
+#
+#   groth16_verifier    BN254 Groth16 verifier (stateless)
+#   ultrahonk_verifier  Noir/UltraHonk verifier (STRUCTURAL STUB, legacy VITE_ZK_BACKEND=noir only)
+#   cosmic_coder        game policy; constructor(admin, game_hub)
+#
+# Order: deploy -> constructor -> set_verifier (groth16) -> set_run_vk (GameRunV3 VK, circuits/build/contract_proof_v3.json).
+# Ranked (submit_zk, Groth16) is only verified on-chain once set_run_vk ran, so a missing
+# VK file aborts the script instead of leaving the board unverifiable.
+#
+# Requires: stellar CLI (>= 22, constructor support), python3, SOURCE_ACCOUNT funded on testnet,
+# WASM built for wasm32v1-none (see contracts/README.md).
 #
 # Usage:
-#   export SOURCE_ACCOUNT=YOUR_PUBLIC_KEY_OR_IDENTITY   # e.g. GXXXX... or identity from stellar keys list
-#   ./scripts/deploy_contracts_testnet.sh
+#   SOURCE_ACCOUNT=<identity or G...> ./scripts/deploy_contracts_testnet.sh
+# Optional:
+#   ADMIN=G...        admin of cosmic_coder and ultrahonk_verifier (default: SOURCE_ACCOUNT's address)
+#   GAME_HUB=C...     Game Hub contract (default: hackathon testnet hub below)
+#   ZK_CIRCUIT=v1     pin the LEGACY GameRun VK (circuits/build/contract_proof.json, no private witness:
+#                     any score >= wave*5 is provable). Default v3 = GameRunV3 (scripts/zk/build_GameRunV3.sh).
+#                     The frontend VITE_ZK_CIRCUIT must match, or every ranked submit fails with #8 VkMismatch.
+#   ENABLE_NOIR_STUB=1  ALSO wire the ultrahonk_verifier STUB into cosmic_coder (set_noir_verifier).
+#                       OFF by default: the stub does not verify proofs, so wiring it makes ranked
+#                       submissions (submit_zk_noir) FORGEABLE. Demo/testnet use only.
 #
-# Or one-liner: SOURCE_ACCOUNT=G... ./scripts/deploy_contracts_testnet.sh
-#
-# If SOURCE_ACCOUNT is not set, this script only prints the commands for you to run.
+# The source account must be able to sign as ADMIN for the post-deploy configuration calls.
+# Without SOURCE_ACCOUNT the script only prints the commands.
 
-set -e
+set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONTRACTS="$ROOT/contracts"
-# Soroban testnet requires wasm32v1-none (wasm32-unknown-unknown can fail with "reference-types not enabled")
 WASM_DIR="$CONTRACTS/target/wasm32v1-none/release"
-GAME_HUB="CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG"
+GAME_HUB="${GAME_HUB:-CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG}"
+NETWORK="testnet"
+ZK_CIRCUIT="${ZK_CIRCUIT:-v3}"
+case "$ZK_CIRCUIT" in
+  v3) RUN_PROOF_JSON="$ROOT/circuits/build/contract_proof_v3.json"; RUN_PROOF_HINT="bash scripts/zk/build_GameRunV3.sh" ;;
+  v1) RUN_PROOF_JSON="$ROOT/circuits/build/contract_proof.json"; RUN_PROOF_HINT="npm run zk:proof"
+      echo "WARNING: ZK_CIRCUIT=v1 pins the legacy GameRun VK (no private witness, scores are not bound to kills)." >&2 ;;
+  *) echo "ZK_CIRCUIT must be v3 or v1 (got $ZK_CIRCUIT)" >&2; exit 1 ;;
+esac
+# RUN_PROOF_JSON contains the run VK (hex, contract format) that set_run_vk pins.
+NOIR_VK_JSON="$ROOT/public/circuits/GameRun_vk.json"         # UltraHonk VK payload
 
-if [ ! -f "$WASM_DIR/groth16_verifier.wasm" ] || [ ! -f "$WASM_DIR/cosmic_coder.wasm" ]; then
-  echo "Build WASM first (use target wasm32v1-none for Soroban testnet):"
-  echo "  export PATH=\"\$HOME/.cargo/bin:\$PATH\""
-  echo "  rustup target add wasm32v1-none"
-  echo "  cd $CONTRACTS && cargo build -p zk_types && cargo build -p groth16_verifier --target wasm32v1-none --release && cargo build -p cosmic_coder --target wasm32v1-none --release"
-  exit 1
-fi
+for w in groth16_verifier ultrahonk_verifier cosmic_coder; do
+  if [ ! -f "$WASM_DIR/$w.wasm" ]; then
+    echo "Missing $WASM_DIR/$w.wasm. Build first:"
+    echo "  rustup target add wasm32v1-none"
+    echo "  cd $CONTRACTS && cargo build --target wasm32v1-none --release -p groth16_verifier -p ultrahonk_verifier -p cosmic_coder"
+    exit 1
+  fi
+done
 
-if [ -z "$SOURCE_ACCOUNT" ]; then
-  echo "SOURCE_ACCOUNT not set. Run with: SOURCE_ACCOUNT=YOUR_KEY ./scripts/deploy_contracts_testnet.sh"
-  echo ""
-  echo "Or run these manually (replace <SOURCE> with your testnet public key or identity):"
-  echo ""
-  echo "cd $CONTRACTS"
-  echo "stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/groth16_verifier.wasm"
-  echo "# Save the returned ID as VERIFIER_ID"
-  echo "stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/cosmic_coder.wasm"
-  echo "# Save the returned ID as POLICY_ID"
-  echo "stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network testnet -- init --game_hub $GAME_HUB"
-  echo "stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network testnet -- set_verifier --verifier <VERIFIER_ID>"
-  echo ""
-  echo "Then add to .env: VITE_COSMIC_CODER_CONTRACT_ID=<POLICY_ID>"
+if [ -z "${SOURCE_ACCOUNT:-}" ]; then
+  cat <<EOF
+SOURCE_ACCOUNT not set. Run with: SOURCE_ACCOUNT=<identity> ./scripts/deploy_contracts_testnet.sh
+
+Manual steps (replace <SOURCE>, <ADMIN>):
+  cd $CONTRACTS
+  stellar contract deploy --source-account <SOURCE> --network $NETWORK --wasm $WASM_DIR/groth16_verifier.wasm
+  stellar contract deploy --source-account <SOURCE> --network $NETWORK --wasm $WASM_DIR/ultrahonk_verifier.wasm -- --admin <ADMIN>
+  stellar contract deploy --source-account <SOURCE> --network $NETWORK --wasm $WASM_DIR/cosmic_coder.wasm -- --admin <ADMIN> --game_hub $GAME_HUB
+  stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_verifier --verifier <VERIFIER_ID>
+  stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_run_vk --vk '<"vk" of $RUN_PROOF_JSON, hex without 0x: {"alpha":hex,"beta":hex,"gamma":hex,"delta":hex,"ic":[hex x8]}>'
+  stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_unlock_vk --vk '<SkillProof VK JSON, ic x3>'
+  # Legacy VITE_ZK_BACKEND=noir only, with a REAL UltraHonk verifier (the bundled one is a stub => ranked forgeable):
+  # stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_noir_verifier --verifier <NOIR_VERIFIER_ID>
+  stellar contract invoke --id <NOIR_VERIFIER_ID> --source-account <SOURCE> --network $NETWORK -- set_vk --vk_json <hex of $NOIR_VK_JSON>
+Then: VITE_COSMIC_CODER_CONTRACT_ID=<POLICY_ID> (VITE_ZK_BACKEND=groth16 is the default)
+EOF
   exit 0
 fi
 
-cd "$CONTRACTS"
+if [ -z "${ADMIN:-}" ]; then
+  if [[ "$SOURCE_ACCOUNT" == G* ]]; then
+    ADMIN="$SOURCE_ACCOUNT"
+  else
+    ADMIN="$(stellar keys address "$SOURCE_ACCOUNT")"
+  fi
+fi
+echo "Admin: $ADMIN"
+echo "Game Hub: $GAME_HUB"
 
-echo "Deploying verifier (source: $SOURCE_ACCOUNT)..."
-VERIFIER_ID=$(stellar contract deploy --source-account "$SOURCE_ACCOUNT" --network testnet --wasm target/wasm32v1-none/release/groth16_verifier.wasm 2>&1 | tee /dev/stderr | tail -1)
+cd "$CONTRACTS"
+deploy() { stellar contract deploy --source-account "$SOURCE_ACCOUNT" --network "$NETWORK" "$@" | tail -1; }
+invoke() { local id="$1"; shift; stellar contract invoke --id "$id" --source-account "$SOURCE_ACCOUNT" --network "$NETWORK" -- "$@"; }
+
+echo "Deploying groth16_verifier..."
+VERIFIER_ID=$(deploy --wasm "$WASM_DIR/groth16_verifier.wasm")
 echo "VERIFIER_ID=$VERIFIER_ID"
 
-echo "Deploying policy..."
-POLICY_ID=$(stellar contract deploy --source-account "$SOURCE_ACCOUNT" --network testnet --wasm target/wasm32v1-none/release/cosmic_coder.wasm 2>&1 | tee /dev/stderr | tail -1)
+echo "Deploying ultrahonk_verifier (admin=$ADMIN)..."
+NOIR_VERIFIER_ID=$(deploy --wasm "$WASM_DIR/ultrahonk_verifier.wasm" -- --admin "$ADMIN")
+echo "NOIR_VERIFIER_ID=$NOIR_VERIFIER_ID"
+
+echo "Deploying cosmic_coder (admin=$ADMIN, game_hub=$GAME_HUB)..."
+POLICY_ID=$(deploy --wasm "$WASM_DIR/cosmic_coder.wasm" -- --admin "$ADMIN" --game_hub "$GAME_HUB")
 echo "POLICY_ID=$POLICY_ID"
 
-echo "Initing policy with Game Hub..."
-stellar contract invoke --id "$POLICY_ID" --source-account "$SOURCE_ACCOUNT" --network testnet -- init --game_hub "$GAME_HUB"
+echo "Wiring Groth16 verifier..."
+invoke "$POLICY_ID" set_verifier --verifier "$VERIFIER_ID"
 
-echo "Setting verifier..."
-stellar contract invoke --id "$POLICY_ID" --source-account "$SOURCE_ACCOUNT" --network testnet -- set_verifier --verifier "$VERIFIER_ID"
+if [ ! -f "$RUN_PROOF_JSON" ]; then
+  echo "ERROR: $RUN_PROOF_JSON not found (run $RUN_PROOF_HINT). Without set_run_vk, submit_zk fails with VkNotSet and ranked is not verifiable." >&2
+  exit 1
+fi
+echo "Registering run VK ($ZK_CIRCUIT) from $RUN_PROOF_JSON..."
+RUN_VK=$(python3 -I -c 'import json,sys; vk=json.load(open(sys.argv[1]))["vk"]; s=lambda h: h[2:] if h.startswith("0x") else h; print(json.dumps({k:(list(map(s,v)) if k=="ic" else s(v)) for k,v in vk.items()}))' "$RUN_PROOF_JSON")
+invoke "$POLICY_ID" set_run_vk --vk "$RUN_VK"
 
+if [ "${ENABLE_NOIR_STUB:-0}" = "1" ]; then
+  cat >&2 <<'WARN'
+################################################################################
+##  WARNING: ENABLE_NOIR_STUB=1                                                ##
+##  Wiring the ultrahonk_verifier STRUCTURAL STUB as the Noir verifier.        ##
+##  It does NOT check the UltraHonk proof: anyone can forge scores via         ##
+##  submit_zk_noir (only reachable with VITE_ZK_BACKEND=noir). Demo only.      ##
+################################################################################
+WARN
+  invoke "$POLICY_ID" set_noir_verifier --verifier "$NOIR_VERIFIER_ID"
+else
+  echo "Skipping set_noir_verifier: ultrahonk_verifier is a stub (legacy noir backend only; submit_zk_noir fails with #16)."
+fi
+
+if [ -f "$NOIR_VK_JSON" ]; then
+  echo "Storing UltraHonk VK from $NOIR_VK_JSON..."
+  invoke "$NOIR_VERIFIER_ID" set_vk --vk_json "$(od -An -v -tx1 "$NOIR_VK_JSON" | tr -d ' \n')"
+else
+  echo "WARN: $NOIR_VK_JSON not found. submit_zk_noir fails (VerifierError) until set_vk is called."
+fi
+
+echo "NOTE: unlock_weapon stays disabled (VkNotSet) until the admin calls set_unlock_vk with the SkillProof VK (contract hex format, ic x3)."
 echo ""
 echo "Done. Add to .env:"
 echo "  VITE_COSMIC_CODER_CONTRACT_ID=$POLICY_ID"
-echo ""
-echo "Add to GitHub repo Secrets (Settings → Secrets and variables → Actions):"
+echo "Add to GitHub Secrets (Settings -> Secrets and variables -> Actions):"
 echo "  VITE_COSMIC_CODER_CONTRACT_ID = $POLICY_ID"
-echo "  VITE_ZK_PROVER_URL = <your prover URL after deploying to Render/Railway>"
-echo ""
+echo "  VITE_ZK_PROVER_URL = <prover URL>"
+echo "  VITE_ZK_BACKEND = groth16 (default). Ranked is verified on-chain by submit_zk against the VK pinned above."
+echo "VITE_RANKED_VERIFIED is only read with VITE_ZK_BACKEND=noir (keep false: the UltraHonk verifier is a stub)."

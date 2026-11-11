@@ -187,6 +187,23 @@ curl -X POST http://localhost:3333 \
 
 ---
 
+## Ranked / On-Chain Contracts (Stellar Testnet)
+
+Ranked runs and weapon unlocks use the Soroban contract `cosmic_coder` (source: `contracts/cosmic_coder`).
+
+1. Deploy with the constructor (there is no `init` any more): `__constructor(admin, game_hub)`.
+2. As admin call `set_verifier`, `set_noir_verifier`, `set_run_vk`, `set_unlock_vk` (details in `docs/DEPLOY_ZK_STEPS.md`
+   or run `SOURCE_ACCOUNT=<identity> ./scripts/deploy_contracts_testnet.sh`).
+3. Put the new contract ID in `.env`: `VITE_COSMIC_CODER_CONTRACT_ID=<POLICY_ID>`.
+
+> **Obsolete IDs:** `CC73YP4H...` (cosmic_coder) and `CCQQDZBS...` (zk_verifier) belong to the removed v0.2.0 contracts
+> and do not work with this client. Do not use them.
+
+Client behavior: invalid scores (`score < wave * 5`, negative, NaN) are rejected locally before any fee is spent.
+Failed contract calls throw a `ContractError` with `.code` (e.g. `10` ScoreBelowMinimum, `2` Replay, `13` ThresholdMismatch).
+
+---
+
 ## Playing Without Hooks
 
 The game is fully playable without the hook system:

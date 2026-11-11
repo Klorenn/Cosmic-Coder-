@@ -21,9 +21,11 @@ function loadLocalProgress() {
     const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(LOCAL_PROGRESS_KEY) : null;
     if (!raw) return null;
     const o = JSON.parse(raw);
+    // JSON.parse('1e400') === Infinity and the blob is user-editable: keep only finite integers >= 0.
+    const count = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.floor(v) : 0);
     return {
-      highWave: typeof o.highWave === 'number' ? o.highWave : 0,
-      highScore: typeof o.highScore === 'number' ? o.highScore : 0
+      highWave: count(o?.highWave),
+      highScore: count(o?.highScore)
     };
   } catch (_) {
     return null;

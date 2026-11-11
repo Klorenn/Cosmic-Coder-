@@ -1,5 +1,6 @@
 //! Shared ZK types for Groth16 BN254 verification.
 //! Used by groth16_verifier and cosmic_coder. No duplicated definitions.
+//! `PartialEq` on the VK lets cosmic_coder pin the caller-supplied VK to the admin-registered one.
 //! CAP-0074 (BN254); serialization: G1 = 64 bytes, G2 = 128 bytes, Fr = 32 bytes.
 
 #![no_std]
@@ -22,9 +23,23 @@ pub enum Groth16Error {
     InvalidPublicInputs = 2,
     /// vk.ic length must equal pub_signals.len() + 1
     MalformedVerifyingKey = 3,
+    /// A public signal is >= the BN254 scalar modulus r (non-canonical encoding).
+    NonCanonicalPublicInput = 4,
 }
 
-#[derive(Clone)]
+/// BN254 scalar field modulus r, big-endian (32 bytes).
+pub const BN254_FR_MODULUS: [u8; FR_SIZE] = [
+    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29, 0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+    0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91, 0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+];
+
+/// True when the big-endian 32-byte value is a canonical BN254 scalar (strictly below r).
+/// Byte arrays of equal length compare lexicographically, i.e. as big-endian integers.
+pub fn is_canonical_fr(be: &[u8; FR_SIZE]) -> bool {
+    *be < BN254_FR_MODULUS
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct ZkProof {
     pub a: BytesN<64>,
@@ -32,7 +47,7 @@ pub struct ZkProof {
     pub c: BytesN<64>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[contracttype]
 pub struct ZkVerificationKey {
     pub alpha: BytesN<64>,
@@ -40,32 +55,4 @@ pub struct ZkVerificationKey {
     pub gamma: BytesN<128>,
     pub delta: BytesN<128>,
     pub ic: Vec<BytesN<64>>,
-}
-
-/// Domain binding for v2 ZK proofs.
-#[derive(Clone)]
-#[contracttype]
-pub struct DomainBinding {
-    pub challenge_id: u32,
-    pub player_address: soroban_sdk::Address,
-    pub nonce: u64,
-    pub contract_id: soroban_sdk::Address,
-    pub domain_separator: BytesN<32>,
-}
-
-/// Public inputs order matching GameRunV2.circom outputs.
-/// Used to map between circuit and contracts.
-#[derive(Clone)]
-#[contracttype]
-pub struct ZkPublicInputs {
-    pub run_hash_hi: BytesN<32>,
-    pub run_hash_lo: BytesN<32>,
-    pub score: u32,
-    pub wave: u32,
-    pub nonce: u64,
-    pub season_id: u32,
-    pub challenge_id: u32,
-    pub player_address: BytesN<32>,
-    pub contract_id: BytesN<32>,
-    pub domain_separator: BytesN<32>,
 }

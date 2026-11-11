@@ -7,7 +7,7 @@ import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exportAll } from './export_for_contract.js';
+import { exportProof, exportVk, exportPubSignals } from './export_for_contract.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -42,37 +42,22 @@ execSync(
 console.log('Exporting for contract...');
 const outPath = path.join(buildDir, 'skill_contract_proof.json');
 
-// Export skill proof with custom file names
-const proofJson = JSON.parse(fs.readFileSync(path.join(buildDir, 'skill_proof.json'), 'utf8'));
-const publicJson = JSON.parse(fs.readFileSync(path.join(buildDir, 'skill_public.json'), 'utf8'));
-const vkeyJson = JSON.parse(fs.readFileSync(path.join(buildDir, 'SkillProof_vkey.json'), 'utf8'));
-
+// Contract-ready hex (same encoding as export_for_contract.js / contract_proof.json):
+// G1 = x||y, G2 = x_c1||x_c0||y_c1||y_c0, public signals = 32-byte big-endian. The client
+// (buildUnlockWeaponArgs) also accepts the old decimal layout for older provers.
+const proof = exportProof(path.join(buildDir, 'skill_proof.json'));
+const vk = exportVk(path.join(buildDir, 'SkillProof_vkey.json'));
+const pub = exportPubSignals(path.join(buildDir, 'skill_public.json'));
 const payload = {
-  proof: {
-    a: proofJson.pi_a.slice(0, 2),
-    b: [
-      [proofJson.pi_b[0][1], proofJson.pi_b[0][0]],
-      [proofJson.pi_b[1][1], proofJson.pi_b[1][0]]
-    ],
-    c: proofJson.pi_c.slice(0, 2)
-  },
+  proof: { a: proof.a.toString('hex'), b: proof.b.toString('hex'), c: proof.c.toString('hex') },
   vk: {
-    alpha: vkeyJson.vk_alpha_1.slice(0, 2),
-    beta: [
-      [vkeyJson.vk_beta_2[0][1], vkeyJson.vk_beta_2[0][0]],
-      [vkeyJson.vk_beta_2[1][1], vkeyJson.vk_beta_2[1][0]]
-    ],
-    gamma: [
-      [vkeyJson.vk_gamma_2[0][1], vkeyJson.vk_gamma_2[0][0]],
-      [vkeyJson.vk_gamma_2[1][1], vkeyJson.vk_gamma_2[1][0]]
-    ],
-    delta: [
-      [vkeyJson.vk_delta_2[0][1], vkeyJson.vk_delta_2[0][0]],
-      [vkeyJson.vk_delta_2[1][1], vkeyJson.vk_delta_2[1][0]]
-    ],
-    ic: vkeyJson.IC.map((ic) => ic.slice(0, 2))
+    alpha: vk.alpha.toString('hex'),
+    beta: vk.beta.toString('hex'),
+    gamma: vk.gamma.toString('hex'),
+    delta: vk.delta.toString('hex'),
+    ic: vk.ic.map((b) => b.toString('hex'))
   },
-  pub_signals: publicJson
+  pub_signals: pub.map((b) => b.toString('hex'))
 };
 
 fs.writeFileSync(outPath, JSON.stringify(payload, null, 2));

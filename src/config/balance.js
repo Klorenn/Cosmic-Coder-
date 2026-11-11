@@ -9,39 +9,77 @@
  */
 
 // —— Escalado por oleada / Wave scaling ———
-/** Daño enemigo: baseDamage * (1 + wave * WAVE_DAMAGE_FACTOR). Ej: wave 10 → 2x, wave 20 → 3x */
-export const WAVE_DAMAGE_FACTOR = 0.1;
+/** Daño enemigo de minions: baseDamage * (1 + wave * WAVE_DAMAGE_FACTOR). Los mobs normales usan waveStatScale (waveRules.js). */
+export const WAVE_DAMAGE_FACTOR = 0.04; // = WAVE_DAMAGE_GROWTH (minions de minibosses)
 /** Multiplicador global de daño enemigo. >1 = enemigos pegan más. */
-export const ENEMY_DAMAGE_MULT = 1.6;
+export const ENEMY_DAMAGE_MULT = 0.75; // was 1.6: wave-1 bug hit 26 on 120 HP with no i-frames
+
+// —— Daño de contacto / Contact damage ———
+/** Invulnerabilidad tras un golpe de contacto (ms). Overlap dispara cada frame. */
+export const CONTACT_IFRAMES_MS = 600;
+/** Bonus de velocidad cuando hay actividad de código (XP server). El auto-play funciona siempre. */
+export const CODING_ACTIVE_SPEED_MULT = 1.1;
 
 /** Velocidad enemiga: baseSpeed * (1 + (wave-1) * WAVE_SPEED_FACTOR). Cap opcional. */
-export const WAVE_SPEED_FACTOR = 0.02;
-export const WAVE_SPEED_CAP = 2.0;
+export const WAVE_SPEED_FACTOR = 0.01;
+export const WAVE_SPEED_CAP = 1.4;
 /** Multiplicador global velocidad mobs (+5% más rápidos). */
 export const MOB_SPEED_MULT = 1.05;
 
 // —— Escalado por nivel del jugador / Player level scaling ———
 /** Enemigos más duros al subir nivel: vida = base * (1 + level * factor), cap. */
-export const LEVEL_HEALTH_FACTOR = 0.1;
-export const LEVEL_HEALTH_CAP = 6;
+export const LEVEL_HEALTH_FACTOR = 0.03; // was 0.1 cap 6: sponge enemies; difficulty now comes from count
+export const LEVEL_HEALTH_CAP = 2;
 /** Velocidad enemiga extra por nivel. */
-export const LEVEL_SPEED_FACTOR = 0.03;
-export const LEVEL_SPEED_CAP = 2.2;
+export const LEVEL_SPEED_FACTOR = 0.01;
+export const LEVEL_SPEED_CAP = 1.3;
 /** Daño enemigo extra por nivel. */
-export const LEVEL_DAMAGE_FACTOR = 0.06;
-export const LEVEL_DAMAGE_CAP = 4;
+export const LEVEL_DAMAGE_FACTOR = 0.02;
+export const LEVEL_DAMAGE_CAP = 1.5;
 
-/** Spawn: delay mínimo (ms) entre apariciones. Menor = más enemigos por segundo. */
-export const SPAWN_DELAY_MIN = 180;
-/** Reducción de delay por oleada: delay = max(SPAWN_DELAY_MIN, baseDelay - wave * SPAWN_DELAY_PER_WAVE). */
-export const SPAWN_DELAY_PER_WAVE = 25;
-export const SPAWN_DELAY_BASE = 900;
-
-/** Cantidad de enemigos por oleada: base + floor(waveScale). waveScale crece con wave. */
-export const WAVE_SCALE_EARLY = 2.5;   // wave < 10
-export const WAVE_SCALE_MID = 4;       // wave 10–24
-export const WAVE_SCALE_LATE = 6;      // wave >= 25
-export const SPAWN_CAP = 150;
+// —— Oleadas por tiempo + director de spawn (estilo Vampire Survivors) / Time waves + spawn director ———
+// Ver docs/WAVES.md y src/systems/spawnDirector.js. La oleada avanza por reloj; matar no la termina.
+/** Duración de una oleada (ms). La oleada N empieza en (N-1) * WAVE_DURATION_MS de reloj de partida. */
+export const WAVE_DURATION_MS = 45000;
+/** Población objetivo: min(CAP, START + PER_WAVE * (wave-1)). Si hay menos vivos, el director acelera. */
+export const DIRECTOR_MAX_ALIVE_START = 20;
+export const DIRECTOR_MAX_ALIVE_PER_WAVE = 12;
+export const DIRECTOR_MAX_ALIVE_CAP = 300;
+/** Tope absoluto (incluye eventos Swarm/Horde y minions). */
+export const DIRECTOR_HARD_CAP = 360;
+/** Intervalo entre grupos: max(MIN, START * DECAY^(wave-1)). 1200 ms (w1) -> ~160 ms (w20) -> 150 ms. */
+export const DIRECTOR_INTERVAL_START_MS = 1200;
+export const DIRECTOR_INTERVAL_DECAY = 0.9;
+export const DIRECTOR_INTERVAL_MIN_MS = 150;
+/** Tamaño de grupo: min(MAX, 1 + floor((wave-1) / WAVES_PER_STEP)). */
+export const DIRECTOR_GROUP_MAX = 6;
+export const DIRECTOR_GROUP_WAVES_PER_STEP = 4;
+/** Relleno: con vivos < FILL_RATIO * objetivo, el intervalo se divide por BURST_DIV. */
+export const DIRECTOR_FILL_RATIO = 0.5;
+export const DIRECTOR_BURST_DIV = 3;
+/** Anillo de spawn: entre MIN y MAX veces el radio visible (siempre fuera de cámara). */
+export const DIRECTOR_RING_MIN = 1.1;
+export const DIRECTOR_RING_MAX = 1.3;
+/** Decaimiento de pesos: max(FLOOR, spawnWeight * 0.5^((wave-waveMin)/HALF_LIFE)). FLOOR absoluto = relleno. */
+export const DIRECTOR_WEIGHT_HALF_LIFE = 6;
+export const DIRECTOR_WEIGHT_FLOOR = 0.1;
+/** Mezcla de tiers: trash 70% -> 25%, elite 5% -> 20% entre la oleada 1 y TIER_RAMP_WAVES+1. */
+export const DIRECTOR_TRASH_SHARE_START = 0.7;
+export const DIRECTOR_TRASH_SHARE_END = 0.25;
+export const DIRECTOR_ELITE_SHARE_START = 0.05;
+export const DIRECTOR_ELITE_SHARE_END = 0.2;
+export const DIRECTOR_TIER_RAMP_WAVES = 19;
+/** Probabilidad de modificador élite (shield/speedBurst/criticalHit) por spawn: START + PER_WAVE*(w-1), cap. */
+export const DIRECTOR_ELITE_MOD_START = 0.03;
+export const DIRECTOR_ELITE_MOD_PER_WAVE = 0.006;
+export const DIRECTOR_ELITE_MOD_CAP = 0.2;
+/** Eventos de oleada (Swarm / Horde / Elite pack): el primero en FIRST_WAVE, luego cada 3-5 oleadas (seed). */
+export const DIRECTOR_EVENT_FIRST_WAVE = 4;
+export const DIRECTOR_EVENT_GAP_MIN = 3;
+export const DIRECTOR_EVENT_GAP_MAX = 5;
+/** Escalado suave por oleada (la dificultad viene de la cantidad): +8% HP, +4% daño por oleada. */
+export const WAVE_HP_GROWTH = 0.08;
+export const WAVE_DAMAGE_GROWTH = 0.04;
 
 // —— Bosses y minibosses ———
 /** Boss/mini damage scale: baseDamage * (1 + wave * BOSS_DAMAGE_FACTOR). */

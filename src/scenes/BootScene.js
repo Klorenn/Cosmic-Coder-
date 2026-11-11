@@ -1,5 +1,12 @@
 import Phaser from 'phaser';
 import { getAssetPath, getAssetBase } from '../utils/assetBase.js';
+import { ITEMS, RARITIES } from '../data/items.js';
+import logger from '../utils/log.js';
+import { preloadEnemyAssets, createEnemyAnims, preloadItemIcons } from './boot/enemyAssets.js';
+import { preloadCharacterAssets, createCharacterAnims } from './boot/characterAssets.js';
+import { preloadBiomeAssets } from './boot/biomeAssets.js';
+import { preloadWeaponAssets, createWeaponAnims } from './boot/weaponAssets.js';
+import { preloadUiAssets, createUiAnims } from './boot/uiAssets.js';
 
 /** Resolve base path for background assets (uses shared getAssetBase for GitHub Pages). Always absolute so loader resolves from origin. */
 function getBackgroundBase() {
@@ -36,19 +43,19 @@ export default class BootScene extends Phaser.Scene {
       color: '#00ffff'
     }).setOrigin(0.5);
 
-    console.log('[BootScene] preload() start');
+    logger.log('[BootScene] preload() start');
     this.failedAssets = [];
 
     // Loader debug hooks — log every asset and any failures.
     this.load.on('filecomplete', (key, type) => {
       // type can be undefined in some Phaser versions; guard it.
-      console.log(`[BootScene] loaded asset: key=${key} type=${type || 'unknown'}`);
+      logger.log(`[BootScene] loaded asset: key=${key} type=${type || 'unknown'}`);
     });
 
     this.load.on('loaderror', (file) => {
       // file: Phaser.Loader.File
       const info = file ? `key=${file.key} type=${file.type} src=${file.src}` : 'unknown file';
-      console.warn('[BootScene] LOAD ERROR:', info);
+      logger.warn('[BootScene] LOAD ERROR:', info);
       this.failedAssets.push({
         key: file?.key,
         type: file?.type,
@@ -59,15 +66,21 @@ export default class BootScene extends Phaser.Scene {
     this.load.on('complete', (loader, totalComplete, totalFailed) => {
       // Note: loader.totalComplete / totalFailed are available on the LoaderPlugin instance.
       const failed = this.failedAssets.length || totalFailed || 0;
-      console.log(
+      logger.log(
         `[BootScene] preload complete — total=${loader.totalToLoad}, completed=${loader.totalComplete}, failed=${failed}`
       );
       if (failed > 0) {
-        console.warn('[BootScene] Failed assets detail:', this.failedAssets);
+        logger.warn('[BootScene] Failed assets detail:', this.failedAssets);
       }
     });
 
     const asset = (p) => getAssetPath(p);
+    preloadEnemyAssets(this);
+    preloadItemIcons(this);
+    preloadCharacterAssets(this);
+    preloadBiomeAssets(this);
+    preloadWeaponAssets(this);
+    preloadUiAssets(this);
     this.load.spritesheet('robot-idle', asset('assets/sprites/player/robot-idle.png'), { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-walk', asset('assets/sprites/player/robot-walk.png'), { frameWidth: 128, frameHeight: 128 });
     this.load.spritesheet('robot-hurt', asset('assets/sprites/player/robot-hurt.png'), { frameWidth: 128, frameHeight: 128 });
@@ -114,14 +127,14 @@ export default class BootScene extends Phaser.Scene {
   }
 
   create() {
-    console.log('[BootScene] create() start — generating textures & animations');
+    logger.log('[BootScene] create() start — generating textures & animations');
 
     const safeStep = (label, fn) => {
       try {
-        console.log(`[BootScene] step: ${label}`);
+        logger.log(`[BootScene] step: ${label}`);
         fn();
       } catch (err) {
-        console.error(`[BootScene] ERROR in step "${label}"`, err);
+        logger.error(`[BootScene] ERROR in step "${label}"`, err);
       }
     };
 
@@ -203,6 +216,9 @@ export default class BootScene extends Phaser.Scene {
     safeStep('generateBoomerangTexture', () => this.generateBoomerangTexture());
     safeStep('generateKunaiTexture', () => this.generateKunaiTexture());
 
+    // Item pickup textures (shape per item, outline colour per rarity)
+    safeStep('generateItemTextures', () => this.generateItemTextures());
+
     // Legendary weapon textures
     // Hunter's Warglaive loaded from actual image in preload()
     safeStep('generateVoidReaperTexture', () => this.generateVoidReaperTexture());
@@ -210,9 +226,81 @@ export default class BootScene extends Phaser.Scene {
 
     // Register all animations (guarded)
     safeStep('registerAnimations', () => this.registerAnimations());
+    safeStep('createEnemyAnims', () => createEnemyAnims(this));
+    safeStep('createCharacterAnims', () => createCharacterAnims(this));
+    safeStep('createWeaponAnims', () => createWeaponAnims(this));
+    safeStep('createUiAnims', () => createUiAnims(this));
 
-    console.log('[BootScene] Textures & animations ready. Starting TitleScene…');
+    // Painted map art (biome backgrounds, borders, obstacles, hazards, zones) is smoothed when scaled;
+    // characters / enemies / items stay NEAREST (pixelArt) so sprites keep crisp edges.
+    safeStep('smoothMapTextures', () => {
+      this.textures.getTextureKeys().forEach((key) => {
+        if (key.startsWith('biome-') || key.startsWith('map-')) {
+          this.textures.get(key).setFilter(Phaser.Textures.FilterMode.LINEAR);
+        }
+      });
+    });
+
+    logger.log('[BootScene] Textures & animations ready. Starting TitleScene…');
     this.scene.start('TitleScene');
+  }
+
+  /**
+   * Procedural item pickup textures: `item-<id>`, 20x20, item colour fill + rarity-coloured outline.
+   */
+  generateItemTextures() {
+    const size = 20;
+    const c = size / 2;
+    Object.values(ITEMS).forEach((item) => {
+      const key = `item-${item.id}`;
+      if (this.textures.exists(key)) return;
+      const rarityColor = (RARITIES[item.rarity] || RARITIES.common).color;
+      const g = this.add.graphics();
+      g.fillStyle(rarityColor, 0.35);
+      g.fillCircle(c, c, c);
+      g.fillStyle(item.color, 1);
+      g.lineStyle(2, rarityColor, 1);
+      switch (item.shape) {
+        case 'cross':
+          g.fillRect(c - 2, 4, 4, size - 8);
+          g.fillRect(4, c - 2, size - 8, 4);
+          break;
+        case 'diamond':
+          g.fillTriangle(c, 3, size - 4, c, c, size - 3);
+          g.fillTriangle(c, 3, 4, c, c, size - 3);
+          break;
+        case 'triangle':
+          g.fillTriangle(c, 3, size - 3, size - 4, 3, size - 4);
+          break;
+        case 'square':
+          g.fillRect(5, 5, size - 10, size - 10);
+          break;
+        case 'star': {
+          const pts = [];
+          for (let i = 0; i < 10; i++) {
+            const r = i % 2 === 0 ? c - 2 : (c - 2) * 0.45;
+            const a = -Math.PI / 2 + (i * Math.PI) / 5;
+            pts.push({ x: c + Math.cos(a) * r, y: c + Math.sin(a) * r });
+          }
+          g.fillPoints(pts, true);
+          break;
+        }
+        case 'hex': {
+          const pts = [];
+          for (let i = 0; i < 6; i++) {
+            const a = (Math.PI / 3) * i;
+            pts.push({ x: c + Math.cos(a) * (c - 3), y: c + Math.sin(a) * (c - 3) });
+          }
+          g.fillPoints(pts, true);
+          break;
+        }
+        default:
+          g.fillCircle(c, c, c - 4);
+      }
+      g.strokeCircle(c, c, c - 1);
+      g.generateTexture(key, size, size);
+      g.destroy();
+    });
   }
 
   registerAnimations() {
@@ -220,7 +308,7 @@ export default class BootScene extends Phaser.Scene {
     if (this.textures.exists('player') && this.textures.exists('robot-hurt')) {
       this.registerCharacterAnimations('player', 'robot-hurt');
     } else {
-      console.warn('[BootScene] Skipping player animations — texture "player" or "robot-hurt" missing');
+      logger.warn('[BootScene] Skipping player animations — texture "player" or "robot-hurt" missing');
     }
   
     // VibeCoder death animation (game over): 5 frames (640×128), frameRate 4, play once
@@ -254,14 +342,14 @@ export default class BootScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      console.debug('[BootScene] Skipping robot-enabling animation — texture missing');
+      logger.debug('[BootScene] Skipping robot-enabling animation — texture missing');
     }
   
     // Destroyer - player-destroyer
     if (this.textures.exists('player-destroyer') && this.textures.exists('destroyer-hurt')) {
       this.registerCharacterAnimations('player-destroyer', 'destroyer-hurt');
     } else {
-      console.debug('[BootScene] Skipping player-destroyer animations — textures missing');
+      logger.debug('[BootScene] Skipping player-destroyer animations — textures missing');
     }
 
     // VoidNull/Destroyer death animation (game over): 4 frames (512×128)
@@ -284,7 +372,7 @@ export default class BootScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      console.debug('[BootScene] Skipping destroyer-enabling animation — texture missing');
+      logger.debug('[BootScene] Skipping destroyer-enabling animation — texture missing');
     }
 
     // SyncStorm/Swordsman death animation (game over): 4 frames (512×128)
@@ -307,14 +395,14 @@ export default class BootScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      console.debug('[BootScene] Skipping swordsman-enabling animation — texture missing');
+      logger.debug('[BootScene] Skipping swordsman-enabling animation — texture missing');
     }
 
     // Swordsman - player-swordsman
     if (this.textures.exists('player-swordsman') && this.textures.exists('swordsman-hurt')) {
       this.registerCharacterAnimations('player-swordsman', 'swordsman-hurt');
     } else {
-      console.debug('[BootScene] Skipping player-swordsman animations — textures missing');
+      logger.debug('[BootScene] Skipping player-swordsman animations — textures missing');
     }
 
     // Bug enemy (werewolf sprite) - Run has 9 frames
@@ -326,7 +414,7 @@ export default class BootScene extends Phaser.Scene {
         repeat: -1
       });
     } else {
-      console.warn('[BootScene] Skipping bug-walk animation — texture \"bug\" missing');
+      logger.warn('[BootScene] Skipping bug-walk animation — texture \"bug\" missing');
     }
 
     // Glitch enemy animations
@@ -375,7 +463,7 @@ export default class BootScene extends Phaser.Scene {
    */
   registerCharacterAnimations(textureKey, hurtKey) {
     if (!this.textures.exists(textureKey) || !this.textures.exists(hurtKey)) {
-      console.warn(`[BootScene] registerCharacterAnimations skipped — missing textures: ${textureKey} or ${hurtKey}`);
+      logger.warn(`[BootScene] registerCharacterAnimations skipped — missing textures: ${textureKey} or ${hurtKey}`);
       return;
     }
 
@@ -440,7 +528,7 @@ export default class BootScene extends Phaser.Scene {
     const idleKey = charId + '-idle';
     const walkKey = charId + '-walk';
     if (!this.textures.exists(idleKey) || !this.textures.exists(walkKey)) {
-      console.warn(`[BootScene] Missing character sprites for ${charId} (idle=${idleKey}, walk=${walkKey}). Generating fallback texture.`);
+      logger.warn(`[BootScene] Missing character sprites for ${charId} (idle=${idleKey}, walk=${walkKey}). Generating fallback texture.`);
       this.generateFallbackCharacterTexture(charId);
       return;
     }
@@ -478,7 +566,7 @@ export default class BootScene extends Phaser.Scene {
    */
   buildRobotPlayerTexture() {
     if (!this.textures.exists('robot-idle') || !this.textures.exists('robot-walk')) {
-      console.warn('[BootScene] Missing robot sprites (robot-idle / robot-walk). Generating fallback player texture.');
+      logger.warn('[BootScene] Missing robot sprites (robot-idle / robot-walk). Generating fallback player texture.');
       this.generateFallbackPlayerTexture();
       this.generateFallbackHurtTexture('robot-hurt', 0xff5e5e);
       return;
@@ -513,14 +601,14 @@ export default class BootScene extends Phaser.Scene {
    */
   buildWerewolfBugTexture() {
     if (!this.textures.exists('werewolf-run')) {
-      console.warn('[BootScene] Missing \"werewolf-run\" spritesheet. Generating fallback procedural bug texture.');
+      logger.warn('[BootScene] Missing \"werewolf-run\" spritesheet. Generating fallback procedural bug texture.');
       this.generateFallbackBugSpriteSheet();
       return;
     }
 
     const runTex = this.textures.get('werewolf-run');
     if (!runTex || typeof runTex.getSourceImage !== 'function') {
-      console.warn('[BootScene] \"werewolf-run\" texture has no source image. Using fallback bug texture.');
+      logger.warn('[BootScene] \"werewolf-run\" texture has no source image. Using fallback bug texture.');
       this.generateFallbackBugSpriteSheet();
       return;
     }
@@ -571,7 +659,7 @@ export default class BootScene extends Phaser.Scene {
 
     const temp = this.textures.get('player-fallback-temp');
     if (!temp || typeof temp.getSourceImage !== 'function') {
-      console.error('[BootScene] Failed to generate fallback player texture.');
+      logger.error('[BootScene] Failed to generate fallback player texture.');
       return;
     }
 
@@ -626,7 +714,7 @@ export default class BootScene extends Phaser.Scene {
 
     const temp = this.textures.get(tempKey);
     if (!temp || typeof temp.getSourceImage !== 'function') {
-      console.error(`[BootScene] Failed to generate fallback texture for ${charId}.`);
+      logger.error(`[BootScene] Failed to generate fallback texture for ${charId}.`);
       return;
     }
     this.textures.addSpriteSheet(texKey, temp.getSourceImage(), {
@@ -709,7 +797,7 @@ export default class BootScene extends Phaser.Scene {
 
     const temp = this.textures.get('bug-fallback-temp');
     if (!temp || typeof temp.getSourceImage !== 'function') {
-      console.error('[BootScene] Failed to generate fallback bug texture.');
+      logger.error('[BootScene] Failed to generate fallback bug texture.');
       return;
     }
 
@@ -836,6 +924,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateSlashTexture() {
+    if (this.textures.exists('slash')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 40;
 
@@ -867,6 +956,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateSpreadWeaponTexture() {
+    if (this.textures.exists('weapon-spread')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -888,6 +978,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generatePierceWeaponTexture() {
+    if (this.textures.exists('weapon-pierce')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -913,6 +1004,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateOrbitalWeaponTexture() {
+    if (this.textures.exists('weapon-orbital')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -942,6 +1034,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateRapidWeaponTexture() {
+    if (this.textures.exists('weapon-rapid')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -971,6 +1064,7 @@ export default class BootScene extends Phaser.Scene {
   // === RARE WEAPONS ===
 
   generateRmRfWeaponTexture() {
+    if (this.textures.exists('weapon-rmrf')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -995,6 +1089,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateSudoWeaponTexture() {
+    if (this.textures.exists('weapon-sudo')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1018,6 +1113,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateForkBombWeaponTexture() {
+    if (this.textures.exists('weapon-forkbomb')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1455,6 +1551,7 @@ export default class BootScene extends Phaser.Scene {
   // === EVOLVED WEAPON TEXTURES ===
 
   generateLaserBeamWeaponTexture() {
+    if (this.textures.exists('weapon-laser')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1479,6 +1576,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generatePlasmaOrbWeaponTexture() {
+    if (this.textures.exists('weapon-plasma')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1509,6 +1607,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateChainLightningWeaponTexture() {
+    if (this.textures.exists('weapon-chain')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1541,6 +1640,7 @@ export default class BootScene extends Phaser.Scene {
   // === NEW WEAPON TEXTURES ===
 
   generateHomingWeaponTexture() {
+    if (this.textures.exists('weapon-homing')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -1563,6 +1663,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateBounceWeaponTexture() {
+    if (this.textures.exists('weapon-bounce')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -1587,6 +1688,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateAoeWeaponTexture() {
+    if (this.textures.exists('weapon-aoe')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -1616,6 +1718,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateFreezeWeaponTexture() {
+    if (this.textures.exists('weapon-freeze')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 28;
 
@@ -1644,6 +1747,7 @@ export default class BootScene extends Phaser.Scene {
   // === NEW EVOLVED WEAPON TEXTURES ===
 
   generateBulletHellWeaponTexture() {
+    if (this.textures.exists('weapon-bullethell')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1668,6 +1772,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateRingOfFireWeaponTexture() {
+    if (this.textures.exists('weapon-ringoffire')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1695,6 +1800,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateSeekingMissileWeaponTexture() {
+    if (this.textures.exists('weapon-seekingmissile')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1717,6 +1823,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateChaosBounceWeaponTexture() {
+    if (this.textures.exists('weapon-chaosbounce')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1741,6 +1848,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateDeathAuraWeaponTexture() {
+    if (this.textures.exists('weapon-deathaura')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1768,6 +1876,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateIceLanceWeaponTexture() {
+    if (this.textures.exists('weapon-icelance')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1791,6 +1900,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateSwarmWeaponTexture() {
+    if (this.textures.exists('weapon-swarm')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1811,6 +1921,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateBlizzardWeaponTexture() {
+    if (this.textures.exists('weapon-blizzard')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1840,6 +1951,7 @@ export default class BootScene extends Phaser.Scene {
   // === MELEE WEAPON TEXTURES ===
 
   generateSwordTexture() {
+    if (this.textures.exists('weapon-sword')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1875,6 +1987,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateSpearTexture() {
+    if (this.textures.exists('weapon-spear')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 40;
 
@@ -1905,6 +2018,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateBoomerangTexture() {
+    if (this.textures.exists('weapon-boomerang')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 32;
 
@@ -1935,6 +2049,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateKunaiTexture() {
+    if (this.textures.exists('weapon-kunai')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 24;
 
@@ -1968,6 +2083,7 @@ export default class BootScene extends Phaser.Scene {
   // === LEGENDARY WEAPON TEXTURES ===
 
   generateHuntersWarglaiveTexture() {
+    if (this.textures.exists('legendary-huntersWarglaive')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 48;
 
@@ -2073,6 +2189,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateVoidReaperTexture() {
+    if (this.textures.exists('legendary-voidReaper')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 48;
 
@@ -2112,6 +2229,7 @@ export default class BootScene extends Phaser.Scene {
   }
 
   generateCelestialBladeTexture() {
+    if (this.textures.exists('legendary-celestialBlade')) return; // PNG art from weaponAssets.js wins; this is the fallback
     const g = this.make.graphics({ x: 0, y: 0, add: false });
     const size = 48;
 

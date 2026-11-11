@@ -1,3 +1,6 @@
+import { getLeaderboardUrl } from '../config/runtime.js';
+import { validateGameRules } from '../zk/gameProof.js';
+import { logger } from '../utils/log.js';
 /**
  * LeaderboardManager - Single on-chain/API leaderboard (no local/Anonymous list).
  * Submit and fetch from backend API (Stellar address = identity). Everyone can view
@@ -9,10 +12,20 @@ const LOCAL_GAMES_KEY = 'cosmicCoderGamesPlayed';
 const MAX_ENTRIES = 10;
 
 function getLeaderboardApiUrl() {
-  if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_LEADERBOARD_URL) return window.__VITE_CONFIG__.VITE_LEADERBOARD_URL.replace(/\/$/, '');
-  if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_API_URL) return window.__VITE_CONFIG__.VITE_API_URL.replace(/\/$/, '');
-  if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_LEADERBOARD_URL) return import.meta.env.VITE_LEADERBOARD_URL;
-  return 'https://cosmic-coder-zk-prover.onrender.com';
+  return getLeaderboardUrl();
+}
+
+const finiteNonNeg = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
+
+/** Drop corrupted local entries (null, primitives) and coerce fields so sort/getTop never throw or show NaN. */
+function sanitizeEntry(e) {
+  if (!e || typeof e !== 'object' || Array.isArray(e)) return null;
+  return {
+    name: typeof e.name === 'string' && e.name.trim() ? e.name.slice(0, 20) : 'Anonymous',
+    wave: Math.floor(finiteNonNeg(e.wave)),
+    score: Math.floor(finiteNonNeg(e.score)),
+    date: finiteNonNeg(e.date)
+  };
 }
 
 function shortAddress(address, chars = 8) {
@@ -30,7 +43,7 @@ export default class LeaderboardManager {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const data = JSON.parse(saved);
-        return Array.isArray(data) ? data : [];
+        return Array.isArray(data) ? data.map(sanitizeEntry).filter(Boolean) : [];
       }
     } catch (e) {
       console.warn('Leaderboard load failed:', e);
@@ -60,11 +73,11 @@ export default class LeaderboardManager {
    */
   static addEntry(name, wave, score) {
     const entries = this.load();
-    const displayName = (name || 'Anonymous').trim() || 'Anonymous';
+    const displayName = (typeof name === 'string' ? name : '').trim() || 'Anonymous';
     entries.push({
       name: displayName.slice(0, 20),
-      wave: Math.max(0, wave),
-      score: Math.max(0, Math.floor(score)),
+      wave: Math.floor(finiteNonNeg(wave)),
+      score: Math.floor(finiteNonNeg(score)),
       date: Date.now()
     });
     entries.sort((a, b) => {
@@ -85,6 +98,12 @@ export default class LeaderboardManager {
    */
   static async submitOnChain(address, wave, score, name = '') {
     if (!address) return { success: false };
+    // Never send a run that breaks the game rules (NaN, score < wave*5, overflow...) to the network.
+    const rules = validateGameRules(wave, score);
+    if (!rules.valid) {
+      logger.warn('[Leaderboard] submit rejected locally:', rules.reason);
+      return { success: false, reason: rules.reason };
+    }
     try {
       const res = await fetch(`${getLeaderboardApiUrl()}/leaderboard`, {
         method: 'POST',

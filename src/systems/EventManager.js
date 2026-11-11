@@ -2,6 +2,8 @@
  * EventManager - Mid-wave chaos events that add tension and variety
  * Instance class with update loop for timer-based events
  */
+import logger from '../utils/log.js';
+import { pixelText, pixelPanel, PX, PX_CSS } from '../scenes/boot/uiAssets.js';
 export default class EventManager {
   constructor(scene) {
     this.scene = scene;
@@ -81,7 +83,8 @@ export default class EventManager {
     // Don't trigger if already in an event
     if (this.activeEvent) return false;
 
-    // Check minimum wave requirement
+    // Check minimum wave requirement (non-numeric / NaN waves never trigger)
+    if (typeof waveNumber !== 'number' || Number.isNaN(waveNumber)) return false;
     if (waveNumber < this.minWaveForEvents) return false;
 
     // Random chance
@@ -101,6 +104,8 @@ export default class EventManager {
    * @param {object} event - Event object from EVENTS
    */
   startEvent(event) {
+    // Replacing a running event (forceEvent from shrines): drop its multipliers first so they don't leak.
+    if (this.activeEvent) this.clearEventEffects();
     this.activeEvent = event;
     this.eventEndTime = this.scene.time.now + event.duration;
 
@@ -124,7 +129,7 @@ export default class EventManager {
       });
     }
 
-    console.log(`Event started: ${event.name}`);
+    logger.log(`Event started: ${event.name}`);
   }
 
   /**
@@ -193,17 +198,10 @@ export default class EventManager {
     this.scene.spawnMiniBoss();
 
     // Show announcement
-    const bossText = this.scene.add.text(
-      this.scene.cameras.main.scrollX + 400,
-      this.scene.cameras.main.scrollY + 200,
-      '💀 EVENT BOSS SPAWNED! 💀',
-      {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '24px',
-        color: '#ff0000',
-        fontStyle: 'bold'
-      }
-    ).setOrigin(0.5).setScrollFactor(0);
+    const P = this.hudPx();
+    const bossText = pixelText(this.scene, Math.round(this.viewSize().w / 2), Math.round(this.viewSize().h * 0.28),
+      'EVENT BOSS SPAWNED!', { size: 8 * 2 * P, color: PX.red, align: 'center' })
+      .setOrigin(0.5).setScrollFactor(0).setDepth(1000);
 
     this.scene.tweens.add({
       targets: bossText,
@@ -222,63 +220,63 @@ export default class EventManager {
     // Remove existing HUD if any
     this.hideEventHUD();
 
-    const cam = this.scene.cameras.main;
+    // Pixel kit banner (same look as ArenaScene.showHudBanner): accent panel, pixel title, stepped timer bar.
+    const scene = this.scene;
+    const P = this.hudPx();
+    const snap = (v) => Math.round(v / P) * P;
+    const color = typeof event.color === 'number' ? event.color : PX.violet;
+    const title = pixelText(scene, 0, 5 * P, String(event.name || '').toUpperCase(), { size: 8 * P, color, align: 'center' }).setOrigin(0.5, 0);
+    const w = Math.max(120 * P, snap((Number(title.width) || 0) + 20 * P));
+    const barW = w - 12 * P;
+    const h = 5 * P + 8 * P + 4 * P + 2 * P + 5 * P;
+    const panel = pixelPanel(scene, -w / 2, 0, w, h, 'panel-accent', { px: P });
+    const barY = 5 * P + 8 * P + 4 * P;
+    const timerBg = scene.add.rectangle(-barW / 2, barY, barW, 2 * P, PX.ink, 1).setOrigin(0, 0);
+    this.eventTimerBar = scene.add.rectangle(-barW / 2, barY, barW, 2 * P, color, 1).setOrigin(0, 0);
 
-    // Create container for HUD elements
-    this.eventHUD = this.scene.add.container(0, 0);
+    const L = scene.hudLayout;
+    const top = L && L.wave ? L.wave.y + L.wave.h + 4 * P : 12 * P;
+    this.eventHUD = scene.add.container(snap(this.viewSize().w / 2), snap(top), [panel, title, timerBg, this.eventTimerBar]);
     this.eventHUD.setScrollFactor(0);
     this.eventHUD.setDepth(1000);
 
-    // Background banner
-    const banner = this.scene.add.rectangle(400, 30, 300, 40, 0x000000, 0.8);
-    banner.setStrokeStyle(2, event.color);
+    // Entrance: hidden for one frame step, then shown (retro, no easing)
+    const hud = this.eventHUD;
+    hud.visible = false;
+    if (scene.time && typeof scene.time.delayedCall === 'function') scene.time.delayedCall(70, () => { if (hud.scene) hud.visible = true; });
+    else hud.visible = true;
+  }
 
-    // Event icon and name
-    const eventText = this.scene.add.text(400, 25, `${event.icon} ${event.name}`, {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '16px',
-      color: `#${event.color.toString(16).padStart(6, '0')}`,
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
+  /** Screen size in logical px (scale manager, else the main camera, else 800x600). */
+  viewSize() {
+    const sc = this.scene && this.scene.scale;
+    const cam = this.scene && this.scene.cameras && this.scene.cameras.main;
+    return { w: (sc && sc.width) || (cam && cam.width) || 800, h: (sc && sc.height) || (cam && cam.height) || 600 };
+  }
 
-    // Timer bar background
-    const timerBg = this.scene.add.rectangle(400, 45, 280, 8, 0x333333);
-
-    // Timer bar fill
-    this.eventTimerBar = this.scene.add.rectangle(260, 45, 280, 8, event.color);
-    this.eventTimerBar.setOrigin(0, 0.5);
-
-    this.eventHUD.add([banner, eventText, timerBg, this.eventTimerBar]);
-
-    // Entrance animation
-    this.eventHUD.y = -60;
-    this.scene.tweens.add({
-      targets: this.eventHUD,
-      y: 0,
-      duration: 300,
-      ease: 'Back.easeOut'
-    });
+  /** Logical px per art pixel of the HUD (ArenaScene.hudLayout.px), 2 outside the arena. */
+  hudPx() {
+    const px = this.scene && this.scene.hudLayout && this.scene.hudLayout.px;
+    return typeof px === 'number' && px > 0 ? px : 2;
   }
 
   /**
    * Hide and destroy event HUD
    */
   hideEventHUD() {
-    if (this.eventHUD) {
-      this.scene.tweens.add({
-        targets: this.eventHUD,
-        y: -60,
-        alpha: 0,
-        duration: 300,
-        onComplete: () => {
-          if (this.eventHUD) {
-            this.eventHUD.destroy();
-            this.eventHUD = null;
-          }
-        }
-      });
-    }
+    // Capture the HUD being hidden: the tween completes 300ms later, by which time showEventHUD may have
+    // created a NEW HUD in this.eventHUD — destroying `this.eventHUD` there killed the live banner.
+    const hud = this.eventHUD;
+    this.eventHUD = null;
     this.eventTimerBar = null;
+    if (!hud) return;
+    // Stepped fade out (0.66 / 0.33 / gone), like the arena HUD banners.
+    const steps = [0.66, 0.33, 0];
+    steps.forEach((a, i) => this.scene.time?.delayedCall?.(70 * (i + 1), () => {
+      if (!hud.scene) return;
+      if (a <= 0) hud.destroy(); else hud.setAlpha(a);
+    }));
+    if (!this.scene.time?.delayedCall) hud.destroy();
   }
 
   /**
@@ -287,24 +285,20 @@ export default class EventManager {
   endEvent() {
     if (!this.activeEvent) return;
 
-    console.log(`Event ended: ${this.activeEvent.name}`);
+    logger.log(`Event ended: ${this.activeEvent.name}`);
 
     // Show end message
-    const endText = this.scene.add.text(
-      400, 80,
-      `${this.activeEvent.icon} ${this.activeEvent.name} ENDED`,
-      {
-        fontFamily: '"Segoe UI", system-ui, sans-serif',
-        fontSize: '14px',
-        color: '#888888',
-        fontStyle: 'bold'
-      }
-    ).setOrigin(0.5).setScrollFactor(0);
+    const P = this.hudPx();
+    const L = this.scene.hudLayout;
+    const endY = (L && L.wave ? L.wave.y + L.wave.h : 0) + 30 * P;
+    const endText = pixelText(this.scene, Math.round(this.viewSize().w / 2), endY,
+      `${String(this.activeEvent.name || '').toUpperCase()} ENDED`, { size: 8 * P, color: PX_CSS.mist, align: 'center' })
+      .setOrigin(0.5).setScrollFactor(0).setDepth(1000);
 
     this.scene.tweens.add({
       targets: endText,
       alpha: 0,
-      y: 60,
+      y: endY - 10 * P,
       duration: 1500,
       onComplete: () => endText.destroy()
     });

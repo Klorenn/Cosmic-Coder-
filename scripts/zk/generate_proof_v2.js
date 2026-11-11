@@ -45,6 +45,8 @@ execSync(
 );
 
 console.log('Exporting for contract...');
-const outPath = path.join(buildDir, 'contract_proof.json');
-exportAll(buildDir, outPath);
+// V2 has 12 public signals: export with its own VK and never overwrite the GameRun (7-signal)
+// contract_proof.json that the deploy script and contract tests consume.
+const outPath = path.join(buildDir, 'contract_proof_v2.json');
+exportAll(buildDir, outPath, `${CIRCUIT_NAME}_vkey.json`);
 console.log('Done. Contract-ready proof:', outPath);

@@ -1,7 +1,7 @@
 {
-  "name": "vibe-coder",
+  "name": "cosmic-coder",
   "version": "0.7.6",
-  "description": "Vampire Survivors-style idle game powered by your Claude Code activity",
+  "description": "Cosmic Coder: a Vampire Survivors-style roguelite on Stellar with ZK-verified runs",
   "type": "module",
   "main": "electron/main.js",
   "scripts": {
@@ -10,11 +10,13 @@
     "preview": "vite preview",
     "server": "node server/index.js",
     "electron": "electron .",
-    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:3001 && electron .\"",
     "electron:build": "vite build && electron-builder",
     "electron:pack": "electron-builder --dir",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:contracts": "cd contracts && cargo test --workspace",
+    "evil": "node scripts/evil-player/run.mjs",
     "zk:build": "bash scripts/zk/build_circuit.sh",
     "zk:proof": "node scripts/zk/generate_proof.js",
     "zk:args": "node scripts/zk/contract_args_from_proof.js circuits/build",
@@ -57,6 +59,7 @@
     "concurrently": "^9.1.2",
     "electron": "^33.4.0",
     "electron-builder": "^25.1.8",
+    "playwright": "^1.65.0",
     "sharp": "^0.34.5",
     "vitest": "^4.0.18",
     "wait-on": "^8.0.3"

@@ -58,50 +58,13 @@ export function anchorBottomCenter(scene, offsetY) {
 }
 
 /**
- * Layout del HUD responsive: posiciones y tamaños según viewport y getUIScale.
- * Usar en createHUD y updateHUD para que el HUD se vea bien en pantalla completa.
+ * Tamaño RENDERIZADO del canvas en px CSS (Scale.FIT encoge el lienzo lógico 1920x1080).
+ * El HUD lo usa para que las fuentes nunca bajen de un mínimo legible en pantalla.
  */
-export function getHudLayout(scene) {
-  const w = scene.scale?.width ?? 800;
-  const h = scene.scale?.height ?? 720;
-  const uiScale = getUIScale(scene);
-  const pad = Math.max(12, 14 * uiScale);
-  const barW = Math.min(220 * uiScale, w * 0.32);
-  const barH = 18 * uiScale;
-  const barHp = 14 * uiScale;
-  const lineH = 18 * uiScale;
-  const topY = 8;
-  const hpY = topY;
-  const xpY = hpY + barHp + 6;
-  const leftTextY = xpY + barH + 8;
-  const rightX = w - pad;
-  const centerX = w / 2;
-  const modeY = xpY + barH + 6;
-  const connectionY = h - 36;
-  const bossBarW = Math.min(400, w * 0.6);
-  const bossBarH = 22 * uiScale;
-  const bossBarX = centerX - bossBarW / 2;
-  const bossBarY = h - 58;
-  const bossNameY = bossBarY - 18;
-  const fontSize = {
-    tiny: Math.round(9 * uiScale),
-    small: Math.round(10 * uiScale),
-    normal: Math.round(12 * uiScale),
-    medium: Math.round(14 * uiScale),
-    large: Math.round(16 * uiScale)
-  };
-  return {
-    w, h, pad, uiScale,
-    leftX: pad,
-    rightX,
-    centerX,
-    barW, barH, barHp,
-    xpY, hpY, leftTextY,
-    rightTopY: topY,
-    lineH,
-    modeY,
-    connectionY,
-    bossBarX, bossBarY, bossBarW, bossBarH, bossNameY,
-    fontSize
-  };
+export function getDisplaySize(scene) {
+  const d = scene.scale?.displaySize;
+  const canvas = scene.sys?.game?.canvas;
+  const width = d?.width || canvas?.clientWidth || scene.scale?.width || 1920;
+  const height = d?.height || canvas?.clientHeight || scene.scale?.height || 1080;
+  return { width, height };
 }

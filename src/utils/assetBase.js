@@ -10,7 +10,9 @@ export function getAssetBase() {
       const u = new URL(import.meta.url);
       const pathname = u.pathname || '';
       if (pathname.includes('/src/')) return '';
-    } catch (_) {}
+    } catch (_) {
+      // import.meta.url is not a parseable URL (non-browser env): fall through to the next strategy.
+    }
   }
 
   // 2) Page is on a subpath (e.g. GitHub Pages /Cosmic-Coder-/) → use it
@@ -28,7 +30,9 @@ export function getAssetBase() {
       const parts = pathname.split('/').filter(Boolean);
       if (parts.length >= 2 && parts[1] === 'assets') return '/' + parts[0];
       if (parts.length >= 1 && parts[0] === 'assets') return '';
-    } catch (_) {}
+    } catch (_) {
+      // Same as above: unparseable module URL, fall through to Vite BASE_URL.
+    }
   }
 
   // 4) Vite BASE_URL (build)

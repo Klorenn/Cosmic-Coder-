@@ -17,6 +17,10 @@ import { connectToXPServer, isConnected } from './utils/socket.js';
 import RebirthManager from './systems/RebirthManager.js';
 import { persistIfWalletConnected, progressStore } from './utils/walletProgressService.js';
 import { getConfigJsonUrl } from './utils/assetBase.js';
+import { resolveSelectedCharacter } from './utils/selectedCharacter.js';
+import { logger } from './utils/log.js';
+import { parseStoredSettings } from './utils/settings.js';
+import { applyXPGain } from './systems/scoreRules.js';
 
 // bb.js expects Node-style Buffer in browser context.
 if (typeof globalThis !== 'undefined' && !globalThis.Buffer) {
@@ -24,7 +28,7 @@ if (typeof globalThis !== 'undefined' && !globalThis.Buffer) {
 }
 
 // Sync selected character from progressStore on startup
-window.VIBE_SELECTED_CHARACTER = progressStore.selectedCharacter || 'vibecoder';
+window.VIBE_SELECTED_CHARACTER = resolveSelectedCharacter(progressStore.selectedCharacter, 'vibecoder');
 
 // Persist progress to API when wallet connected (called by VIBE_UPGRADES.save, VIBE_LEGENDARIES.save)
 window.walletProgressPersist = () => { persistIfWalletConnected(); };
@@ -60,7 +64,7 @@ const config = {
   },
   callbacks: {
     postBoot: function(game) {
-      console.log('🎮 Phaser boot completado');
+      logger.log('🎮 Phaser boot completado');
     }
   }
 };
@@ -280,7 +284,7 @@ window.VIBE_LEGENDARIES = {
   forceUnlock(weaponKey) {
     if (this.weapons[weaponKey]) {
       this.unlock(weaponKey);
-      console.log(`🗡️ LEGENDARY UNLOCKED: ${this.weapons[weaponKey].name}`);
+      logger.log(`🗡️ LEGENDARY UNLOCKED: ${this.weapons[weaponKey].name}`);
       return true;
     }
     return false;
@@ -332,8 +336,8 @@ window.VIBE_CHARACTERS = {
     mission_en: 'Overload enemy systems until only static remains.'
   }
 };
-// Selected character id (set by wallet progress or default)
-window.VIBE_SELECTED_CHARACTER = 'vibecoder';
+// Selected character id: set at startup from saved progress (do not reset here).
+window.VIBE_SELECTED_CHARACTER = resolveSelectedCharacter(undefined, 'vibecoder', window.VIBE_SELECTED_CHARACTER);
 
 // Melee weapons (non-legendary, drop normally)
 window.VIBE_MELEE = {
@@ -358,23 +362,11 @@ window.VIBE_SETTINGS = {
   language: 'en',        // 'en' | 'es' - UI language
 
   load() {
-    const saved = localStorage.getItem('vibeCoderSettings');
+    // Corrupt / hostile localStorage must never crash startup: parse + sanitize (src/utils/settings.js).
+    let saved = null;
+    try { saved = localStorage.getItem('vibeCoderSettings'); } catch (_) { saved = null; }
     // Sin datos guardados: idioma por defecto inglés (first open = English)
-    if (saved) {
-      const data = JSON.parse(saved);
-      this.autoMove = data.autoMove !== undefined ? data.autoMove : true;
-      this.sfxEnabled = data.sfxEnabled !== undefined ? data.sfxEnabled : true;
-      this.musicEnabled = data.musicEnabled !== undefined ? data.musicEnabled : true;
-      this.masterVolume = data.masterVolume !== undefined ? data.masterVolume : 0.7;
-      this.sfxVolume = data.sfxVolume !== undefined ? data.sfxVolume : 0.8;
-      const oldMusicVol = data.musicVolume !== undefined ? data.musicVolume : 0.5;
-      this.menuMusicVolume = data.menuMusicVolume !== undefined ? data.menuMusicVolume : oldMusicVol;
-      this.gameplayMusicVolume = data.gameplayMusicVolume !== undefined ? data.gameplayMusicVolume : oldMusicVol;
-      this.playerName = data.playerName || '';
-      this.immortalMode = data.immortalMode !== undefined ? data.immortalMode : false;
-      this.xpPenaltyOnDeath = data.xpPenaltyOnDeath !== undefined ? data.xpPenaltyOnDeath : 0.5;
-      this.language = data.language === 'es' ? 'es' : 'en';
-    }
+    Object.assign(this, parseStoredSettings(saved));
   },
 
   save() {
@@ -411,7 +403,7 @@ window.VIBE_SETTINGS = {
   },
 
   setPlayerName(name) {
-    this.playerName = name.slice(0, 20); // Max 20 chars
+    this.playerName = String(name ?? '').slice(0, 20); // Max 20 chars
     this.save();
   },
 
@@ -437,7 +429,8 @@ window.VIBE_SETTINGS.load();
 window.VIBE_CODER = {
   xp: 0,
   level: 1,
-  totalXP: 0,
+  totalXP: 0,              // Spendable XP pool (shrines)
+  score: 0,                // Run score: XP earned, never decreases
   streak: 1,
   kills: 0,
   lastCodingTime: 0,        // Timestamp of last coding activity
@@ -461,7 +454,7 @@ window.VIBE_CODER = {
     const totalMultiplier = Math.min(this.streak * xpBonus * rebirthXPBonus, 3.5);
     const multipliedXP = Math.floor(amount * totalMultiplier);
     this.xp += multipliedXP;
-    this.totalXP += multipliedXP;
+    applyXPGain(this, multipliedXP);
 
     // Check for level up
     while (this.xp >= this.xpForLevel(this.level)) {
@@ -477,7 +470,7 @@ window.VIBE_CODER = {
     return multipliedXP;
   },
 
-  // Check if coding activity is recent (for auto-move)
+  // Check if coding activity is recent (grants a speed bonus; auto-play works without it)
   isCodingActive() {
     return Date.now() - this.lastCodingTime < this.codingTimeout;
   },
@@ -487,6 +480,7 @@ window.VIBE_CODER = {
     this.xp = 0;
     this.level = 1;
     this.totalXP = 0;
+    this.score = 0;
     this.streak = 1;
     this.kills = 0;
   }
@@ -501,7 +495,8 @@ function loadRuntimeConfig() {
       window.__VITE_CONFIG__ = data || {};
       return window.__VITE_CONFIG__;
     })
-    .catch(() => {
+    .catch((err) => {
+      logger.warn('[config] config.json unavailable, using defaults:', err?.message || err);
       window.__VITE_CONFIG__ = {};
       return window.__VITE_CONFIG__;
     });
@@ -528,7 +523,7 @@ function showRotateOverlay(show) {
 function startGame() {
   if (window.__VIBE_GAME__) return;
   
-  console.log('🎮 Iniciando juego con configuración:', config);
+  logger.log('🎮 Iniciando juego con configuración:', config);
   setOverlayText('Starting Phaser…');
   
   showRotateOverlay(false);
@@ -542,12 +537,12 @@ function startGame() {
     
     // Agregar listeners para manejar errores de renderizado
     game.events.on('ready', () => {
-      console.log('✅ Juego listo y renderizando');
+      logger.log('✅ Juego listo y renderizando');
       setOverlayText('');
     });
     
     game.events.on('resize', (gameSize) => {
-      console.log('🔄 Juego redimensionado:', gameSize);
+      logger.log('🔄 Juego redimensionado:', gameSize);
     });
     
     // Manejar errores críticos
@@ -586,7 +581,7 @@ function startGame() {
 }
 
 loadRuntimeConfig().then(() => {
-  console.log('⚙️ Configuración cargada:', window.__VITE_CONFIG__);
+  logger.log('⚙️ Configuración cargada:', window.__VITE_CONFIG__);
   
   if (isMobileDevice() && isPortrait()) {
     showRotateOverlay(true);
@@ -618,11 +613,11 @@ if (isLocalhost) {
 
 // Show connection status
 window.addEventListener('xpserver-connected', () => {
-  console.log('🎮 LIVE MODE: Earning XP from real coding activity!');
+  logger.log('🎮 LIVE MODE: Earning XP from real coding activity!');
 });
 
 window.addEventListener('xpserver-disconnected', () => {
   // No log: avoids console spam when XP server is not running
 });
 
-console.log('Cosmic Coder initialized! Ready to code and conquer.');
+logger.log('Cosmic Coder initialized! Ready to code and conquer.');

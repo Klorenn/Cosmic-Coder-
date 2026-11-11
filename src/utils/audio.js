@@ -7,6 +7,7 @@ import startGameCharacterUrl from '../assets/audio/start-game-character.mp3';
 import levelUpUrl from '../assets/audio/level-up.mp3';
 import galaxyGuppyUrl from '../assets/audio/Galaxy_Guppy_KLICKAUD.mp3';
 import kubbiEmberUrl from '../assets/audio/Kubbi-Ember.mp3';
+import logger from './log.js';
 
 let audioContext = null;
 let masterGain = null;
@@ -39,7 +40,7 @@ export function initAudio() {
   sfxGain.gain.value = 0.5;
   sfxGain.connect(masterGain);
 
-  console.log('🔊 Audio system initialized');
+  logger.log('🔊 Audio system initialized');
 }
 
 // Resume audio context if suspended
@@ -409,7 +410,7 @@ export function playDeathSong() {
     a.volume = QUIETER_VOLUME;
     a.play().catch(() => {});
   } catch (e) {
-    console.warn('Death song failed:', e);
+    logger.warn('Death song failed:', e);
   }
 }
 
@@ -422,9 +423,9 @@ export function playGameOverMusic() {
     a.volume = getGameplayMusicVolume();
     a.loop = false;
     a.play().catch(() => {});
-    console.log('🎵 Game over music (one-shot) started');
+    logger.log('🎵 Game over music (one-shot) started');
   } catch (e) {
-    console.warn('Game over music failed:', e);
+    logger.warn('Game over music failed:', e);
   }
 }
 
@@ -436,7 +437,7 @@ export function playStartGameCharacter() {
     a.volume = 1;
     a.play().catch(() => {});
   } catch (e) {
-    console.warn('Start game character sound failed:', e);
+    logger.warn('Start game character sound failed:', e);
   }
 }
 
@@ -448,7 +449,7 @@ export function playLevelUpSong() {
     a.volume = QUIETER_VOLUME;
     a.play().catch(() => {});
   } catch (e) {
-    console.warn('Level up song failed:', e);
+    logger.warn('Level up song failed:', e);
   }
 }
 
@@ -494,9 +495,9 @@ export function startMenuMusic() {
     menuAudio.volume = getMenuMusicVolume();
     menuAudio.play().catch(() => {});
     isMusicPlaying = true;
-    console.log('🎵 Menu music (Arcade) started');
+    logger.log('🎵 Menu music (Arcade) started');
   } catch (e) {
-    console.warn('Menu music failed:', e);
+    logger.warn('Menu music failed:', e);
   }
 }
 
@@ -507,7 +508,7 @@ export function stopMenuMusic() {
     menuAudio = null;
   }
   if (!gameplayAudio) isMusicPlaying = false;
-  console.log('🎵 Menu music stopped');
+  logger.log('🎵 Menu music stopped');
 }
 
 function playNextGameplayTrack() {
@@ -517,7 +518,7 @@ function playNextGameplayTrack() {
   gameplayAudio.src = url;
   gameplayAudio.volume = getGameplayMusicVolume();
   gameplayAudio.play().catch(() => {});
-  console.log(`🎵 Gameplay track ${gameplayTrackIndex + 1}/${playlist.length} started`);
+  logger.log(`🎵 Gameplay track ${gameplayTrackIndex + 1}/${playlist.length} started`);
 }
 
 export function startGameplayMusic() {
@@ -540,7 +541,7 @@ export function startGameplayMusic() {
     playNextGameplayTrack();
     isMusicPlaying = true;
   } catch (e) {
-    console.warn('Gameplay music failed:', e);
+    logger.warn('Gameplay music failed:', e);
   }
 }
 
@@ -554,7 +555,7 @@ export function stopGameplayMusic() {
   if (!menuAudio) isMusicPlaying = false;
   musicTimeouts.forEach(t => clearTimeout(t));
   musicTimeouts = [];
-  console.log('🎵 Gameplay music stopped');
+  logger.log('🎵 Gameplay music stopped');
 }
 
 export function isMenuMusicPlaying() {
@@ -574,7 +575,7 @@ export function stopMusic() {
   stopMenuMusic();
   stopGameplayMusic();
   isMusicPlaying = false;
-  console.log('🎵 Music stopped');
+  logger.log('🎵 Music stopped');
 }
 
 export function toggleMusic() {

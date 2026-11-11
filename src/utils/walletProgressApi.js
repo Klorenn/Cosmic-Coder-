@@ -4,14 +4,10 @@
  * Progress is keyed by wallet address — no cookies/localStorage.
  */
 
-const PRODUCTION_API = 'https://cosmic-coder-zk-prover.onrender.com';
+import { getProgressApiUrl as getRuntimeProgressApiUrl } from '../config/runtime.js';
 
 function getProgressApiUrl() {
-  return (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_PROGRESS_API_URL) ||
-    (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_ZK_PROVER_URL) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_PROGRESS_API_URL) ||
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ZK_PROVER_URL) ||
-    PRODUCTION_API;
+  return getRuntimeProgressApiUrl();
 }
 
 function isLocalhostUrl(url) {
@@ -37,7 +33,7 @@ export async function fetchProgress(address) {
     // If configured URL is localhost and connection failed, retry with production
     if (isLocalhostUrl(url)) {
       try {
-        const res = await fetch(`${PRODUCTION_API}${path}`);
+        const res = await fetch(`${getProgressApiUrl()}${path}`);
         if (!res.ok) return null;
         const data = await res.json();
         return data;
@@ -72,7 +68,7 @@ export async function saveProgress(address, payload) {
   } catch (e) {
     if (isLocalhostUrl(url)) {
       try {
-        const res = await fetch(`${PRODUCTION_API}${path}`, {
+        const res = await fetch(`${getProgressApiUrl()}${path}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)

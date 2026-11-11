@@ -10,7 +10,7 @@ use soroban_sdk::{
     crypto::bn254::{Bn254G1Affine, Bn254G2Affine, Fr},
     vec, BytesN, Env, Vec,
 };
-use zk_types::{Groth16Error, ZkProof, ZkVerificationKey};
+use zk_types::{is_canonical_fr, Groth16Error, ZkProof, ZkVerificationKey};
 
 #[contract]
 pub struct Groth16Verifier;
@@ -20,6 +20,7 @@ impl Groth16Verifier {
     /// Verify a Groth16 proof against the given verification key and public inputs.
     /// Pairing check: e(-A, B) * e(alpha, beta) * e(vk_x, gamma) * e(C, delta) == 1
     /// where vk_x = ic[0] + sum(pub_signals[i] * ic[i+1]).
+    /// Every public signal must be a canonical scalar (< r), else `NonCanonicalPublicInput`.
     pub fn verify_proof(
         env: Env,
         vk: ZkVerificationKey,
@@ -30,6 +31,14 @@ impl Groth16Verifier {
 
         if pub_signals.len() + 1 != vk.ic.len() {
             return Err(Groth16Error::MalformedVerifyingKey);
+        }
+        // The host reduces scalars mod r, so `s` and `s + r` verify identically. Reject every
+        // non-canonical encoding so one proof has exactly one valid signal vector (callers key
+        // anti-replay guards on the raw signal bytes).
+        for sig in pub_signals.iter() {
+            if !is_canonical_fr(&sig.to_array()) {
+                return Err(Groth16Error::NonCanonicalPublicInput);
+            }
         }
 
         let proof_a = Bn254G1Affine::from_bytes(proof.a);

@@ -24,14 +24,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "application"
-version = "0.2.0"
-dependencies = [
- "soroban-sdk",
- "zk_types",
-]
-
-[[package]]
 name = "arbitrary"
 version = "1.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -284,6 +276,7 @@ dependencies = [
  "groth16_verifier",
  "serde_json",
  "soroban-sdk",
+ "ultrahonk_verifier",
  "zk_types",
 ]
 
@@ -665,6 +658,7 @@ dependencies = [
 name = "groth16_verifier"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "soroban-sdk",
  "zk_types",
 ]
@@ -967,14 +961,6 @@ checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der",
  "spki",
-]
-
-[[package]]
-name = "policy"
-version = "0.2.0"
-dependencies = [
- "soroban-sdk",
- "zk_types",
 ]
 
 [[package]]
@@ -1639,14 +1625,6 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
-
-[[package]]
-name = "verifier"
-version = "0.2.0"
-dependencies = [
- "soroban-sdk",
- "zk_types",
-]
 
 [[package]]
 name = "version_check"

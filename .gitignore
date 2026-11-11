@@ -14,3 +14,14 @@ contracts/*/target/
 **/test_snapshots/
 *.code-workspace
 tmp/
+
+# ZK ceremony intermediates (keep *_final.zkey)
+*.ptau
+*_0000.zkey
+*_0001.zkey
+
+# Evil Player QA reports (generated)
+scripts/evil-player/reports/
+
+# Tooling caches
+.atl/

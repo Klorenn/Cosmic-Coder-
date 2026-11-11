@@ -3,7 +3,7 @@ import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
 import { Keypair } from '@stellar/stellar-base';
-import { generateProof, generateProofV2 } from './zkProve.js';
+import { generateProof, generateProofV2, generateProofV3, hasV3Artifacts } from './zkProve.js';
 import { generateSkillProof } from './skillProof.js';
 import authRoutes from './routes/auth.js';
 import { getServerSecretKey, isSep10Configured, SEP10_NETWORK_PASSPHRASE, SEP10_WEB_AUTH_DOMAIN } from './config/sep10.js';
@@ -259,147 +259,51 @@ app.post('/leaderboard', async (req, res) => {
   res.status(200).json({ success: true, entries: leaderboardEntries.slice(0, 10) });
 });
 
-app.post('/zk/prove', (req, res) => {
-  const { run_hash_hex, score, wave, nonce, season_id, used_zk_weapon } = req.body || {};
+app.post('/zk/prove', async (req, res) => {
+  const { run_hash_hex, score, wave, nonce } = req.body || {};
   if (!run_hash_hex || score == null || wave == null || nonce == null) {
     return res.status(400).json({
       error: 'Missing required fields: run_hash_hex, score, wave, nonce. season_id optional (default 1).'
     });
   }
   try {
-    const payload = generateProof({
-      run_hash_hex,
-      score: Number(score),
-      wave: Number(wave),
-      nonce: Number(nonce),
-      season_id: season_id != null ? Number(season_id) : 1,
-      used_zk_weapon: used_zk_weapon != null ? Number(used_zk_weapon) : 0
-    });
-    res.status(200).json(payload);
+    res.status(200).json(await generateProof(req.body));
   } catch (err) {
     console.error('ZK prove error:', err.message);
-    res.status(500).json({ error: err.message || 'Proof generation failed' });
+    res.status(/must be|invalid/i.test(err.message) ? 400 : 500).json({ error: err.message || 'Proof generation failed' });
   }
 });
 
-// --- ZK Proof V2 (GameRunV2) ---
-app.post('/zk/prove_v2', async (req, res) => {
-  console.log('RAW BODY RECEIVED:', req.body);
-  const {
-    run_hash_hi,
-    run_hash_lo,
-    score,
-    wave,
-    nonce,
-    season_id,
-    challenge_id,
-    player_address,
-    contract_id,
-    domain_separator
-  } = req.body || {};
-
-  const required = ['run_hash_hi', 'run_hash_lo', 'score', 'wave', 'nonce', 'season_id', 'challenge_id', 'player_address', 'contract_id', 'domain_separator'];
-  const missing = required.filter(k => req.body[k] == null);
+// --- ZK Proof V3 (GameRunV3: private seed/kills/events_hash; 7 signals, accepted by submit_zk once its VK is pinned) ---
+const V3_REQUIRED = ['seed', 'kills', 'score', 'wave', 'nonce'];
+app.post('/zk/prove_v3', async (req, res) => {
+  const body = req.body || {};
+  const missing = V3_REQUIRED.filter((k) => body[k] == null);
   if (missing.length) {
-    return res.status(400).json({
-      error: `Missing required fields: ${missing.join(', ')}`,
-      required
-    });
+    return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}`, required: V3_REQUIRED });
   }
-
-  // Bulletproof helper: convert any value to pure decimal string for snarkjs
-  const toDecimalString = (val) => {
-    if (val === undefined || val === null) return "0";
-    let str = val.toString();
-    // If it's a raw hex string without 0x, add it
-    if (/^[0-9a-fA-F]+$/.test(str) && !str.startsWith('0x')) {
-      str = '0x' + str;
-    }
-    return BigInt(str).toString(10); // Forces it into a pure decimal number string
-  };
-
-  // Special handler for Stellar addresses - split hex into 128-bit parts for Circom
-  const stellarAddressTo128BitParts = (hexAddress) => {
-    if (!hexAddress || typeof hexAddress !== 'string') return { hi: '0', lo: '0' };
-    
-    // Remove 0x prefix if present
-    const cleanHex = hexAddress.replace(/^0x/, '');
-    
-    // Convert to BigInt and split into 128-bit parts
-    const val = BigInt('0x' + cleanHex);
-    const hi = (val >> 128n).toString();
-    const lo = (val & ((1n << 128n) - 1n)).toString();
-    
-    return { hi, lo };
-  };
-
-  // Convert hex addresses to BigInt and split into 128-bit parts
-  // FIX: Add 0x prefix for BigInt to parse hex correctly
-  const playerBN = BigInt('0x' + player_address.replace(/^0x/, ''));
-  const player_hi = playerBN >> 128n;
-  const player_lo = playerBN & ((1n << 128n) - 1n);
-  
-  const contractBN = BigInt('0x' + contract_id.replace(/^0x/, ''));
-  const contract_hi = contractBN >> 128n;
-  const contract_lo = contractBN & ((1n << 128n) - 1n);
-
-  // Build input object for GameRunV2 circuit (order must match circuit inputs) with per-field error logging
-  let circuitInput;
+  if (!hasV3Artifacts()) return res.status(503).json({ error: 'GameRunV3 artifacts not built (scripts/zk/build_GameRunV3.sh)' });
   try {
-    circuitInput = {
-      run_hash_hi: toDecimalString(run_hash_hi),
-      run_hash_lo: toDecimalString(run_hash_lo),
-      score: toDecimalString(score),
-      wave: toDecimalString(wave),
-      nonce: toDecimalString(nonce),
-      season_id: toDecimalString(season_id),
-      challenge_id: toDecimalString(challenge_id),
-      player_address_hi: player_hi.toString(),
-      player_address_lo: player_lo.toString(),
-      contract_id_hi: contract_hi.toString(),
-      contract_id_lo: contract_lo.toString(),
-      domain_separator: toDecimalString(domain_separator)
-    };
-  } catch (fieldErr) {
-    // Identify which field failed
-    const fields = ['run_hash_hi', 'run_hash_lo', 'score', 'wave', 'nonce', 'season_id', 'challenge_id', 'player_address', 'contract_id', 'domain_separator'];
-    for (const fieldName of fields) {
-      try {
-        toDecimalString(req.body[fieldName]);
-      } catch (_) {
-        console.error(`FAILED ON FIELD: [${fieldName}], WITH RAW VALUE: [${req.body[fieldName]}]`, fieldErr);
-        break;
-      }
-    }
-    throw fieldErr;
-  }
-
-  // Paths to GameRunV2 artifacts
-  const wasmPath = path.join(__dirname, '../circuits/build/GameRunV2_js/GameRunV2_js/GameRunV2.wasm');
-  const zkeyPath = path.join(__dirname, '../circuits/build/GameRunV2_js/GameRunV2.zkey');
-
-  try {
-    console.log('[ZK V2] Generating proof for:', { score: circuitInput.score, wave: circuitInput.wave, nonce: circuitInput.nonce });
-    const result = generateProofV2({
-      run_hash_hi,
-      run_hash_lo,
-      score,
-      wave,
-      nonce,
-      season_id,
-      challenge_id,
-      player_address_hi: player_hi.toString(),
-      player_address_lo: player_lo.toString(),
-      contract_id_hi: contract_hi.toString(),
-      contract_id_lo: contract_lo.toString(),
-      domain_separator
-    });
-    console.log('[ZK V2] Proof generated successfully');
-    console.log('[ZK V2] Proof keys:', Object.keys(result));
-    res.status(200).json(result);
+    res.status(200).json(await generateProofV3(body));
   } catch (err) {
-    console.error('[ZK V2] Proof generation failed:', err);
-    res.status(500).json({ error: err.message || 'ZK V2 proof generation failed' });
+    console.error('[ZK V3] Proof generation failed:', err.message);
+    res.status(/must be|out of range|required|provable max|score .* < wave|Assert Failed/i.test(err.message) ? 400 : 500).json({ error: err.message || 'ZK V3 proof generation failed' });
+  }
+});
+
+// --- ZK Proof V2 (GameRunV2, 12 public signals; not accepted by cosmic_coder.submit_zk) ---
+const V2_REQUIRED = ['run_hash_hi', 'run_hash_lo', 'score', 'wave', 'nonce', 'season_id', 'challenge_id', 'player_address', 'contract_id', 'domain_separator'];
+app.post('/zk/prove_v2', async (req, res) => {
+  const body = req.body || {};
+  const missing = V2_REQUIRED.filter((k) => body[k] == null);
+  if (missing.length) {
+    return res.status(400).json({ error: `Missing required fields: ${missing.join(', ')}`, required: V2_REQUIRED });
+  }
+  try {
+    res.status(200).json(await generateProofV2(body));
+  } catch (err) {
+    console.error('[ZK V2] Proof generation failed:', err.message);
+    res.status(/must be|invalid|Cannot convert|SyntaxError/i.test(err.message) ? 400 : 500).json({ error: err.message || 'ZK V2 proof generation failed' });
   }
 });
 

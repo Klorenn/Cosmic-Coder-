@@ -5,22 +5,16 @@
  * @see https://github.com/stellar/stellar-protocol/blob/master/ecosystem/sep-0010.md
  */
 
+import { getApiUrl } from '../config/runtime.js';
+
 const STORAGE_KEY = 'cosmicCoderJwt';
 
-/** Default backend when no env is set (e.g. build without .env). */
-const DEFAULT_API_BASE = 'https://cosmic-coder.onrender.com';
-
-/** API base URL: build-time env, then runtime config, then window override, then default. */
+/** API base URL: config.json / env / localhost default (see config/runtime.js); window.VIBE_CODER_API_URL overrides. */
 function getApiBase() {
-  const fromEnv = typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL;
-  if (fromEnv) return String(import.meta.env.VITE_API_URL).replace(/\/$/, '');
-  if (typeof window !== 'undefined' && window.__VITE_CONFIG__?.VITE_API_URL) {
-    return String(window.__VITE_CONFIG__.VITE_API_URL).replace(/\/$/, '');
-  }
   if (typeof window !== 'undefined' && window.VIBE_CODER_API_URL) {
     return String(window.VIBE_CODER_API_URL).replace(/\/$/, '');
   }
-  return DEFAULT_API_BASE;
+  return getApiUrl();
 }
 
 let inMemoryToken = null;
