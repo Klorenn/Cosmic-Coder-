@@ -22,7 +22,7 @@ import { visibleRect, cornerAnchors, cssPerUnit, menuRowSpacing } from './title/
 import { zkStatusLabel, formatVersion, shortWallet } from './title/titleStatus.js';
 import { TITLE_MENU_OPTIONS, menuHintKey, compactNumber } from './title/titleMenu.js';
 import { tr, tt } from './title/titleI18n.js';
-import { createOverlay, overlayMetrics, fitPanelHeight, glassCard, pillButton, dotsLevel, miniBar, keycap, toggle, slider, segmented, medalIcon, skeletonBar, pixelIcon, gemIcon, ovText, fitText, isTouch, colorInt, OV, iconTile, pixelDisc, mixColor, pixelText, pixelPanel, uiIcon, uiSprite, PX, PX_CSS, infoBadge, iconChip } from './title/overlayKit.js';
+import { createOverlay, overlayMetrics, fitPanelHeight, glassCard, pillButton, dotsLevel, miniBar, keycap, toggle, slider, segmented, medalIcon, skeletonBar, pixelIcon, gemIcon, ovText, fitText, isTouch, colorInt, OV, iconTile, pixelDisc, mixColor, pixelText, pixelPanel, uiIcon, uiSprite, PX, PX_CSS, infoBadge, iconChip, hintGap } from './title/overlayKit.js';
 import { startRunModel, cycleStartMode, startCardLayout } from './title/startRunModel.js';
 import { gridLayout, gridMove, wrapIndex, formatCost, canPurchase, upgradeIconKind, characterProfile, zkWeaponState, prepareLeaderboard, leaderboardName, medalTier, nudgeUnit } from './title/overlayModel.js';
 import { getCharacterAbility } from '../data/characters.js';
@@ -3111,14 +3111,14 @@ export default class TitleScene extends Phaser.Scene {
     } else {
       const escCap = keycap(this, 'Esc', { u });
       escCap.setPosition(escCap.w / 2, fh / 2);
-      const backTx = ovText(this, escCap.w + 8 * u, fh / 2, tt('start_back'), { u, size: 13, color: OV.muted }).setOrigin(0, 0.5);
-      backW = escCap.w + 8 * u + backTx.width;
+      const backTx = ovText(this, escCap.w + hintGap(u), fh / 2, tt('start_back'), { u, size: 13, color: OV.muted }).setOrigin(0, 0.5);
+      backW = escCap.w + hintGap(u) + backTx.width;
       const backZone = this.add.zone(backW / 2, fh / 2, Math.max(48 * u, backW), 48 * u).setInteractive({ useHandCursor: true });
       backZone.on('pointerup', () => ov.close());
       ov.footer.add([escCap, backTx, backZone]);
       // Enter hint only when it fits between Back and Play.
       const enterCap = keycap(this, 'Enter', { u });
-      const enterX = fw - playBtn.w - 12 * u - enterCap.w / 2;
+      const enterX = fw - playBtn.w - hintGap(u) - enterCap.w / 2;
       if (enterX - enterCap.w / 2 > backW + 16 * u) {
         enterCap.setPosition(enterX, fh / 2);
         ov.footer.add(enterCap);
@@ -3893,8 +3893,8 @@ export default class TitleScene extends Phaser.Scene {
       buy.setLabel(maxed ? { text: tt('maxed') } : { text: `${tt('buy')}  ${formatCost(cost)}`, gem: true });
       buy.setEnabled(afford);
       buy.container.setX(fw - buy.w / 2);
-      if (enterCap) enterCap.setPosition(fw - buy.w - 12 * u - enterCap.w / 2, fh / 2).setAlpha(afford ? 1 : 0.35);
-      const textMax = fw - buy.w - (enterCap ? enterCap.w + 28 * u : 16 * u);
+      if (enterCap) enterCap.setPosition(fw - buy.w - hintGap(u) - enterCap.w / 2, fh / 2).setAlpha(afford ? 1 : 0.6);
+      const textMax = fw - buy.w - (enterCap ? enterCap.w + hintGap(u) + 16 * u : 16 * u);
       detailName.setText(t('upgrade_names.' + key)); fitText(detailName, textMax);
       detailDesc.setText(t('upgrade_descs.' + key)); fitText(detailDesc, textMax);
       bits.set(compactNumber(U.currency));
@@ -4160,12 +4160,12 @@ export default class TitleScene extends Phaser.Scene {
         actionBtn.setLabel(a.label); actionBtn.setPrimary(a.primary); actionBtn.setEnabled(a.enabled);
         actionBtn.container.setX(fw - actionBtn.w / 2);
       }
-      if (enterCap) enterCap.setVisible(!!a).setPosition(fw - actionBtn.w - 12 * u - enterCap.w / 2, fh / 2);
+      if (enterCap) enterCap.setVisible(!!a).setPosition(fw - actionBtn.w - hintGap(u) - enterCap.w / 2, fh / 2);
       if (!it) { detailName.setText(''); detailLine.setText(''); return; }
       const mini = pixelDisc(this, 0, 0, 20 * u, { u, line: it.locked ? PX.slate : it.color, fill: it.locked ? PX.night : mixColor(it.color, PX.night, 0.22) });
       fIcon.add(mini);
       buildIcon(fIcon, it, 24 * u);
-      const textMax = fw - 54 * u - (a ? actionBtn.w + (enterCap ? enterCap.w + 28 * u : 16 * u) : 0);
+      const textMax = fw - 54 * u - (a ? actionBtn.w + (enterCap ? enterCap.w + hintGap(u) + 16 * u : 16 * u) : 0);
       detailName.setText(it.name + (it.tag ? `  ` : '')); fitText(detailName, textMax);
       detailLine.setText(it.tag ? `${it.tag}. ${it.line}` : it.line); fitText(detailLine, textMax);
       detailName.setColor(it.locked ? OV.muted : OV.text);
@@ -4363,12 +4363,14 @@ export default class TitleScene extends Phaser.Scene {
     arrowL.container.setPosition(arrowL.w / 2, fh / 2);
     arrowR.container.setPosition(arrowL.w + 8 * u + arrowR.w / 2, fh / 2);
     const selectBtn = pillButton(this, tt('select'), () => commit(), { u, primary: true, minW: 120 });
-    const loreBtn = pillButton(this, { icon: 'book' }, () => showLore(), { u, round: true });
+    const loreBtn = pillButton(this, { icon: 'book', text: tt('story') }, () => showLore(), { u });
     const enterCap = touch ? null : keycap(this, 'Enter', { u });
+    const loreCap = touch ? null : keycap(this, 'L', { u });
     const descX = arrowL.w + arrowR.w + 24 * u;
     const abilityLine = ovText(this, descX, fh / 2, '', { u, size: 13, color: OV.muted, wrap: 10, maxLines: 2 }).setOrigin(0, 0.5);
     ov.footer.add([arrowL.container, arrowR.container, abilityLine, loreBtn.container, selectBtn.container]);
     if (enterCap) ov.footer.add(enterCap);
+    if (loreCap) ov.footer.add(loreCap);
 
     const refresh = () => {
       const active = current();
@@ -4383,13 +4385,19 @@ export default class TitleScene extends Phaser.Scene {
       selectBtn.setPrimary(!isActive);
       selectBtn.setEnabled(!isActive && !busy);
       selectBtn.container.setPosition(fw - selectBtn.w / 2, fh / 2);
-      loreBtn.container.setPosition(fw - selectBtn.w - 10 * u - loreBtn.w / 2, fh / 2);
-      let right = fw - selectBtn.w - loreBtn.w - 20 * u;
+      // Layout right to left: [Enter] Select | [L] Story; every hint sits 6 art px left of its button, same centre y.
+      const hg = hintGap(u);
+      let right = fw - selectBtn.w;
       if (enterCap) {
         enterCap.setVisible(!isActive);
-        enterCap.setPosition(right - 10 * u - enterCap.w / 2, fh / 2);
-        if (!isActive) right -= enterCap.w + 14 * u;
+        enterCap.setPosition(right - hg - enterCap.w / 2, fh / 2);
+        if (!isActive) right -= enterCap.w + hg;
       }
+      right -= 14 * u;
+      loreBtn.container.setPosition(right - loreBtn.w / 2, fh / 2);
+      right -= loreBtn.w;
+      if (loreCap) { loreCap.setPosition(right - hg - loreCap.w / 2, fh / 2); right -= loreCap.w + hg; }
+      right -= 8 * u;
       const ab = cards[sel].ability;
       abilityLine.setWordWrapWidth(Math.max(40 * u, right - descX - 12 * u), true);
       abilityLine.setText(tr(ab.desc_key));

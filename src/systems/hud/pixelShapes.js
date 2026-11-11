@@ -113,6 +113,67 @@ export function drawPixelDisc(g, cx, cy, { r, P = 2, fill, light = null, dark = 
   });
 }
 
+const squareCache = new Map();
+
+/**
+ * Cells of a 1 px square frame spanning [-half, half) on both axes, walked clockwise from top-centre,
+ * each tagged with its segment (0..segments-1). Used as the duration ring of square item icons.
+ * @returns {{x:number,y:number,seg:number}[]}
+ */
+export function squareRingCells(half, segments = 12) {
+  const h = Math.max(1, Math.round(half));
+  const N = Math.max(1, Math.round(segments));
+  const key = `${h}|${N}`;
+  if (squareCache.has(key)) return squareCache.get(key);
+  const pts = [];
+  for (let x = 0; x < h; x++) pts.push([x, -h]); // top, right half
+  for (let y = -h + 1; y < h; y++) pts.push([h - 1, y]); // right side, down
+  for (let x = h - 2; x >= -h; x--) pts.push([x, h - 1]); // bottom, leftwards
+  for (let y = h - 2; y >= -h; y--) pts.push([-h, y]); // left side, up
+  for (let x = -h + 1; x < 0; x++) pts.push([x, -h]); // top, left half
+  const n = pts.length;
+  const out = pts.map(([x, y], i) => ({ x, y, seg: Math.min(N - 1, Math.floor((i / n) * N)) }));
+  squareCache.set(key, out);
+  return out;
+}
+
+/** Draw a segmented 1 px square frame centred on (cx, cy) (logical). off = unlit colour (null = skip). */
+export function drawSquareRing(g, cx, cy, { half, segments = 12, filled = 0, P = 2, on = 0xffffff, off = null, alpha = 1 }) {
+  for (const c of squareRingCells(half, segments)) {
+    const lit = c.seg < filled;
+    if (!lit && off == null) continue;
+    g.fillStyle(lit ? on : off, alpha);
+    g.fillRect(cx + c.x * P, cy + c.y * P, P, P);
+  }
+}
+
+/** 8x8 pixel star (score icon): '#' = fill, '+' = light, '-' = shade. */
+export const STAR8 = Object.freeze([
+  '...++...',
+  '...+#...',
+  '++++##++',
+  '.+####-.',
+  '..####..',
+  '.##--##.',
+  '.#-..-#.',
+  '#-....-#'
+]);
+
+/** Draw STAR8 with its top-left at (x, y) (logical), art pixel P. Runs per row keep fillRect calls low. */
+export function drawPixelStar(g, x, y, { P = 2, fill, light = fill, dark = fill, alpha = 1 }) {
+  const col = { '#': fill, '+': light, '-': dark };
+  STAR8.forEach((row, j) => {
+    let i = 0;
+    while (i < row.length) {
+      const ch = row[i];
+      let n = 1;
+      while (i + n < row.length && row[i + n] === ch) n++;
+      if (col[ch] != null) { g.fillStyle(col[ch], alpha); g.fillRect(x + i * P, y + j * P, n * P, P); }
+      i += n;
+    }
+  });
+}
+
 /**
  * Alpha steps for a retro fade (no smooth tween): [1, 0.75, 0.5, 0.25, 0] by default.
  */
@@ -121,4 +182,4 @@ export function fadeSteps(n = 4) {
   return Array.from({ length: k + 1 }, (_, i) => Math.round((1 - i / k) * 1000) / 1000);
 }
 
-export default { artPxFor, snapPx, stepsFilled, ringCells, ringRuns, drawSegRing, discRows, drawPixelDisc, fadeSteps };
+export default { artPxFor, snapPx, stepsFilled, ringCells, ringRuns, drawSegRing, discRows, drawPixelDisc, drawPixelStar, STAR8, squareRingCells, drawSquareRing, fadeSteps };

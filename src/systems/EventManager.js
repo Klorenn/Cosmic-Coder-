@@ -200,7 +200,7 @@ export default class EventManager {
     // Show announcement
     const P = this.hudPx();
     const bossText = pixelText(this.scene, Math.round(this.viewSize().w / 2), Math.round(this.viewSize().h * 0.28),
-      'EVENT BOSS SPAWNED!', { size: 8 * 2 * P, color: PX.red, align: 'center' })
+      'EVENT BOSS SPAWNED!', { size: 8 * P, color: PX.red, align: 'center' })
       .setOrigin(0.5).setScrollFactor(0).setDepth(1000);
 
     this.scene.tweens.add({
@@ -225,12 +225,12 @@ export default class EventManager {
     const P = this.hudPx();
     const snap = (v) => Math.round(v / P) * P;
     const color = typeof event.color === 'number' ? event.color : PX.violet;
-    const title = pixelText(scene, 0, 5 * P, String(event.name || '').toUpperCase(), { size: 8 * P, color, align: 'center' }).setOrigin(0.5, 0);
-    const w = Math.max(120 * P, snap((Number(title.width) || 0) + 20 * P));
+    const title = pixelText(scene, 0, 4 * P, String(event.name || '').toUpperCase(), { size: 8 * P, color, align: 'center' }).setOrigin(0.5, 0);
+    const w = Math.max(80 * P, snap((Number(title.width) || 0) + 16 * P));
     const barW = w - 12 * P;
-    const h = 5 * P + 8 * P + 4 * P + 2 * P + 5 * P;
+    const h = 4 * P + 8 * P + 3 * P + 2 * P + 4 * P;
     const panel = pixelPanel(scene, -w / 2, 0, w, h, 'panel-accent', { px: P });
-    const barY = 5 * P + 8 * P + 4 * P;
+    const barY = 4 * P + 8 * P + 3 * P;
     const timerBg = scene.add.rectangle(-barW / 2, barY, barW, 2 * P, PX.ink, 1).setOrigin(0, 0);
     this.eventTimerBar = scene.add.rectangle(-barW / 2, barY, barW, 2 * P, color, 1).setOrigin(0, 0);
 

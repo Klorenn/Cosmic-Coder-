@@ -1,11 +1,12 @@
-import { BIOMES, HAZARD_DEFS, OBSTACLE_DEFS, LAYOUT_RULES } from '../data/biomes.js';
+import { BIOMES, HAZARD_DEFS, OBSTACLE_DEFS, LAYOUT_RULES, ZONE_STYLE, PORTAL_PAIR_SIDES } from '../data/biomes.js';
 import { createSpaceBackground } from './spaceBackground.js';
 import {
   borderKey, obstacleKey, hazardKey, hazardAnimKey, zoneKey, zoneAnimKey, CRATE_KEY, ensureBiomeAnims,
-  portalKey, portalAnimKey
+  portalKey, portalAnimKey, zoneIconKey, zoneIconAnimKey
 } from '../scenes/boot/biomeAssets.js';
+import { t } from '../utils/i18n.js';
 
-/** Portal pair colours (ui/gameover-items-portals-v2): side A cyan, side B magenta. */
+/** Portal colours (ui/gameover-items-portals-v2) by texture side: one colour per pair (pair 0 cyan, pair 1 magenta). */
 export const PORTAL_COLORS = Object.freeze({ a: 0x22d3ee, b: 0xe879f9 });
 const GLOW_KEY = 'fx-glow';
 const ADD_BLEND = 1; // Phaser.BlendModes.ADD
@@ -164,6 +165,23 @@ export function layoutBiome(seed, biome, w, h, options = {}) {
     if (i >= 0) placed.splice(i, 1);
   };
 
+  // 0. mechanic zones first (few, small landmarks; teleport mechanic needs complete pairs), so they always fit
+  const m = biome.mechanic;
+  const zr = rules.zones || LAYOUT_RULES.zones;
+  if (m && m.zoneCount > 0) {
+    const n = Math.max(zr.min, Math.min(zr.max, Math.round(m.zoneCount)));
+    const radius = m.type === 'teleport' ? m.zoneRadius : Math.max(zr.radiusMin, Math.min(zr.radiusMax, finiteOr(m.zoneRadius, zr.radiusMax)));
+    const zoneEntries = [];
+    for (let i = 0; i < n; i++) {
+      const p = tryPlace(radius, null, 80);
+      if (p) { zoneEntries.push(p); out.zones.push({ x: p.x, y: p.y, radius }); }
+    }
+    if (m.type === 'teleport' && out.zones.length % 2 === 1) {
+      out.zones.pop();
+      unplace(zoneEntries.pop());
+    }
+  }
+
   // 1. walls (tile-aligned sizes so the wall texture repeats cleanly)
   for (let i = 0; i < count(counts.walls); i++) {
     const ww = between(2, 4) * WALL_TILE;
@@ -188,20 +206,6 @@ export function layoutBiome(seed, biome, w, h, options = {}) {
       out.teleporters.push({ x: b.x, y: b.y, radius: TELEPORTER_RADIUS, pair: i, quadrant: qb });
     } else if (a) {
       unplace(a);
-    }
-  }
-
-  // 3. mechanic zones (teleport mechanic needs complete pairs)
-  const m = biome.mechanic;
-  if (m && m.zoneCount > 0) {
-    const zoneEntries = [];
-    for (let i = 0; i < m.zoneCount; i++) {
-      const p = tryPlace(m.zoneRadius);
-      if (p) { zoneEntries.push(p); out.zones.push({ x: p.x, y: p.y, radius: m.zoneRadius }); }
-    }
-    if (m.type === 'teleport' && out.zones.length % 2 === 1) {
-      out.zones.pop();
-      unplace(zoneEntries.pop());
     }
   }
 
@@ -271,6 +275,14 @@ export default class MapManager {
     // Biome mechanic zones ({x, y, radius}) + their visuals
     this.mechanicZones = [];
     this.mechanicVisuals = [];
+    // Readability: per-zone visuals ({disc, icon}), the wind/gravity indicator next to the player,
+    // the zone type the player stands in (tint) and the types already announced this run.
+    this.zoneVisuals = [];
+    this.globalIndicator = null;
+    this.zoneInside = null;
+    this.zoneTint = null;
+    this.seenZoneTypes = new Set();
+    this.portalPairCount = 0;
 
     // Teleporter pairs (for connecting distant areas)
     this.teleporterPairs = [];
@@ -360,13 +372,15 @@ export default class MapManager {
     const player = this.scene.player;
     const spawn = options.spawn || (player && Number.isFinite(player.x) ? { x: player.x, y: player.y } : { x: worldWidth / 2, y: worldHeight / 2 });
     this.layoutSeed = Number.isFinite(options.seed) ? options.seed >>> 0 : (Math.random() * 0x100000000) >>> 0;
-    this.layout = layoutBiome(this.layoutSeed, biome, worldWidth, worldHeight, { stage, spawn });
+    const teleporterPairs = biome.mechanic && biome.mechanic.type === 'teleport' ? LAYOUT_RULES.teleporterPairsTeleportBiome : LAYOUT_RULES.teleporterPairs;
+    this.layout = layoutBiome(this.layoutSeed, biome, worldWidth, worldHeight, { stage, spawn, teleporterPairs });
 
     this.createBiomeBackground(biome, options);
     this.layout.walls.forEach((w) => this.createWall(w, biome));
     this.layout.obstacles.forEach((o) => this.createFurniture(o, biome));
     this.layout.hazards.forEach((hz) => this.createHazard(hz));
     this.layout.crates.forEach((c) => this.createDestructible(c));
+    this.portalPairCount = 0;
     for (let i = 0; i + 1 < this.layout.teleporters.length; i += 2) {
       this.createTeleporterPair(this.layout.teleporters[i], this.layout.teleporters[i + 1]);
     }
@@ -535,48 +549,93 @@ export default class MapManager {
     return furniture;
   }
 
-  /** Visuals for the biome mechanic zones (positions come from the layout). */
+  /**
+   * Visuals for the biome mechanic zones (positions come from the layout): a dotted pixel disc in the
+   * effect colour + a 16x16 icon saying what it does (docs/MAPS.md). Teleport zones are portal pairs
+   * (one colour per pair, A/B letters). Wind / gravity are global: an icon next to the player shows the
+   * push direction, gravity also marks its centre.
+   */
   createMechanicZones(biome, zones) {
     const m = biome.mechanic;
-    if (!m || !zones || !zones.length) return;
+    if (!m) return;
+    if (m.type === 'wind' || m.type === 'gravity') {
+      this.createGlobalIndicator(m);
+      return;
+    }
+    if (!zones || !zones.length) return;
     const key = zoneKey(m.type);
     const useSprite = this.hasTexture(key);
+    const iconKey = zoneIconKey(m.type);
     zones.forEach((z, i) => {
       this.mechanicZones.push({ x: z.x, y: z.y, radius: z.radius });
-      // Teleport zones pair up as (0,1), (2,3)...: even = side A, odd = side B.
+      // Teleport zones pair up as (0,1), (2,3)...: one colour per pair, letter A on even, B on odd.
       if (m.type === 'teleport' && this.hasTexture(portalKey('a'))) {
-        const side = i % 2 === 0 ? 'a' : 'b';
-        const portal = this.createPortalVisual(z.x, z.y, z.radius, side);
+        if (i % 2 === 0) this.portalPairCount++;
+        const side = this.pairSide(this.portalPairCount - 1);
+        const portal = this.createPortalVisual(z.x, z.y, z.radius, side, i % 2 === 0 ? 'A' : 'B');
         portal.setDepth(DEPTH.zone);
         this.mechanicVisuals.push(portal);
         return;
       }
-      let visual;
+      let disc;
       if (useSprite) {
-        visual = this.scene.add.sprite(z.x, z.y, key).setDisplaySize(z.radius * 2, z.radius * 2).setAlpha(0.85);
+        disc = this.scene.add.sprite(z.x, z.y, key).setDisplaySize(z.radius * 2, z.radius * 2);
         const anim = zoneAnimKey(m.type);
-        if (this.scene.anims && this.scene.anims.exists(anim)) visual.play(anim);
+        if (m.type !== 'pulseDamage' && this.scene.anims && this.scene.anims.exists(anim)) disc.play(anim);
       } else {
-        visual = this.scene.add.circle(z.x, z.y, z.radius, m.color, 0.12);
-        visual.setStrokeStyle(2, m.color, 0.5);
-        this.addTrackedTween({
-          targets: visual,
-          alpha: { from: 0.08, to: 0.22 },
-          duration: m.type === 'pulseDamage' ? m.activeMs : 1200,
-          yoyo: true,
-          repeat: -1,
-          ease: 'Sine.easeInOut'
-        });
+        disc = this.scene.add.circle(z.x, z.y, z.radius, m.color, 0.14);
+        disc.setStrokeStyle(2, m.color, 0.8);
       }
-      visual.setDepth(DEPTH.zone);
-      this.mechanicVisuals.push(visual);
+      disc.setDepth(DEPTH.zone);
+      this.mechanicVisuals.push(disc);
+      const icon = this.createZoneIcon(z.x, z.y, m.type, iconKey);
+      this.zoneVisuals.push({ disc, icon, type: m.type, frame: -1 });
     });
+  }
+
+  /** 16x16 pixel icon at 4x (falls back to nothing: the disc colour still reads). */
+  createZoneIcon(x, y, type, key = zoneIconKey(type)) {
+    if (!this.hasTexture(key)) return null;
+    const icon = this.scene.add.sprite(x, y, key).setScale(4).setDepth(DEPTH.zone + 0.2);
+    const anim = zoneIconAnimKey(type);
+    if (type !== 'pulseDamage' && this.scene.anims && this.scene.anims.exists(anim)) icon.play(anim);
+    this.mechanicVisuals.push(icon);
+    return icon;
+  }
+
+  /** Portal texture side for the n-th pair on this map (both ends share it). */
+  pairSide(n) {
+    return PORTAL_PAIR_SIDES[Math.max(0, n) % PORTAL_PAIR_SIDES.length];
+  }
+
+  /** Wind / gravity: small icon beside the player pointing where it pushes; gravity marks its centre. */
+  createGlobalIndicator(m) {
+    const key = zoneIconKey(m.type);
+    if (m.type === 'gravity') {
+      const cx = this.scene.worldWidth / 2;
+      const cy = this.scene.worldHeight / 2;
+      const r = LAYOUT_RULES.zones.radiusMax;
+      const discKey = zoneKey('gravity');
+      const disc = this.hasTexture(discKey)
+        ? this.scene.add.sprite(cx, cy, discKey).setDisplaySize(r * 2, r * 2)
+        : this.scene.add.circle(cx, cy, r, m.color, 0.14).setStrokeStyle(2, m.color, 0.8);
+      if (disc.play && this.scene.anims && this.scene.anims.exists(zoneAnimKey('gravity'))) disc.play(zoneAnimKey('gravity'));
+      disc.setDepth(DEPTH.zone);
+      this.mechanicVisuals.push(disc);
+      this.createZoneIcon(cx, cy, 'gravity');
+    }
+    if (!this.hasTexture(key)) return;
+    const ind = this.scene.add.sprite(0, 0, key).setScale(3).setDepth(1).setAlpha(0.9).setVisible(false);
+    const anim = zoneIconAnimKey(m.type);
+    if (this.scene.anims && this.scene.anims.exists(anim)) ind.play(anim);
+    this.globalIndicator = ind;
+    this.mechanicVisuals.push(ind);
   }
 
   /** Evaluate the current biome mechanic for the player. */
   getBiomeEffect(stage, player, time, delta, lastTeleport) {
     const biome = this.biomes[stage] || this.biomes[0];
-    return biomeEffect(biome, {
+    const effect = biomeEffect(biome, {
       x: player.x,
       y: player.y,
       worldWidth: this.scene.worldWidth,
@@ -585,6 +644,77 @@ export default class MapManager {
       lastTeleport,
       zones: this.mechanicZones
     }, delta);
+    this.updateZoneFeedback(biome, player, time, effect);
+    return effect;
+  }
+
+  /**
+   * Per-frame readability feedback (cheap: a few property writes):
+   * - pulseDamage discs/icons switch to their red frames while the pulse hurts;
+   * - wind/gravity indicator sits beside the player, rotated to the push;
+   * - the player gets a light tint while inside a zone (restored on exit, never over another tint);
+   * - the first time each zone type is felt this run, a 1-2 word pixel label floats over the player.
+   */
+  updateZoneFeedback(biome, player, time, effect) {
+    const m = biome && biome.mechanic;
+    if (!m || !player) return;
+    const now = finiteOr(time, 0);
+    if (m.type === 'pulseDamage' && this.zoneVisuals.length) {
+      const active = (now % m.periodMs) < m.activeMs;
+      const frame = active ? 2 + (Math.floor(now / 160) % 2) : Math.floor(now / 500) % 2;
+      for (const v of this.zoneVisuals) {
+        if (v.frame === frame) continue;
+        v.frame = frame;
+        if (v.disc && v.disc.setFrame) v.disc.setFrame(frame);
+        if (v.icon && v.icon.setFrame) v.icon.setFrame(frame);
+      }
+    }
+    let inside = null;
+    if (m.type === 'wind' || m.type === 'gravity') {
+      const mag = Math.hypot(effect.pushX, effect.pushY);
+      if (mag > 1) inside = m.type;
+      const ind = this.globalIndicator;
+      if (ind) {
+        ind.setVisible(mag > 1);
+        if (mag > 1) {
+          const ang = Math.atan2(effect.pushY, effect.pushX);
+          ind.setPosition(Math.round(player.x + Math.cos(ang) * 44), Math.round(player.y + Math.sin(ang) * 44));
+          if (m.type === 'wind') ind.setRotation(ang);
+        }
+      }
+    } else if (zoneIndexAt(this.mechanicZones, player.x, player.y) >= 0) {
+      inside = m.type;
+    }
+    this.setZoneTint(player, inside ? (ZONE_STYLE[inside] || {}).tint : null);
+    if (inside !== this.zoneInside) {
+      this.zoneInside = inside;
+      if (inside) this.announceZone(inside, player);
+    }
+  }
+
+  /** Light tint on the player while inside a zone; only clears a tint this manager set. */
+  setZoneTint(player, tint) {
+    if (!player || typeof player.setTint !== 'function') return;
+    if (tint) {
+      if (this.zoneTint === tint && player.isTinted) return;
+      if (player.isTinted && this.zoneTint == null) return; // someone else's tint (sudo, shrine): leave it
+      player.setTint(tint);
+      this.zoneTint = tint;
+    } else if (this.zoneTint != null) {
+      if (player.tintTopLeft === this.zoneTint && typeof player.clearTint === 'function') player.clearTint();
+      this.zoneTint = null;
+    }
+  }
+
+  /** First entry into a zone type this run: floating pixel label + 'zone:enter' event (every entry). */
+  announceZone(type, player) {
+    const scene = this.scene;
+    if (scene.events && typeof scene.events.emit === 'function') scene.events.emit('zone:enter', { type });
+    if (this.seenZoneTypes.has(type)) return;
+    this.seenZoneTypes.add(type);
+    const style = ZONE_STYLE[type];
+    if (!style || typeof scene.floatText !== 'function') return;
+    scene.floatText(player.x, player.y - 56, t(style.label), style.css, { size: 16, duration: 1200, rise: 22 });
   }
 
   /** Hazard zone (damages player and enemies). */
@@ -641,8 +771,10 @@ export default class MapManager {
 
   /** Linked teleporter pair at two layout pads. */
   createTeleporterPair(padA, padB) {
-    const teleA = this.createTeleporter(padA.x, padA.y, PORTAL_COLORS.a);
-    const teleB = this.createTeleporter(padB.x, padB.y, PORTAL_COLORS.b);
+    // Both ends share the pair colour; letters A/B mark the two ends.
+    const side = this.pairSide(this.portalPairCount++);
+    const teleA = this.createTeleporter(padA.x, padA.y, PORTAL_COLORS[side], 'A');
+    const teleB = this.createTeleporter(padB.x, padB.y, PORTAL_COLORS[side], 'B');
     teleA.linkedTeleporter = teleB;
     teleB.linkedTeleporter = teleA;
     this.teleporterPairs.push({ a: teleA, b: teleB });
@@ -652,7 +784,7 @@ export default class MapManager {
    * Animated portal: soft tinted glow + 8-frame energy ring + drifting sparks.
    * Returns a container (world space); sparks live in this.decor so clearMap() removes them.
    */
-  createPortalVisual(x, y, radius, side = 'a') {
+  createPortalVisual(x, y, radius, side = 'a', letter = null) {
     const color = PORTAL_COLORS[side] || PORTAL_COLORS.a;
     const parts = [];
     const size = radius * 2;
@@ -672,6 +804,11 @@ export default class MapManager {
       const outer = this.scene.add.circle(0, 0, radius, 0x0b1020, 0.6);
       outer.setStrokeStyle(3, color, 0.9);
       parts.push(outer);
+    }
+    // Pixel A/B letter (zone-icon-teleport frames 0/1) so the two ends of a pair read as a pair.
+    const letterKey = zoneIconKey('teleport');
+    if (letter && this.hasTexture(letterKey)) {
+      parts.push(this.scene.add.sprite(0, 0, letterKey, letter === 'B' ? 1 : 0).setScale(2));
     }
     const container = this.scene.add.container(x, y, parts);
 
@@ -704,10 +841,10 @@ export default class MapManager {
   }
 
   /** Single teleporter pad (animated portal; pair colour comes from createTeleporterPair). */
-  createTeleporter(x, y, color) {
+  createTeleporter(x, y, color, letter = null) {
     const radius = 38;
     const side = color === PORTAL_COLORS.b || color === 0xff00ff ? 'b' : 'a';
-    const container = this.createPortalVisual(x, y, radius, side);
+    const container = this.createPortalVisual(x, y, radius, side, letter);
     container.setDepth(DEPTH.zone);
     container.teleporterX = x;
     container.teleporterY = y;
@@ -998,6 +1135,12 @@ export default class MapManager {
     }
     this.mechanicVisuals = [];
     this.mechanicZones = [];
+    this.zoneVisuals = [];
+    this.globalIndicator = null;
+    this.zoneInside = null;
+    const player = this.scene && this.scene.player;
+    if (player) this.setZoneTint(player, null);
+    this.zoneTint = null;
   }
 
   /**

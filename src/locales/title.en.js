@@ -27,6 +27,7 @@ export default {
     zk_soon: 'On-chain unlock is coming soon',
     select: 'Select',
     selected: 'Selected',
+    story: 'Story',
     role_sustain: 'Sustain',
     role_burst: 'Burst',
     role_agile: 'Agile',

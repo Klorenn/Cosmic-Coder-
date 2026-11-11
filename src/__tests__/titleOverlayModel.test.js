@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   overlayFrame, overlayChromeH, gridLayout, gridMove, clampScroll, scrollToReveal, formatCost, levelDots,
-  upgradeIconKind, PIXEL_ICONS, pixelIconCells, characterProfile, zkWeaponState, canPurchase, wrapIndex
+  upgradeIconKind, keycapMetrics, PIXEL_ICONS, pixelIconCells, characterProfile, zkWeaponState, canPurchase, wrapIndex
 } from '../scenes/title/overlayModel.js';
 
 describe('overlayFrame', () => {
@@ -173,5 +173,20 @@ describe('zkWeaponState', () => {
     expect(zkWeaponState({ unlocked: false, gamesPlayed: 1, score: 0, threshold: 100 })).toEqual({ state: 'play_more', remaining: 2 });
     expect(zkWeaponState({ unlocked: false, gamesPlayed: 3, score: 50, threshold: 100 })).toEqual({ state: 'score_low', need: 100 });
     expect(zkWeaponState({ unlocked: false, gamesPlayed: 5, score: 150, threshold: 100 })).toEqual({ state: 'unlockable' });
+  });
+});
+
+describe('keycapMetrics', () => {
+  it('width is text + 2 * padding (>= 4 art px) at a fixed 14 art px height', () => {
+    const m = keycapMetrics(25);
+    expect(m.w).toBeGreaterThanOrEqual(25 + 8);
+    expect(m.h).toBe(14);
+  });
+  it('never pads below 4 art px, even if asked', () => {
+    expect(keycapMetrics(10, { pad: 1 }).w).toBe(18);
+  });
+  it('respects a minimum width for one-letter caps', () => {
+    expect(keycapMetrics(5, { minW: 12 }).w).toBe(13);
+    expect(keycapMetrics(1, { minW: 12 }).w).toBe(12);
   });
 });

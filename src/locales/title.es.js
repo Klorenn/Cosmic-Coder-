@@ -26,6 +26,7 @@ export default {
     zk_soon: 'El desbloqueo on-chain llega pronto',
     select: 'Elegir',
     selected: 'Elegido',
+    story: 'Historia',
     role_sustain: 'Aguante',
     role_burst: 'Ráfaga',
     role_agile: 'Ágil',

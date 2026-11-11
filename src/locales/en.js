@@ -467,6 +467,14 @@ export default {
       blink: 'REROUTE'
     }
   },
+  zones: {
+    boost: 'SPEED UP',
+    slow: 'SLOW',
+    damage: 'DAMAGE',
+    wind: 'WIND',
+    gravity: 'GRAVITY',
+    teleport: 'TELEPORT'
+  },
   items: {
     health_patch: 'HEALTH PATCH',
     cache_hit: 'CACHE HIT',

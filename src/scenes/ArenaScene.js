@@ -11,7 +11,7 @@ import { computeHudLayout, BUFF_SLOTS } from '../systems/hud/hudLayout.js';
 import { computeGameOverLayout } from '../systems/hud/gameOverLayout.js';
 import { buildHudModel, abilityChipModel, LOW_HP_PCT } from '../systems/hud/hudModel.js';
 import { routeObjectsToCameras } from '../systems/hud/cameraRouting.js';
-import { snapPx, stepsFilled, drawSegRing, drawPixelDisc, fadeSteps } from '../systems/hud/pixelShapes.js';
+import { snapPx, stepsFilled, drawSegRing, drawPixelDisc, drawPixelStar, drawSquareRing, fadeSteps } from '../systems/hud/pixelShapes.js';
 import { pixelText, pixelPanel, uiIcon, uiSprite, ditherFill, pixelDivider, progressFillSkin, tileSkin, buttonSkin, PX, PX_CSS } from './boot/uiAssets.js';
 import { mixColor, pixelDisc } from './title/overlayKit.js';
 import { createQualityState, stepQuality, QUALITY_LEVELS } from '../systems/hud/qualityGovernor.js';
@@ -58,6 +58,7 @@ import {
 import { cloneStages } from '../data/stages.js';
 import { XP_PICKUP_RADIUS, createGemState, dropGem, tickGems, mergeIfOverflow } from '../systems/xpGems.js';
 import { ITEMS, ITEM_LIFETIME_MS } from '../data/items.js';
+import { facingFromVelocity } from '../systems/playerFacing.js';
 import {
   createItemState, rollDrop, applyItem, tickEffects, getItemModifiers,
   absorbDamage, consumeRevive, drainActions, getEnemyTier
@@ -1011,7 +1012,7 @@ export default class ArenaScene extends Phaser.Scene {
 
     // Stage name for 2 s, then gone: it is not pinned to the HUD.
     const stageName = stage.stageKey ? t('stages.' + stage.stageKey) : stage.name;
-    this.showHudBanner(stageName, { color: HUD.cyan, duration: 2000 });
+    this.showHudBanner(stageName, { color: HUD.cyan, duration: 2000, big: true });
   }
 
   createPlayer() {
@@ -1073,11 +1074,8 @@ export default class ArenaScene extends Phaser.Scene {
     this.barkDuration = 2800;
     this.barkTimer = null;
 
-    // Auto-move indicator (shows current mode)
-    this.autoMoveIndicator = this.add.text(0, 0, '⚔️', {
-      fontFamily: '"Segoe UI", system-ui, sans-serif',
-      fontSize: '14px'
-    }).setOrigin(0.5).setDepth(1001).setVisible(false);
+    // Autopilot mode is shown by the HUD mode dot (no floating emoji over the player).
+    this.autoMoveIndicator = null;
     this.autoPlayMode = 'hunt';
 
     // Mode-specific quotes
@@ -1517,30 +1515,30 @@ export default class ArenaScene extends Phaser.Scene {
     return pixelText(this, x, y, String(str ?? ''), { size: 8 * scale * P, color, shadow, align, maxWidth });
   }
 
-  /** (Re)creates every HUD game object inside hudContainer for the current viewport (pixel HUD v3). */
+  /** (Re)creates every HUD game object inside hudContainer for the current viewport (pixel HUD v4, scaled by viewport). */
   buildHudWidgets() {
     const display = getDisplaySize(this);
-    const L = computeHudLayout({ w: this.scale.width, h: this.scale.height, displayW: display.width, displayH: display.height });
+    const L = computeHudLayout({
+      w: this.scale.width, h: this.scale.height, displayW: display.width, displayH: display.height, touch: !!this.touchControls?.enabled
+    });
     this.hudLayout = L;
     const P = L.px;
-    const S = (v) => snapPx(v, P);
     const add = (o) => { this.hudContainer.add(o); return o; };
     const txt = (x, y, str, opts = {}) => add(this.pxText(x, y, str, { P, ...opts }));
     const { vitals } = L;
-    const hp = this.hudPx = {}; // pixel geometry (logical, snapped) shared with updateHUD
+    const X = this.hudPx = {}; // pixel geometry (logical, on the art grid) shared with updateHUD
 
-    // ---- vitals: dark pixel panel, portrait in a well, HP bar, XP bar + level chip, mode dot
-    const v = { x: S(vitals.x), y: S(vitals.y), w: S(vitals.w), h: S(vitals.h) };
-    add(pixelPanel(this, v.x, v.y, v.w, v.h, v.h / P >= 26 ? 'panel-dark' : 'chip', { px: P }));
-    const pd = S(vitals.portrait.r * 2);
-    const pw = { x: S(vitals.portrait.x - pd / 2), y: S(vitals.portrait.y - pd / 2), s: pd };
+    // ---- vitals: chip panel, portrait in a well, HP bar + number, XP bar + level chip, mode dot
+    X.vitals = { x: vitals.x, y: vitals.y, w: vitals.w, h: vitals.h };
+    this.hudVitalsPanel = add(pixelPanel(this, vitals.x, vitals.y, vitals.w, vitals.h, 'chip', { px: P }));
+    const pw = vitals.portrait;
     add(pixelPanel(this, pw.x, pw.y, pw.s, pw.s, 'well', { px: P }));
     if (this.hudPortraitMask) { this.hudPortraitMask.destroy(); this.hudPortraitMask = null; }
     const texKey = this.player?.texture?.key;
     if (texKey && this.textures.exists(texKey)) {
-      // Idle frames are 128 px with the character small in the middle: frame the head (2 css px per texel).
+      // Idle frames are 128 px with the character small in the middle: frame the head (1 texel per art px).
       const box = this.hudPortraitBox(texKey);
-      const img = add(this.add.image(pw.x + pw.s / 2, pw.y + 3 * P, texKey, 0).setScale(P));
+      const img = add(this.add.image(pw.x + pw.s / 2, pw.y + 2 * P, texKey, 0).setScale(P));
       img.setOrigin(box.cx, box.top);
       const maskG = this.make.graphics({ x: 0, y: 0 }, false);
       maskG.setScrollFactor(0);
@@ -1549,70 +1547,71 @@ export default class ArenaScene extends Phaser.Scene {
       img.setMask(maskG.createGeometryMask());
       this.hudPortraitMask = maskG;
     }
-    const hpH = Math.max(9 * P, S(vitals.hp.h));
-    hp.hp = { x: S(vitals.hp.x), y: S(vitals.portrait.y - pd / 2), w: S(vitals.hp.w), h: hpH };
-    this.hudHpTrack = add(pixelPanel(this, hp.hp.x, hp.hp.y, hp.hp.w, hp.hp.h, 'progress-track', { px: P }));
-    this.hudHpFill = add(pixelPanel(this, hp.hp.x, hp.hp.y, hp.hp.w, hp.hp.h, 'progress-fill-green', { px: P }));
-    this.hudHpText = txt(hp.hp.x + hp.hp.w - 3 * P, hp.hp.y + Math.max(P, Math.floor((hp.hp.h / P - 7) / 2) * P), '', { color: PX_CSS.white })
-      .setOrigin(1, 0);
-    // level chip (auto width) at the right end of the XP row; XP bar fills the rest
-    const rowY = hp.hp.y + hp.hp.h + 2 * P;
-    hp.level = { x: hp.hp.x + hp.hp.w, y: rowY, h: 11 * P };
-    this.hudLevelChip = add(pixelPanel(this, hp.level.x - 11 * P, rowY, 11 * P, hp.level.h, 'chip', { px: P }));
-    this.levelText = txt(hp.level.x, rowY + 2 * P, '', { color: PX_CSS.mist }).setOrigin(0.5, 0);
-    hp.xp = { x: hp.hp.x, y: rowY + 3 * P, h: 5 * P };
-    this.hudXpTrack = add(pixelPanel(this, hp.xp.x, hp.xp.y, 40 * P, hp.xp.h, 'progress-track', { px: P }));
-    this.hudXpFill = add(pixelPanel(this, hp.xp.x, hp.xp.y, 40 * P, hp.xp.h, 'progress-fill-violet', { px: P }));
-    hp.dot = { x: S(vitals.modeDot.x), y: hp.hp.y + hp.hp.h / 2 };
-    // Panel must hold the XP row (portrait is shorter on phones).
-    const needH = rowY + hp.level.h + 4 * P - v.y;
-    if (needH > v.h) this.hudContainer.list[0].resize(v.w, needH);
+    X.hp = { ...vitals.hp };
+    this.hudHpTrack = add(pixelPanel(this, X.hp.x, X.hp.y, X.hp.w, X.hp.h, 'progress-track', { px: P }));
+    this.hudHpFill = add(pixelPanel(this, X.hp.x, X.hp.y, X.hp.w, X.hp.h, 'progress-fill-green', { px: P }));
+    X.num = { ...vitals.num };
+    this.hudHpText = txt(X.num.x, X.num.y, '', { color: PX_CSS.white });
+    X.xp = { ...vitals.xp };
+    this.hudXpTrack = add(this.add.rectangle(X.xp.x, X.xp.y, X.xp.w, X.xp.h, PX.ink, 1).setOrigin(0));
+    this.hudXpFill = add(this.add.rectangle(X.xp.x, X.xp.y, X.xp.w, X.xp.h, PX.violet, 1).setOrigin(0).setVisible(false));
+    this.hudXpShine = add(this.add.rectangle(X.xp.x, X.xp.y, X.xp.w, P, 0xd6c8ff, 1).setOrigin(0).setVisible(false));
+    X.level = vitals.level ? { ...vitals.level } : null;
+    if (X.level) {
+      this.hudLevelChip = add(pixelPanel(this, X.level.right - X.level.minW, X.level.y, X.level.minW, X.level.h, 'chip', { px: P }));
+      this.levelText = txt(X.level.right, X.level.y + 2 * P, '', { color: PX_CSS.mist });
+    } else {
+      this.hudLevelChip = null;
+      this.levelText = null;
+    }
+    X.dot = vitals.modeDot ? { ...vitals.modeDot } : null;
 
-    // ---- WAVE n: chip, muted label + big number (2x)
-    hp.wave = { cx: S(L.wave.x + L.wave.w / 2), y: S(L.wave.y), h: 22 * P };
-    this.hudWaveChip = add(pixelPanel(this, hp.wave.cx, hp.wave.y, 40 * P, hp.wave.h, 'chip', { px: P }));
-    this.hudWaveLabel = txt(0, hp.wave.y + 11 * P, t('hud.wave'), { color: PX_CSS.periw });
-    this.waveText = txt(0, hp.wave.y + 4 * P, '', { scale: 2, color: PX_CSS.white });
+    // ---- WAVE n: one-line chip, muted label + number (2x only when art px >= 2)
+    X.wave = { cx: L.wave.cx, y: L.wave.y, h: L.wave.h, scale: L.fontScale.wave };
+    this.hudWaveChip = add(pixelPanel(this, X.wave.cx, X.wave.y, 24 * P, X.wave.h, 'chip', { px: P }));
+    const capBig = 7 * X.wave.scale * P;
+    this.waveText = txt(0, X.wave.y + 2 * P, '', { scale: X.wave.scale, color: PX_CSS.white });
+    this.hudWaveLabel = txt(0, X.wave.y + 2 * P + capBig - 7 * P, t('hud.wave'), { color: PX_CSS.periw });
 
-    // ---- score: star + big number, right-aligned chip
-    hp.score = { right: S(L.score.x + L.score.w), y: S(L.score.y), h: 22 * P };
-    this.hudScoreChip = add(pixelPanel(this, hp.score.right - 40 * P, hp.score.y, 40 * P, hp.score.h, 'chip', { px: P }));
-    this.hudScoreStar = add(uiIcon(this, 0, hp.score.y + hp.score.h / 2, 'star', { px: P }));
-    this.scoreText = txt(hp.score.right - 5 * P, hp.score.y + 4 * P, '', { scale: 2, color: PX_CSS.white }).setOrigin(1, 0);
+    // ---- score: 8 px star (drawn in hudG) + 1x number, right-aligned chip
+    X.score = { right: L.score.right, y: L.score.y, h: L.score.h, x: L.score.right - 24 * P };
+    this.hudScoreChip = add(pixelPanel(this, X.score.x, X.score.y, 24 * P, X.score.h, 'chip', { px: P }));
+    this.scoreText = txt(X.score.right - 4 * P, X.score.y + 2 * P, '', { color: PX_CSS.white }).setOrigin(1, 0);
 
-    // Dynamic pixel layer (rings, discs, dots). Redrawn only when its quantised state changes.
+    // Dynamic pixel layer (rings, discs, dots, star). Redrawn only when its quantised state changes.
     this.hudG = add(this.add.graphics());
     this._hudSig = '';
 
-    // ---- buffs: item icons (32 px art, nearest) inside segmented duration rings
+    // ---- buffs: item icons (32 px art shown at 16 art px) on dark discs with 1 px duration rings
     this.hudBuffSlots = [];
     for (let i = 0; i < BUFF_SLOTS; i++) {
       const icon = add(this.add.image(0, 0, 'item-magnet').setVisible(false).setScale(P / 2));
       this.hudBuffSlots.push({ icon });
     }
-    this.hudReviveBadge = txt(0, 0, '1', { color: PX_CSS.ink, shadow: false }).setOrigin(0.5, 0).setVisible(false);
+    this.hudReviveBadge = txt(0, 0, '1', { color: PX_CSS.ink, shadow: false }).setVisible(false);
 
-    // ---- boss bar: name + phase pips above a red pixel bar
-    this.hudBossTrack = add(pixelPanel(this, 0, 0, 40 * P, 6 * P, 'progress-track', { px: P }).setVisible(false));
-    this.hudBossFill = add(pixelPanel(this, 0, 0, 40 * P, 6 * P, 'progress-fill-red', { px: P }).setVisible(false));
+    // ---- boss bar: name (+ phase pips) above a 160x6 red pixel bar
+    this.hudBossTrack = add(pixelPanel(this, 0, 0, L.boss.w, L.boss.barH, 'progress-track', { px: P }).setVisible(false));
+    this.hudBossFill = add(pixelPanel(this, 0, 0, L.boss.w, L.boss.barH, 'progress-fill-red', { px: P }).setVisible(false));
     this.bossNameText = txt(0, 0, '', { color: PX_CSS.white }).setVisible(false);
 
     // ---- ability: on touch it sits above the pause button and is tappable
     const pauseBtn = this.touchControls?.enabled ? this.touchControls.pauseButton : null;
-    let { x: abX, y: abY, r: abR } = L.ability;
+    let { x: abX, y: abY } = L.ability;
+    const abR = L.ability.r;
     if (pauseBtn) {
       const pauseR = (pauseBtn.width || 76) / 2;
       abX = pauseBtn.x;
       abY = pauseBtn.y - pauseR - L.gap * 2 - abR;
     }
-    this.hudAbility = { x: S(abX), y: S(abY), r: abR, touch: !!pauseBtn };
-    this.hudAbilityKeyText = txt(this.hudAbility.x, this.hudAbility.y - 4 * P, '', { scale: 1, color: PX_CSS.white }).setOrigin(0.5, 0).setVisible(false);
-    this.hudAbilityHint = txt(this.hudAbility.x, this.hudAbility.y + 16 * P, 'SPACE', { color: PX_CSS.periw })
-      .setOrigin(0.5, 0).setVisible(false);
+    // Touch hit area never below ~24 css px radius, whatever the drawn size.
+    this.hudAbility = { x: snapPx(abX, P), y: snapPx(abY, P), r: abR, hitR: Math.max(abR * 1.2, 24 * L.k), touch: !!pauseBtn };
+    this.hudAbilityKeyText = txt(this.hudAbility.x, this.hudAbility.y - 4 * P, '', { color: PX_CSS.white }).setVisible(false);
+    this.hudAbilityHint = txt(this.hudAbility.x, this.hudAbility.y - abR - 10 * P, 'SPACE', { color: PX_CSS.periw }).setVisible(false);
 
     // ---- hover tooltip (desktop): chip + pixel label
-    this.hudTooltipBg = add(pixelPanel(this, 0, 0, 20 * P, 13 * P, 'chip', { px: P }).setVisible(false));
-    this.hudTooltip = txt(0, 0, '', { color: PX_CSS.white }).setOrigin(0.5, 0).setVisible(false);
+    this.hudTooltipBg = add(pixelPanel(this, 0, 0, 20 * P, 12 * P, 'chip', { px: P }).setVisible(false));
+    this.hudTooltip = txt(0, 0, '', { color: PX_CSS.white }).setVisible(false);
 
     if (!this._abilityTapHandler) {
       this._abilityTapHandler = (pointer) => {
@@ -1620,7 +1619,7 @@ export default class ArenaScene extends Phaser.Scene {
         if (!a || !a.touch || this.isPaused || this.playerDead) return;
         const dx = pointer.x - a.x;
         const dy = pointer.y - a.y;
-        if (dx * dx + dy * dy <= a.r * a.r * 1.44) this.abilities?.tryActivate();
+        if (dx * dx + dy * dy <= a.hitR * a.hitR) this.abilities?.tryActivate();
       };
       this.input.on('pointerdown', this._abilityTapHandler);
       this.events.once('shutdown', () => {
@@ -1629,6 +1628,12 @@ export default class ArenaScene extends Phaser.Scene {
         if (this.hudPortraitMask) { this.hudPortraitMask.destroy(); this.hudPortraitMask = null; }
       });
     }
+  }
+
+  /** Left-aligns a pixel text so it is centred on cx with its left edge on the art grid (no half-pixel blur). */
+  hudCenterText(text, cx, P) {
+    text.setOrigin(0, 0).setX(snapPx(cx - text.width / 2, P));
+    return text;
   }
 
   /** Opaque bbox of a texture's frame 0 (normalised head-top / centre x), cached per key. */
@@ -1720,7 +1725,7 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   /**
-   * Pixel HUD refresh (ui/arena-pixel-v3): health, wave and score are the only words on screen;
+   * Pixel HUD refresh (ui/hud-scale-by-viewport): health, wave and score are the only words on screen;
    * weapon, buffs and ability are pixel discs with 12-step rings. Called every frame and on game events.
    * Pure logic: systems/hud/hudModel.js + hudLayout.js + pixelShapes.js.
    */
@@ -1739,46 +1744,60 @@ export default class ArenaScene extends Phaser.Scene {
     const hovers = []; // { x, y, r, label } — hit areas for the desktop tooltip
     const sig = []; // quantised draw state; the pixel layer is redrawn only when it changes
 
-    // ---- HP bar: fill skin by health band, number inside (right)
+    // ---- HP bar (fill skin by health band) + number at its right (current only on small screens)
     const fam = m.hpPct >= 0.5 ? 'green' : (m.hpPct >= LOW_HP_PCT ? 'amber' : 'red');
     this.hudHpFill.setSkin(progressFillSkin(fam));
     const hpW = this.setPixelFill(this.hudHpFill, X.hp.w, m.hpPct, P);
-    this.hudHpText.setText(m.hpText).setVisible(!m.hpLow || blink);
-    if (this.hudHpText.width > X.hp.w - 6 * P) this.hudHpText.setText(String(Math.ceil(Math.max(0, input.hp)))); // narrow bar: current HP only
-    const shieldW = m.shieldPct > 0 ? Math.max(2, Math.round(((X.hp.w / P) - 4) * m.shieldPct)) : 0;
+    this.hudHpText.setText(L.labels ? m.hpText : String(Math.ceil(Math.max(0, input.hp)))).setVisible(!m.hpLow || blink);
+    const shieldW = m.shieldPct > 0 ? Math.max(2, Math.round(((X.hp.w / P) - 2) * m.shieldPct)) : 0;
     sig.push(hpW, shieldW, m.hpLow && blink ? 1 : 0);
+    // vitals panel hugs the number column
+    const numEnd = Math.max(X.num.x + this.hudHpText.width, X.dot ? X.dot.x + X.dot.r : 0);
+    const panelW = Math.max(X.vitals.w, Math.ceil((numEnd + 3 * P - X.vitals.x) / P) * P);
+    if (this.hudVitalsPanel.pw !== panelW) this.hudVitalsPanel.resize(panelW, X.vitals.h);
 
-    // ---- XP bar + level chip (chip grows with the number)
-    this.levelText.setText(String(m.level));
-    const chipW = Math.max(11 * P, Math.ceil(this.levelText.width / P + 5) * P);
-    if (this.hudLevelChip.pw !== chipW) this.hudLevelChip.resize(chipW, X.level.h);
-    this.hudLevelChip.setX(X.level.x - chipW);
-    this.levelText.setX(X.level.x - chipW / 2);
-    const xpMax = X.level.x - chipW - 2 * P - X.xp.x;
-    if (this.hudXpTrack.pw !== xpMax) this.hudXpTrack.resize(xpMax, X.xp.h);
-    this.setPixelFill(this.hudXpFill, xpMax, m.xpPct, P, 3);
+    // ---- XP bar (+ level chip that grows with the number)
+    let xpMax = X.xp.w;
+    if (this.levelText && X.level) {
+      this.levelText.setText(String(m.level));
+      const chipW = Math.max(X.level.minW, Math.ceil(this.levelText.width / P + 5) * P);
+      if (this.hudLevelChip.pw !== chipW) this.hudLevelChip.resize(chipW, X.level.h);
+      this.hudLevelChip.setX(X.level.right - chipW);
+      this.hudCenterText(this.levelText, X.level.right - chipW / 2, P);
+      xpMax = X.level.right - chipW - 2 * P - X.xp.x;
+    }
+    if (this.hudXpTrack.width !== xpMax) this.hudXpTrack.setSize(xpMax, X.xp.h);
+    const xpFillW = Math.round((xpMax * Math.min(1, Math.max(0, m.xpPct))) / P) * P;
+    this.hudXpFill.setVisible(xpFillW > 0);
+    this.hudXpShine.setVisible(xpFillW > 0);
+    if (xpFillW > 0) {
+      if (this.hudXpFill.width !== xpFillW) { this.hudXpFill.setSize(xpFillW, X.xp.h); this.hudXpShine.setSize(xpFillW, P); }
+    }
 
-    // ---- WAVE n chip (label + number centred as one unit)
+    // ---- WAVE n chip (label + number centred as one unit, number baseline-aligned)
     this.waveText.setText(m.waveText);
     const wGap = 3 * P;
     const wTotal = this.hudWaveLabel.width + wGap + this.waveText.width;
-    const wChip = Math.ceil((wTotal + 12 * P) / P) * P;
-    const wx = X.wave.cx - wChip / 2;
+    const wChip = Math.ceil((wTotal + 8 * P) / P) * P;
+    const wx = snapPx(X.wave.cx - wChip / 2, P);
     if (this.hudWaveChip.pw !== wChip) this.hudWaveChip.resize(wChip, X.wave.h);
     this.hudWaveChip.setX(wx);
-    this.hudWaveLabel.setX(wx + 6 * P);
-    this.waveText.setX(wx + 6 * P + this.hudWaveLabel.width + wGap);
+    this.hudWaveLabel.setX(wx + 4 * P);
+    this.waveText.setX(wx + 4 * P + Math.ceil(this.hudWaveLabel.width / P) * P + wGap);
 
-    // ---- score chip: star + number
+    // ---- score chip: 8 px star + 1x number
     this.scoreText.setText(m.scoreText);
-    const sChip = Math.ceil((this.scoreText.width + 16 * P + 14 * P) / P) * P;
+    const sChip = Math.ceil((this.scoreText.width + 4 * P + 8 * P + 3 * P + 4 * P) / P) * P;
     if (this.hudScoreChip.pw !== sChip) this.hudScoreChip.resize(sChip, X.score.h);
-    this.hudScoreChip.setX(X.score.right - sChip);
-    this.hudScoreStar.setX(X.score.right - sChip + 4 * P + 8 * P);
+    X.score.x = X.score.right - sChip;
+    this.hudScoreChip.setX(X.score.x);
+    sig.push(X.score.x);
 
-    // ---- mode dot
-    sig.push(m.mode.color);
-    hovers.push({ x: X.dot.x, y: X.dot.y, r: 6 * P, label: t('hud.' + m.mode.key) });
+    // ---- mode dot (only when labels fit)
+    if (X.dot) {
+      sig.push(m.mode.color);
+      hovers.push({ x: X.dot.x, y: X.dot.y, r: 4 * P, label: t('hud.' + m.mode.key) });
+    }
 
     // ---- weapon: pixel disc in its colour + 12-step timer ring (permanent = plain frame)
     const wp = L.weapon;
@@ -1791,10 +1810,10 @@ export default class ArenaScene extends Phaser.Scene {
       id: b.id, texture: `item-${b.id}`, color: b.color, steps: stepsFilled(b.pct), name: t(b.nameKey), revive: false
     }));
     if (m.revive) chips.push({ id: 'hotfix', texture: 'item-hotfix', color: PX.green, steps: 12, name: t('hud.revive'), revive: true });
-    const ringR = 13; // art px: inner radius 11 art = 22 css holds the 32 css icon
-    const slotStep = (ringR * 2 + 3) * P;
-    const rowW = chips.length * slotStep - 3 * P;
-    const bcy = snapPx(L.buffs.y + L.buffs.slot / 2 - 4 * P, P);
+    const ringR = L.buffs.ringR; // art px: half of the 18 px slot (16 px icon + 1 px ring)
+    const slotStep = L.buffs.step;
+    const rowW = chips.length * slotStep - (slotStep - ringR * 2 * P);
+    const bcy = L.buffs.y + ringR * P;
     let bcx = snapPx(L.buffs.x + L.buffs.w / 2 - rowW / 2 + ringR * P, P);
     const buffPos = [];
     this.hudReviveBadge.setVisible(false);
@@ -1805,7 +1824,8 @@ export default class ArenaScene extends Phaser.Scene {
       if (this.textures.exists(chip.texture)) slot.icon.setTexture(chip.texture).setVisible(true).setPosition(bcx, bcy).setScale(P / 2);
       else slot.icon.setVisible(false);
       if (chip.revive) {
-        this.hudReviveBadge.setVisible(true).setPosition(bcx + 10 * P, bcy - 14 * P).setText(String(Math.max(1, input.revives | 0)));
+        this.hudReviveBadge.setVisible(true).setText(String(Math.max(1, input.revives | 0))).setY(bcy - 11 * P);
+        this.hudCenterText(this.hudReviveBadge, bcx + 8 * P, P);
       }
       sig.push(chip.id, chip.steps);
       hovers.push({ x: bcx, y: bcy, r: ringR * P, label: chip.name });
@@ -1816,22 +1836,20 @@ export default class ArenaScene extends Phaser.Scene {
     const ab = this.drawAbilityChip(null, L, now, hovers);
     if (ab) sig.push(ab.steps, ab.ready ? (blink ? 2 : 1) : 0, ab.active ? 1 : 0, ab.color);
 
-    // ---- boss bar: steps in/out (alpha 0.25 steps), name + phase pips + red bar
+    // ---- boss bar: steps in/out (alpha 0.25 steps), name (+ attack when roomy) + phase pips + red bar
     const bossTarget = m.boss ? 1 : 0;
     this.hudBossAlpha = Phaser.Math.Clamp((this.hudBossAlpha || 0) + Math.sign(bossTarget - (this.hudBossAlpha || 0)) * (dt / 400), 0, 1);
     if (m.boss) this._hudLastBoss = m.boss;
     const shownBoss = m.boss || this._hudLastBoss;
     const bossA = Math.round(this.hudBossAlpha * 4) / 4;
-    const ringTop = bcy - ringR * P;
-    const bar = { w: snapPx(L.boss.w, P), h: 6 * P };
-    bar.x = snapPx(this.scale.width / 2 - bar.w / 2, P);
-    bar.y = (chips.length ? ringTop : snapPx(L.boss.barY + L.boss.barH, P)) - 3 * P - bar.h;
+    const bar = { w: L.boss.w, h: L.boss.barH, x: L.boss.x };
+    bar.y = chips.length ? L.boss.barY : L.buffs.y + L.buffs.h - bar.h;
     if (bossA > 0 && shownBoss) {
       this.hudBossTrack.setVisible(true).setAlpha(bossA).setPosition(bar.x, bar.y);
       if (this.hudBossTrack.pw !== bar.w) this.hudBossTrack.resize(bar.w, bar.h);
       this.hudBossFill.setPosition(bar.x, bar.y).setAlpha(bossA);
       this.setPixelFill(this.hudBossFill, bar.w, shownBoss.pct, P);
-      const word = shownBoss.attack ? `${shownBoss.name} · ${shownBoss.attack}` : shownBoss.name;
+      const word = shownBoss.attack && L.labels ? `${shownBoss.name} · ${shownBoss.attack}` : shownBoss.name;
       this.bossNameText.setVisible(true).setText(word).setAlpha(bossA).setPosition(bar.x, bar.y - 10 * P);
       sig.push(bossA, shownBoss.phase, shownBoss.phases, bar.x, bar.y);
     } else {
@@ -1847,7 +1865,7 @@ export default class ArenaScene extends Phaser.Scene {
       this._hudSig = key;
       g.clear();
       // shield: cyan sliver on the HP bar bottom
-      if (shieldW > 0) { g.fillStyle(PX.cyan, 1); g.fillRect(X.hp.x + 2 * P, X.hp.y + X.hp.h - 3 * P, shieldW * P, P); }
+      if (shieldW > 0) { g.fillStyle(PX.cyan, 1); g.fillRect(X.hp.x + P, X.hp.y + X.hp.h - 2 * P, shieldW * P, P); }
       // low HP: blinking red frame
       if (m.hpLow && blink) {
         g.fillStyle(PX.red, 1);
@@ -1856,26 +1874,28 @@ export default class ArenaScene extends Phaser.Scene {
         g.fillRect(X.hp.x - P, X.hp.y, P, X.hp.h);
         g.fillRect(X.hp.x + X.hp.w, X.hp.y, P, X.hp.h);
       }
+      // score star (8 px)
+      drawPixelStar(g, X.score.x + 4 * P, X.score.y + 2 * P, { P, fill: PX.amber, light: 0xfff1b0, dark: mixColor(PX.amber, PX.ink, 0.45) });
       // mode dot (3 art radius gem)
-      drawPixelDisc(g, X.dot.x, X.dot.y, { r: 3, P, fill: m.mode.color, light: mixColor(m.mode.color, 0xffffff, 0.5) });
-      // weapon
-      const wr = Math.max(9, Math.round(wp.r / P));
-      drawPixelDisc(g, snapPx(wp.x, P), snapPx(wp.y, P), { r: wr, P, fill: PX.night, light: PX.dusk });
-      drawPixelDisc(g, snapPx(wp.x, P), snapPx(wp.y, P), { r: wr - 5, P, fill: m.weapon.color, light: mixColor(m.weapon.color, 0xffffff, 0.55), dark: mixColor(m.weapon.color, 0x0f1228, 0.6) });
-      drawSegRing(g, snapPx(wp.x, P), snapPx(wp.y, P), { r: wr - 1, thick: 2, P, filled: wSteps < 0 ? 0 : wSteps, on: m.weapon.color, off: PX.slate });
-      // buffs
+      if (X.dot) drawPixelDisc(g, X.dot.x, X.dot.y, { r: 3, P, fill: m.mode.color, light: mixColor(m.mode.color, 0xffffff, 0.5) });
+      // weapon: dark disc r 10, colour core r 5, 2 px timer ring
+      const wr = Math.round(wp.r / P);
+      drawPixelDisc(g, wp.x, wp.y, { r: wr, P, fill: PX.night, light: PX.dusk });
+      drawPixelDisc(g, wp.x, wp.y, { r: wr - 5, P, fill: m.weapon.color, light: mixColor(m.weapon.color, 0xffffff, 0.55), dark: mixColor(m.weapon.color, 0x0f1228, 0.6) });
+      drawSegRing(g, wp.x, wp.y, { r: wr - 1, thick: 2, P, filled: wSteps < 0 ? 0 : wSteps, on: m.weapon.color, off: PX.slate });
+      // buffs: ink backing + 1 px square duration ring hugging the 16 px icon
       for (const b of buffPos) {
-        drawPixelDisc(g, b.x, b.y, { r: ringR + 1, P, fill: PX.night, outline: PX.ink });
-        drawSegRing(g, b.x, b.y, { r: ringR, thick: 2, P, filled: b.chip.steps, on: b.chip.color, off: PX.dusk });
-        if (b.chip.revive) drawPixelDisc(g, b.x + 10 * P, b.y - 11 * P, { r: 6, P, fill: PX.green, dark: PX.greenD });
+        g.fillStyle(PX.ink, 1); g.fillRect(b.x - (ringR + 1) * P, b.y - (ringR + 1) * P, (ringR + 1) * 2 * P, (ringR + 1) * 2 * P);
+        drawSquareRing(g, b.x, b.y, { half: ringR, P, filled: b.chip.steps, on: b.chip.color, off: PX.dusk });
+        if (b.chip.revive) drawPixelDisc(g, b.x + 8 * P, b.y - 8 * P, { r: 5, P, fill: PX.green, dark: PX.greenD });
       }
       // ability
       if (ab) this.drawAbilityChip(g, L, now, null, ab, blink);
       // boss phase pips (right end, above the bar)
       if (bossA > 0 && shownBoss && shownBoss.phases > 1) {
         for (let i = 0; i < shownBoss.phases; i++) {
-          const px = bar.x + bar.w - (shownBoss.phases - i) * 7 * P + 3 * P;
-          drawPixelDisc(g, px, bar.y - 6 * P, { r: 3, P, fill: i < shownBoss.phase ? PX.red : PX.dusk, light: i < shownBoss.phase ? 0xffb0bf : null, alpha: bossA });
+          const px = bar.x + bar.w - (shownBoss.phases - i) * 6 * P + 3 * P;
+          drawPixelDisc(g, px, bar.y - 6 * P, { r: 2, P, fill: i < shownBoss.phase ? PX.red : PX.dusk, outline: null, alpha: bossA });
         }
       }
     }
@@ -1910,14 +1930,15 @@ export default class ArenaScene extends Phaser.Scene {
     const L = this.hudLayout;
     const P = L.px;
     tip.setText(hit.label).setVisible(true);
-    const w = Math.ceil((tip.width + 10 * P) / P) * P;
-    const h = 13 * P;
+    const w = Math.ceil((tip.width + 8 * P) / (2 * P)) * 2 * P;
+    const h = 12 * P;
     const above = hit.y > this.scale.height / 2;
     const ty = snapPx(above ? hit.y - hit.r - L.gap - h : hit.y + hit.r + L.gap, P);
     const tx = snapPx(Phaser.Math.Clamp(hit.x, w / 2 + L.pad, this.scale.width - w / 2 - L.pad), P);
     if (this.hudTooltipBg.pw !== w) this.hudTooltipBg.resize(w, h);
     this.hudTooltipBg.setVisible(true).setPosition(tx - w / 2, ty);
-    tip.setPosition(tx, ty + 3 * P);
+    tip.setY(ty + 2 * P);
+    this.hudCenterText(tip, tx, P);
   }
 
   /**
@@ -1961,9 +1982,9 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   /**
-   * Bottom-right ability: pixel disc + 12-step cooldown ring, seconds in pixel font while cooling,
-   * on/off blink when ready. Two passes: g == null updates texts / hover and returns the quantised
-   * state; with g (only when the HUD signature changed) it draws that state.
+   * Bottom-right ability: 20 px pixel disc + 2 px 12-step cooldown ring, seconds in pixel font while
+   * cooling, on/off blink when ready. Two passes: g == null updates texts / hover and returns the
+   * quantised state; with g (only when the HUD signature changed) it draws that state.
    */
   drawAbilityChip(g, L, now, hovers = [], state = null, blink = true) {
     const a = this.hudAbility;
@@ -1977,19 +1998,21 @@ export default class ArenaScene extends Phaser.Scene {
       }
       const cooling = !chip.ready && !chip.active;
       this.hudAbilityKeyText.setVisible(cooling).setText(cooling ? chip.timeText.replace(/s$/, '') : '');
-      const showHint = !a.touch && !L.compact && now - (this.hudStartedAt ?? now) < 10000;
+      if (cooling) this.hudCenterText(this.hudAbilityKeyText, a.x, P);
+      const showHint = !a.touch && L.labels && now - (this.hudStartedAt ?? now) < 10000;
       this.hudAbilityHint.setVisible(showHint).setText(chip.keyText);
+      if (showHint) this.hudCenterText(this.hudAbilityHint, a.x, P);
       if (hovers) hovers.push({ x: a.x, y: a.y, r: a.r, label: chip.name });
       return { steps: stepsFilled(chip.ringPct), ready: chip.ready, active: chip.active, color: chip.color };
     }
-    const R = Math.max(11, Math.round(a.r / P));
+    const R = Math.round(a.r / P);
     const c = state.color;
-    drawPixelDisc(g, a.x, a.y, { r: R + 1, P, fill: PX.night, light: PX.dusk, outline: PX.ink });
-    if (state.active) drawSegRing(g, a.x, a.y, { r: R + 3, thick: 1, segments: 1, P, filled: 1, on: PX.white });
-    drawSegRing(g, a.x, a.y, { r: R, thick: 2, P, filled: state.steps, on: c, off: PX.slate });
+    drawPixelDisc(g, a.x, a.y, { r: R, P, fill: PX.night, light: PX.dusk, outline: PX.ink });
+    if (state.active) drawSegRing(g, a.x, a.y, { r: R + 2, thick: 1, segments: 1, P, filled: 1, on: PX.white });
+    drawSegRing(g, a.x, a.y, { r: R - 1, thick: 2, P, filled: state.steps, on: c, off: PX.slate });
     if (state.ready) {
       const lit = blink || state.active;
-      drawPixelDisc(g, a.x, a.y, { r: Math.max(4, R - 6), P, fill: lit ? c : mixColor(c, PX.night, 0.55), light: lit ? mixColor(c, 0xffffff, 0.5) : null, dark: mixColor(c, PX.ink, 0.65) });
+      drawPixelDisc(g, a.x, a.y, { r: Math.max(3, R - 5), P, fill: lit ? c : mixColor(c, PX.night, 0.55), light: lit ? mixColor(c, 0xffffff, 0.5) : null, dark: mixColor(c, PX.ink, 0.65) });
     }
     return state;
   }
@@ -3052,7 +3075,7 @@ export default class ArenaScene extends Phaser.Scene {
     const H = this.scale.height;
     const L = this.hudLayout || computeHudLayout({ w: W, h: H });
     // 185 art px = panel height (title 3x + info + 4 buttons + hint): shrink the art pixel on short screens
-    const P = Math.max(1, Math.min(L.px || 2, Math.floor((H * 0.94) / 185)));
+    const P = Math.max(1, Math.min(L.menuPx || L.px || 2, Math.floor((H * 0.94) / 185)));
     const cx = snapPx(W / 2, P);
     const cy = snapPx(H / 2, P);
 
@@ -5327,48 +5350,53 @@ export default class ArenaScene extends Phaser.Scene {
   }
 
   /**
-   * HUD banner (wave, stage, level up, modifier, music, boss defeated): pixel panel-accent, pixel font,
-   * retro entry in 2 frames (half width, then full size) and a stepped alpha fade (0.75/0.5/0.25).
+   * HUD banner (wave, stage, level up, modifier, music, boss defeated): pixel panel-accent, 1x pixel font
+   * (2x only for the stage title: big = true), retro entry in 2 frames (half width, then full size) and a
+   * stepped alpha fade (0.75/0.5/0.25). Sized in HUD art px, so it shrinks with the HUD on small windows.
    */
-  showHudBanner(title, { subtitle = '', color = HUD.violet, duration = 1200 } = {}) {
+  showHudBanner(title, { subtitle = '', color = HUD.violet, duration = 1200, big = false } = {}) {
     if (!this.sys || !this.sys.isActive()) return null;
     if (this._bannerTimers) this._bannerTimers.forEach((ev) => ev.remove(false));
     this._bannerTimers = [];
     if (this.hudBanner && this.hudBanner.scene) this.hudBanner.destroy();
     const L = this.hudLayout || computeHudLayout({ w: this.scale.width, h: this.scale.height });
     const P = L.px || 2;
+    const s = big ? 2 : 1;
     const accent = typeof color === 'number' ? color : PX.violet;
-    const titleText = this.pxText(0, 6 * P, String(title).toUpperCase(), { P, scale: 2, color: PX_CSS.white }).setOrigin(0.5, 0);
+    const top = 4 * P;
+    const capH = 7 * s * P + s * P; // glyph + drop shadow
+    const titleText = this.pxText(0, top, String(title).toUpperCase(), { P, scale: s, color: PX_CSS.white }).setOrigin(0.5, 0);
     let subText = null;
     if (subtitle) {
-      subText = this.pxText(0, 6 * P + 14 * P + 5 * P, String(subtitle), {
-        P, color: PX_CSS.mist, align: 'center', maxWidth: Math.min(this.scale.width - 4 * L.pad, 260 * P)
+      subText = this.pxText(0, top + capH + 3 * P, String(subtitle), {
+        P, color: PX_CSS.mist, align: 'center', maxWidth: Math.min(this.scale.width - 4 * L.pad, 200 * P)
       }).setOrigin(0.5, 0);
     }
-    const contentW = Math.max(titleText.width + 18 * P, subText ? subText.width : 0);
-    const w = Math.ceil((contentW + 16 * P) / (2 * P)) * 2 * P;
-    const h = 6 * P + 14 * P + (subText ? 5 * P + Math.ceil(subText.height / P) * P : 0) + 8 * P;
+    const contentW = Math.max(titleText.width + 20 * P, subText ? subText.width : 0);
+    const w = Math.ceil((contentW + 12 * P) / (2 * P)) * 2 * P;
+    const h = top + capH + (subText ? 3 * P + Math.ceil(subText.height / P) * P : 0) + 6 * P;
     const panel = pixelPanel(this, -w / 2, 0, w, h, 'panel-accent', { px: P });
     const deco = this.add.graphics();
     // accent: two pixel diamonds flanking the title + a short underline in the banner colour
-    const dy = 6 * P + 6 * P;
+    const dy = top + Math.floor((7 * s) / 2) * P;
     const diamond = (x) => {
-      deco.fillStyle(PX.ink, 1); deco.fillRect(x - 2 * P, dy - P, 4 * P, 4 * P);
+      deco.fillStyle(PX.ink, 1); deco.fillRect(x - 2 * P, dy - P, 4 * P, 3 * P);
       deco.fillStyle(accent, 1); deco.fillRect(x - P, dy - 2 * P, 2 * P, 4 * P); deco.fillRect(x - 2 * P, dy - P, 4 * P, 2 * P);
       deco.fillStyle(0xffffff, 1); deco.fillRect(x - P, dy - P, P, P);
     };
     const half = Math.round(titleText.width / 2 / P) * P;
     diamond(-half - 6 * P);
     diamond(half + 6 * P);
-    const ul = Math.max(8 * P, Math.round(w * 0.18 / P) * P);
-    deco.fillStyle(accent, 1); deco.fillRect(-ul, h - 5 * P, ul * 2, P);
+    const ul = Math.max(6 * P, Math.round(w * 0.18 / P) * P);
+    deco.fillStyle(accent, 1); deco.fillRect(-ul, h - 4 * P, ul * 2, P);
     const parts = [titleText, deco, subText].filter(Boolean);
     const cx = snapPx(this.scale.width / 2, P);
     const cy = snapPx(this.scale.height * 0.2, P);
     const banner = this.add.container(cx, cy, [panel, ...parts]).setScrollFactor(0).setDepth(HUD_DEPTH + 20);
     this.hudBanner = banner;
     // frame 1: half-width shell, no text; frame 2: full size
-    panel.resize(Math.max(24 * P, Math.round(w / 2 / (2 * P)) * 2 * P), h).setX(-Math.max(24 * P, Math.round(w / 2 / (2 * P)) * 2 * P) / 2);
+    const halfW = Math.max(16 * P, Math.round(w / 2 / (2 * P)) * 2 * P);
+    panel.resize(halfW, h).setX(-halfW / 2);
     parts.forEach((p) => p.setVisible(false));
     const step = 70;
     const at = (ms, fn) => this._bannerTimers.push(this.time.delayedCall(ms, () => { if (banner.scene) fn(); }));
@@ -7282,31 +7310,20 @@ export default class ArenaScene extends Phaser.Scene {
       const isAutoMoving = !hasKeyboardInput && !hasTouchInput && window.VIBE_SETTINGS?.autoMove !== false;
       this.hudMode = hasKeyboardInput || hasTouchInput ? 'manual' : (isAutoMoving ? this.autoPlayMode : 'idle');
 
-      if (this.autoMoveIndicator) {
-        this.autoMoveIndicator.setPosition(this.player.x + 20, this.player.y - 30);
-        this.autoMoveIndicator.setVisible(isAutoMoving);
-        if (isAutoMoving) {
-          if (this.autoPlayMode === 'hunt') this.autoMoveIndicator.setText('⚔️');
-          else if (this.autoPlayMode === 'evade') this.autoMoveIndicator.setText('🛡️');
-          else if (this.autoPlayMode === 'collect') this.autoMoveIndicator.setText('💎');
-          else this.autoMoveIndicator.setText('😴');
-        }
-      }
-
       // Play appropriate animation based on movement
+      // 4-direction facing by dominant axis (hysteresis avoids diagonal flicker); left/right = side walk + flipX
       const isMoving = vx !== 0 || vy !== 0;
       const pfx = this.playerAnimPrefix || 'player';
+      const facing = facingFromVelocity(vx, vy, this.playerFacing);
+      this.playerFacing = facing;
+      const vertical = facing === 'up' || facing === 'down';
+      if (vertical) this.player.setFlipX(false);
+      else if (isMoving) this.player.setFlipX(facing === 'left');
       if (isMoving) {
-        if (Math.abs(vx) > Math.abs(vy)) {
-          this.player.play(pfx + '-walk-side', true);
-          this.player.setFlipX(vx < 0);
-        } else if (vy < 0) {
-          this.player.play(pfx + '-walk-up', true);
-        } else {
-          this.player.play(pfx + '-walk-down', true);
-        }
+        this.player.play(pfx + (vertical ? '-walk-' + facing : '-walk-side'), true);
       } else {
-        this.player.play(pfx + '-idle', true);
+        const idleDir = pfx + '-idle-' + facing;
+        this.player.play(vertical && this.anims.exists(idleDir) ? idleDir : pfx + '-idle', true);
       }
     }
 

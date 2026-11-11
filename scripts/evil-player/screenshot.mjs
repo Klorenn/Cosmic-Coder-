@@ -6,7 +6,10 @@
  * Env:
  *   HUD_URL        game URL (default http://localhost:3001; the dev server must already be running)
  *   HUD_WAIT_MS    ms of play before the capture (default 8000)
- *   HUD_VIEWPORTS  comma list of WxH (default 1920x1080,1280x720,1024x600,375x812)
+ *   HUD_VIEWPORTS  comma list of WxH (default 1920x1080,1280x720,800x346,812x375,375x812; 800x346 = the editor side panel)
+ *
+ * Each line reports the HUD art pixel (css px per art px), the vitals panel height and the whole HUD area as a
+ * percentage of the screen; BAD when the vitals panel tops 12% of the height or the HUD covers 15% of the screen.
  *   HUD_DEMO       1 (default) grants a temporary weapon, buffs and a revive so every HUD widget is visible
  *   HUD_GAMEOVER   1 (default) also kills the player and captures the game over screen (hud-gameover-<viewport>.png)
  *   HUD_BANNER     1 (default) also captures a wave banner (hud-banner-<viewport>.png)
@@ -14,6 +17,8 @@
  *                  with a floating crit / pickup text (hud-levelup-<viewport>.png)
  *   HUD_SCENES     1 (default) also captures item pickups + buff HUD (hud-items-*), a teleporter portal in
  *                  NETWORK LAYER (hud-portal-*) and a shrine with its proximity prompt (hud-shrine-*)
+ *   HUD_ZONES      1 (default, needs HUD_SCENES) also captures the mechanic zone of every stage with the player
+ *                  inside it (hud-zone-<stage>-<viewport>.png: tint + first-time label)
  */
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -29,7 +34,8 @@ const GAMEOVER = process.env.HUD_GAMEOVER !== '0';
 const BANNER = process.env.HUD_BANNER !== '0';
 const PAUSE = process.env.HUD_PAUSE !== '0';
 const SCENES = process.env.HUD_SCENES !== '0';
-const VIEWPORTS = (process.env.HUD_VIEWPORTS || '1920x1080,1280x720,1024x600,375x812')
+const ZONES = process.env.HUD_ZONES !== '0';
+const VIEWPORTS = (process.env.HUD_VIEWPORTS || '1920x1080,1280x720,800x346,812x375,375x812')
   .split(',')
   .map((v) => v.trim().split('x').map(Number))
   .filter(([w, h]) => w > 0 && h > 0);
@@ -46,6 +52,14 @@ async function capture(browser, width, height) {
     return local ? route.continue() : route.abort('blockedbyclient');
   });
   await context.addInitScript(() => {
+    // Freeze Vite HMR: other edits to the repo must not full-reload the page mid-capture.
+    const NativeWS = window.WebSocket;
+    window.WebSocket = function HmrBlockedWebSocket(url, proto) {
+      if (String(url).includes('token=') || /vite-hmr|vite-ping/.test(String(proto))) {
+        return { readyState: 0, send() {}, close() {}, addEventListener() {}, removeEventListener() {} };
+      }
+      return new NativeWS(url, proto);
+    };
     if (!localStorage.getItem('vibeCoderSettings')) {
       localStorage.setItem('vibeCoderSettings', JSON.stringify({ playerName: 'HUDCAM', musicEnabled: false, sfxEnabled: false }));
     }
@@ -81,6 +95,25 @@ async function capture(browser, width, height) {
       alive: !!(a.player && a.player.active && !a.playerDead),
       zoom: a.cameras.main.zoom,
       compact: a.hudLayout?.compact,
+      art: a.hudLayout?.art,
+      px: a.hudLayout?.px,
+      ...(() => {
+        // HUD footprint (logical px) from the live widgets: vitals, wave, score, discs, buff row, boss bar.
+        const L = a.hudLayout;
+        const H = a.scale.height;
+        const W = a.scale.width;
+        if (!L || !a.hudVitalsPanel) return { hudMissing: true };
+        const panel = (p) => (p && p.visible !== false ? (p.pw || 0) * (p.ph || 0) : 0);
+        const disc = (c) => (c ? (2 * c.r) ** 2 : 0);
+        const buffs = (a.hudBuffSlots || []).filter((s) => s.icon.visible).length * (L.buffs.step * L.buffs.slot);
+        const boss = a.hudBossTrack.visible ? L.boss.w * (L.boss.barH + 10 * L.px) : 0;
+        const area = panel(a.hudVitalsPanel) + panel(a.hudWaveChip) + panel(a.hudScoreChip) + disc(L.weapon) + disc(a.hudAbility) + buffs + boss;
+        return {
+          vitalsPct: Math.round((a.hudVitalsPanel.ph / H) * 1000) / 10,
+          topPct: Math.round((Math.max(a.hudVitalsPanel.y + a.hudVitalsPanel.ph, a.hudWaveChip.y + a.hudWaveChip.ph) / H) * 1000) / 10,
+          hudAreaPct: Math.round((area / (W * H)) * 1000) / 10
+        };
+      })(),
       hudOnUiCamera: a.hudContainer.willRender(a.uiCamera) && !a.hudContainer.willRender(a.cameras.main),
       playerOnWorldCamera: !a.player || a.player.willRender(a.cameras.main) && !a.player?.willRender(a.uiCamera)
     };
@@ -151,6 +184,36 @@ async function capture(browser, width, height) {
     });
     await page.waitForTimeout(700);
     await page.screenshot({ path: path.join(REPORT_DIR, `hud-portal-${width}x${height}.png`) });
+    // Mechanic zones: one shot per stage with the player standing inside a zone (tint + first-time label).
+    if (ZONES) {
+      for (let st = 0; st < 6; st++) {
+        await stage((stageIdx) => {
+          const a = window.__VIBE_GAME__.scene.getScene('ArenaScene');
+          a.currentStage = stageIdx;
+          a.mapManager.transitionToStage(stageIdx, { fadeMs: 0 });
+          a.enemies.clear(true, true);
+          const mm = a.mapManager;
+          const z = (mm.mechanicZones || [])[0];
+          // global mechanics (wind / gravity): park near the gravity centre so its marker is in frame
+          const p = z || { x: a.worldWidth / 2 + 260, y: a.worldHeight / 2 + 60, radius: 0 };
+          // at the rim so the centre icon stays visible; beside (not in) a teleport zone, or it would teleport away
+          const px = !z ? p.x : (mm.biomes[stageIdx].mechanic.type === 'teleport' ? z.x + z.radius + 90 : z.x + z.radius * 0.7);
+          a.player.setPosition(px, p.y);
+          a.player.setVelocity(0, 0);
+          a.cameras.main.centerOn(z ? z.x + 60 : p.x - 160, p.y);
+          a.physics.resume(); // let updateBiomeMechanic run one frame (tint, label)
+        }, st);
+        await page.waitForTimeout(st === 3 ? 120 : 260);
+        const zs = await stage(() => {
+          const a = window.__VIBE_GAME__.scene.getScene('ArenaScene');
+          a.physics.pause();
+          const mm = a.mapManager;
+          return { inside: mm.zoneInside, seen: [...(mm.seenZoneTypes || [])], tinted: !!a.player.isTinted };
+        });
+        await page.screenshot({ path: path.join(REPORT_DIR, `hud-zone-${st}-${width}x${height}.png`) });
+        console.log(`zone stage ${st}: ${JSON.stringify(zs)}`);
+      }
+    }
     // Shrine: stand inside the interact radius so the name + keycap prompt shows.
     await stage(() => {
       const a = window.__VIBE_GAME__.scene.getScene('ArenaScene');
@@ -191,7 +254,7 @@ async function main() {
   try {
     for (const [w, h] of VIEWPORTS) {
       const { file, hud, errors } = await capture(browser, w, h);
-      const ok = hud.hudOnUiCamera && hud.playerOnWorldCamera && errors.length === 0;
+      const ok = hud.hudOnUiCamera && hud.playerOnWorldCamera && errors.length === 0 && hud.vitalsPct <= 12 && hud.hudAreaPct < 15;
       if (!ok) failed = true;
       process.stdout.write(`${ok ? 'ok ' : 'BAD'} ${w}x${h} -> ${path.relative(process.cwd(), file)} ${JSON.stringify(hud)}${errors.length ? ` errors=${JSON.stringify(errors.slice(0, 3))}` : ''}\n`);
     }

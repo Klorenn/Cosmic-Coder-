@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { BIOMES, HAZARD_DEFS, OBSTACLE_DEFS, BIOME_MECHANICS, SPACE_PALETTES, PARALLAX } from '../data/biomes.js';
+import { BIOMES, HAZARD_DEFS, OBSTACLE_DEFS, BIOME_MECHANICS, SPACE_PALETTES, PARALLAX, LAYOUT_RULES, ZONE_STYLE } from '../data/biomes.js';
+import { layoutBiome } from '../systems/MapManager.js';
+import en from '../locales/en.js';
+import es from '../locales/es.js';
 import { STAGES } from '../data/stages.js';
 import { biomeEffect } from '../systems/MapManager.js';
 
@@ -106,5 +109,35 @@ describe('biomeEffect', () => {
   it('tolerates missing biome / state', () => {
     expect(biomeEffect(null, ps(), 16).speedMult).toBe(1);
     expect(biomeEffect(BIOMES[5], null, 16).pushX).toBe(0);
+  });
+});
+
+describe('readable mechanic zones', () => {
+  it('zones are small and few (1-2 per map, radius 70-90; teleport zones are portal pairs)', () => {
+    const r = LAYOUT_RULES.zones;
+    Object.values(BIOMES).forEach((b) => {
+      for (let seed = 1; seed <= 10; seed++) {
+        const l = layoutBiome(seed, b, W, H, { stage: 0, spawn: { x: W / 2, y: H / 2 } });
+        expect(l.zones.length).toBeLessThanOrEqual(r.max);
+        if (b.mechanic.type !== 'teleport') l.zones.forEach((z) => {
+          expect(z.radius).toBeGreaterThanOrEqual(r.radiusMin);
+          expect(z.radius).toBeLessThanOrEqual(r.radiusMax);
+        });
+        if (b.mechanic.zoneCount > 0) expect(l.zones.length).toBeGreaterThanOrEqual(r.min);
+      }
+    });
+  });
+
+  it('every mechanic has a style (colour, icon, label) and the label exists in en + es', () => {
+    BIOME_MECHANICS.forEach((m) => {
+      const st = ZONE_STYLE[m];
+      expect(st).toBeDefined();
+      expect(st.css).toMatch(/^#[0-9a-f]{6}$/);
+      const key = st.label.split('.')[1];
+      expect(typeof en.zones[key]).toBe('string');
+      expect(typeof es.zones[key]).toBe('string');
+      expect(en.zones[key].split(' ').length).toBeLessThanOrEqual(2);
+    });
+    expect(en.zones.boost).toBe('SPEED UP');
   });
 });

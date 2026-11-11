@@ -10,7 +10,7 @@
  */
 import Phaser from 'phaser';
 import { visibleRect, cssPerUnit } from './titleLayout.js';
-import { overlayFrame, overlayChromeH, clampScroll, scrollToReveal } from './overlayModel.js';
+import { overlayFrame, overlayChromeH, clampScroll, scrollToReveal, keycapMetrics, KEYCAP_H } from './overlayModel.js';
 import {
   PX, PX_CSS, FONT_META, pixelText, pixelPanel, uiIcon, uiSprite, ditherFill, familyOf, buttonSkin, familyLabelColor,
   selectedCardSkin, progressFillSkin, tileSkin, colorToInt, hasUiFont, UI_ICON_NAMES
@@ -32,6 +32,7 @@ export const OV = Object.freeze({
   text: PX_CSS.white,
   muted: PX_CSS.mist,
   dim: PX_CSS.periw,
+  keycapText: '#b5bcff',
   violetCss: PX_CSS.violet,
   cyanCss: PX_CSS.cyan,
   amberCss: PX_CSS.amber,
@@ -258,16 +259,27 @@ export function miniBar(scene, pct, color = OV.cyan, { u = 1, w = 80, h = 6 } = 
   return c;
 }
 
-/** Small key hint (e.g. "Enter", "Esc") on a pixel keycap, centred on (0,0). */
-export function keycap(scene, label, { u = 1, size = 11, h: hCss = 20, color = OV.muted } = {}) {
+/** Gap (logical units) between a key hint and the button it describes: 6 art px. */
+export const hintGap = (u) => 6 * artPx(u);
+
+/**
+ * Small key hint (e.g. "Enter", "Esc") on a pixel keycap, centred on (0,0). Not a button: no hover state.
+ * Width = text + 2 * 4 art px, fixed 14 art px tall, pixel font (1 font px = 1 art px) in a light tone.
+ */
+export function keycap(scene, label, { u = 1, size = 9, h: hCss = KEYCAP_H * PX_CSS_PER_ART, color = OV.keycapText } = {}) {
   const c = scene.add.container(0, 0);
   const P = artPx(u);
-  const tx = ovText(scene, 0, -P / 2, label, { u, size, color }).setOrigin(0.5);
-  const h = Math.max(10, Math.round(hCss / PX_CSS_PER_ART)) * P;
-  const w = Math.round(Math.max(Math.max(22 * u, h * 1.1), tx.width + 6 * P) / P) * P;
+  // Pixel font on the art grid (1 font px = 1 art px) without the drop shadow, which muddies glyphs on a small cap.
+  const tx = (hasUiFont(scene)
+    ? pixelText(scene, 0, 0, label, { size: FONT_META.size * 2 * u, color, shadow: false })
+    : ovText(scene, 0, 0, label, { u, size, color })).setOrigin(0.5);
+  const hArt = Math.max(10, Math.round(hCss / PX_CSS_PER_ART));
+  const m = keycapMetrics(Math.ceil(tx.width / P), { h: hArt, minW: 12 });
+  const w = m.w * P; const h = m.h * P;
   c.add([pixelPanel(scene, -w / 2, -h / 2, w, h, 'keycap', { px: P }), tx]);
   // Transform#w (4D position) is reset to 0 by every setPosition(x, y): pin it to the cap width.
   Object.defineProperty(c, 'w', { get: () => w, set: () => {}, configurable: true });
+  Object.defineProperty(c, 'capH', { get: () => h, set: () => {}, configurable: true });
   return c;
 }
 

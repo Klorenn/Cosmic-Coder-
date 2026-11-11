@@ -218,3 +218,11 @@ export function nudgeUnit(value, delta) {
   const next = (Number.isFinite(v) ? v : 0) + (Number(delta) || 0);
   return Math.round(Math.min(1, Math.max(0, next)) * 20) / 20;
 }
+
+/** Keycap size in art px: width = text + 2 * padding (padding >= 4), fixed height (14 art px by default). */
+export const KEYCAP_PAD = 4;
+export const KEYCAP_H = 14;
+export function keycapMetrics(textArtW, { pad = KEYCAP_PAD, h = KEYCAP_H, minW = 0 } = {}) {
+  const w = Math.max(minW, Math.ceil(Math.max(0, Number(textArtW) || 0)) + 2 * Math.max(KEYCAP_PAD, pad));
+  return { w, h };
+}

@@ -159,3 +159,85 @@ describe('MapManager graphics quality', () => {
     expect(mm.space.props.length).toBe(before + 1);
   });
 });
+
+describe('MapManager zone readability', () => {
+  const keys = new Set(biomeAssetManifest().map((a) => a.key));
+  const fakePlayer = (x, y) => {
+    const p = { x, y, isTinted: false, tintTopLeft: 0xffffff };
+    p.setTint = (c) => { p.isTinted = true; p.tintTopLeft = c; return p; };
+    p.clearTint = () => { p.isTinted = false; p.tintTopLeft = 0xffffff; return p; };
+    return p;
+  };
+  const setup = (stage) => {
+    const scene = fakeScene(keys);
+    const texts = [];
+    const emitted = [];
+    scene.floatText = (x, y, str, color) => texts.push({ str, color });
+    scene.events.emit = (e, data) => emitted.push([e, data]);
+    const mm = new MapManager(scene);
+    mm.init();
+    mm.generateMap(stage, { seed: 3 });
+    return { scene, mm, texts, emitted };
+  };
+
+  it('each zone gets a disc + icon; the player is tinted inside and the label floats only the first time', () => {
+    const { mm, texts, emitted } = setup(0);
+    expect(mm.zoneVisuals.length).toBe(mm.mechanicZones.length);
+    mm.zoneVisuals.forEach((v) => { expect(v.disc).toBeTruthy(); expect(v.icon).toBeTruthy(); });
+    const z = mm.mechanicZones[0];
+    const p = fakePlayer(z.x, z.y);
+    const e = mm.getBiomeEffect(0, p, 0, 16, -1e9);
+    expect(e.speedMult).toBeGreaterThan(1);
+    expect(p.isTinted).toBe(true);
+    expect(texts).toEqual([{ str: 'SPEED UP', color: '#22d3ee' }]);
+    p.x = 5; p.y = 5;
+    mm.getBiomeEffect(0, p, 16, 16, -1e9);
+    expect(p.isTinted).toBe(false);
+    p.x = z.x; p.y = z.y;
+    mm.getBiomeEffect(0, p, 32, 16, -1e9);
+    expect(texts).toHaveLength(1); // once per run
+    expect(emitted.filter(([ev]) => ev === 'zone:enter')).toHaveLength(2);
+  });
+
+  it('never clears a tint it did not set (sudo / shrine)', () => {
+    const { mm } = setup(1);
+    const z = mm.mechanicZones[0];
+    const p = fakePlayer(z.x, z.y);
+    p.setTint(0xffd700);
+    mm.getBiomeEffect(1, p, 0, 16, -1e9);
+    expect(p.tintTopLeft).toBe(0xffd700);
+    p.x = 5;
+    mm.getBiomeEffect(1, p, 16, 16, -1e9);
+    expect(p.tintTopLeft).toBe(0xffd700);
+  });
+
+  it('pulse zones switch to the red frames only while the pulse hurts', () => {
+    const { mm } = setup(3);
+    const m = BIOMES[3].mechanic;
+    const p = fakePlayer(5, 5);
+    mm.getBiomeEffect(3, p, 0, 16, -1e9);
+    expect(mm.zoneVisuals[0].frame).toBeGreaterThanOrEqual(2);
+    mm.getBiomeEffect(3, p, m.activeMs + 10, 16, -1e9);
+    expect(mm.zoneVisuals[0].frame).toBeLessThan(2);
+  });
+
+  it('wind shows a directional icon beside the player; gravity also marks its centre', () => {
+    const { mm, texts } = setup(4);
+    expect(mm.globalIndicator).toBeTruthy();
+    const p = fakePlayer(1000, 1000);
+    mm.getBiomeEffect(4, p, 0, 16, -1e9);
+    expect(texts.map((t) => t.str)).toEqual(['WIND']);
+    const g = setup(5);
+    expect(g.mm.mechanicVisuals.length).toBeGreaterThanOrEqual(3); // centre disc + icon + indicator
+  });
+
+  it('both ends of a portal pair share one colour, pairs differ', () => {
+    const { mm } = setup(2);
+    const pads = mm.teleporters.getChildren();
+    expect(pads.length).toBe(2);
+    expect(pads[0].portalColor).toBe(pads[1].portalColor);
+    // the teleport zones are the second pair (other colour)
+    expect(mm.mechanicZones.length).toBe(2);
+    expect(mm.portalPairCount).toBe(2);
+  });
+});

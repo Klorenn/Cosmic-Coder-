@@ -5,6 +5,7 @@
  *   node scripts/assets/gen-biomes.mjs            # write every PNG
  *   node scripts/assets/gen-biomes.mjs --preview  # also 2x2 tiled previews ($PREVIEW_DIR or os.tmpdir()/biome-preview)
  *   node scripts/assets/gen-biomes.mjs --sheet    # also a contact sheet at scripts/evil-player/reports/art-sheet.png
+ *   node scripts/assets/gen-biomes.mjs --zones    # only the mechanic zone discs + zone icons (hard pixel art)
  *
  * Style: soft nebulae, gaussian-haloed stars, glow, antialiasing everywhere. No grids, scanlines or
  * hard pixels: the characters are pixel sprites, so the environment stays smooth and lets them pop.
@@ -27,6 +28,7 @@ const BG_DIR = join(ROOT, 'public/assets/backgrounds/biomes');
 const MAP_DIR = join(ROOT, 'public/assets/sprites/map');
 const PREVIEW = process.argv.includes('--preview');
 const SHEET = process.argv.includes('--sheet');
+const ZONES_ONLY = process.argv.includes('--zones');
 const PREVIEW_DIR = process.env.PREVIEW_DIR || join(tmpdir(), 'biome-preview');
 const SHEET_PATH = join(ROOT, 'scripts/evil-player/reports/art-sheet.png');
 const S = MAP_ART.bgSize;
@@ -845,90 +847,190 @@ const HAZARDS = {
   entropyField: ['sparkle', { c: '#f59e0b', hot: '#fffbeb', seed: 411 }]
 };
 
-// ---------------------------------------------------------------- zones (4-frame strips, translucent)
+// ---------------------------------------------------------------- zones (hard-pixel art, 4-frame strips)
+// Zones are gameplay signs, so unlike the smooth environment they are crisp pixel art: a translucent
+// disc with a dotted (rotating) border in the effect colour + a 16x16 icon saying what the zone does.
 const ZS = MAP_ART.zoneSize;
-const ZC = ZS / 2;
-const ZR = ZS / 2 - 1.5;
+const IS = MAP_ART.iconSize;
+const OUTLINE = '#0b1020';
 
-function zoneBase(px, r, col, fill, edge, pulse = 1) {
-  if (r > 1.06) return;
-  px.glow(col, fill * pulse * (0.35 + 0.65 * Math.pow(r, 1.5)) * (1 - smooth(0.93, 1.02, r)));
-  px.glow(col, edge * pulse * Math.exp(-Math.pow((r - 0.94) / 0.035, 2)));
-  px.glow(col, edge * 0.35 * pulse * Math.exp(-Math.pow((r - 0.94) / 0.1, 2)));
+/** Straight-alpha RGBA pixel canvas (no antialiasing) -> PNG. */
+class PixCanvas {
+  constructor(w, h) { this.w = w; this.h = h; this.d = new Uint8ClampedArray(w * h * 4); }
+  set(x, y, color, a = 1) {
+    x = Math.round(x); y = Math.round(y);
+    if (x < 0 || y < 0 || x >= this.w || y >= this.h) return;
+    const c = hex(color), j = (y * this.w + x) * 4;
+    this.d[j] = Math.round(c[0] * 255); this.d[j + 1] = Math.round(c[1] * 255); this.d[j + 2] = Math.round(c[2] * 255);
+    this.d[j + 3] = Math.round(clamp01(a) * 255);
+  }
+  alpha(x, y) { return x < 0 || y < 0 || x >= this.w || y >= this.h ? 0 : this.d[(y * this.w + x) * 4 + 3]; }
+  /** Blit `src` at (ox, oy). */
+  blit(src, ox, oy) {
+    for (let y = 0; y < src.h; y++) for (let x = 0; x < src.w; x++) {
+      const j = (y * src.w + x) * 4, k = ((oy + y) * this.w + ox + x) * 4;
+      if (src.d[j + 3]) for (let c = 0; c < 4; c++) this.d[k + c] = src.d[j + c];
+    }
+  }
+}
+
+async function writePix(c, file) {
+  mkdirSync(dirname(file), { recursive: true });
+  await sharp(Buffer.from(c.d.buffer), { raw: { width: c.w, height: c.h, channels: 4 } }).png({ compressionLevel: 9 }).toFile(file);
+  written.push(file);
+}
+
+/** One 16x16 icon frame: paint(set) draws the body, then a 1 px dark outline is added around it. */
+function iconFrame(paint) {
+  const c = new PixCanvas(IS, IS);
+  paint((x, y, col, a = 1) => c.set(x, y, col, a));
+  const body = [];
+  for (let y = 0; y < IS; y++) for (let x = 0; x < IS; x++) if (c.alpha(x, y)) body.push([x, y]);
+  const isBody = (x, y) => c.alpha(x, y) > 0;
+  const ring = [];
+  for (let y = 0; y < IS; y++) for (let x = 0; x < IS; x++) {
+    if (isBody(x, y)) continue;
+    if (isBody(x - 1, y) || isBody(x + 1, y) || isBody(x, y - 1) || isBody(x, y + 1)) ring.push([x, y]);
+  }
+  ring.forEach(([x, y]) => c.set(x, y, OUTLINE, 1));
+  return c;
+}
+
+/** Bitmap rows -> paint: chars map to colours, '.' is empty. */
+const bitmap = (rows, pal, ox = 0, oy = 0) => (set) => rows.forEach((row, y) => [...row].forEach((ch, x) => { if (pal[ch]) set(x + ox, y + oy, pal[ch]); }));
+
+const ICONS = {
+  /** Double chevron pointing up (speed up): the bright chevron alternates, and the pair hops 1 px. */
+  boostZone: (f) => iconFrame((set) => {
+    const lift = f === 1 || f === 2 ? -1 : 0;
+    [2, 8].forEach((apex, k) => {
+      const col = (f % 2) === k ? '#cffafe' : '#22d3ee';
+      for (let r = 0; r < 5; r++) {
+        const y = apex + r + 1 + lift;
+        set(7 - r, y, col); set(8 + r, y, col);
+        set(7 - r, y + 1, '#0e7490'); set(8 + r, y + 1, '#0e7490');
+      }
+    });
+  }),
+  /** Hourglass (slow): the sand runs from the top bulb to the bottom one. */
+  slowZone: (f) => iconFrame((set) => {
+    const hw = [5, 5, 4, 3, 2, 1, 1, 2, 3, 4, 5, 5];
+    for (let x = 2; x <= 13; x++) { set(x, 1, '#a78bfa'); set(x, 14, '#a78bfa'); }
+    for (let i = 0; i < hw.length; i++) {
+      const y = 2 + i;
+      for (let x = 8 - hw[i]; x <= 7 + hw[i]; x++) set(x, y, '#2e1065', 0.9);
+      set(8 - hw[i] - 0, y, '#7c3aed'); set(7 + hw[i], y, '#7c3aed');
+    }
+    const sand = '#f5d0fe';
+    for (let y = 3 + f; y <= 6; y++) { const i = y - 2; for (let x = 9 - hw[i]; x <= 6 + hw[i]; x++) set(x, y, sand); }
+    for (let y = 12 - f; y <= 13; y++) { const i = y - 2; for (let x = 9 - hw[i]; x <= 6 + hw[i]; x++) set(x, y, sand); }
+    for (let y = 7; y < 12 - f; y++) set(f % 2 ? 8 : 7, y, sand);
+  }),
+  /** Skull (damage): amber while idle (frames 0-1), red with hot eyes while the pulse hurts (2-3). */
+  pulseDamage: (f) => {
+    const active = f >= 2;
+    const pal = {
+      c: active ? '#ef4444' : '#f59e0b',
+      h: active ? '#fecaca' : '#fde68a',
+      e: active ? (f === 3 ? '#ffffff' : '#fde047') : (f === 1 ? '#7c2d12' : '#1c0a00'),
+      t: active ? '#7f1d1d' : '#78350f'
+    };
+    return iconFrame(bitmap([
+      '................',
+      '.....hhhhhh.....',
+      '....hccccccc....',
+      '...hccccccccc...',
+      '...cccccccccc...',
+      '...ceeecceeec...',
+      '...ceeecceeec...',
+      '...cccceecccc...',
+      '....cccccccc....',
+      '....ctctctcc....',
+      '....cccccccc....',
+      '.....cccccc.....',
+      '................',
+      '................',
+      '................',
+      '................'
+    ], pal, 0, 1));
+  },
+  /** Three wind streaks blowing right (+x; rotated at runtime with the wind): a gap travels along each. */
+  wind: (f) => iconFrame((set) => {
+    const lines = [[4, 2, 10], [8, 0, 13], [12, 3, 9]];
+    lines.forEach(([y, x0, x1], k) => {
+      const len = x1 - x0 + 1;
+      const gap = x0 + ((f * 3 + k * 4) % len);
+      for (let x = x0; x <= x1; x++) if (x !== gap && x !== gap + 1) set(x, y, x >= x1 - 1 ? '#eef2ff' : '#c4b5fd');
+      set(x1 + 1, y - 1, '#c4b5fd'); set(x1, y - 2, '#c4b5fd');
+    });
+  }),
+  /** Spiral pulled into a gold core (gravity): turns a quarter per frame. */
+  gravity: (f) => iconFrame((set) => {
+    const rot = (f / 4) * TAU;
+    for (let s = 0; s <= 260; s++) {
+      const th = (s / 260) * 3 * Math.PI;
+      const r = 1.2 + th * 0.62;
+      if (r > 7.2) break;
+      set(Math.floor(7.5 + Math.cos(th + rot) * r + 0.5), Math.floor(7.5 + Math.sin(th + rot) * r + 0.5), r > 4.5 ? '#8b5cf6' : '#c4b5fd');
+    }
+    set(7, 7, '#fcd34d'); set(8, 7, '#fcd34d'); set(7, 8, '#fcd34d'); set(8, 8, '#fde68a');
+  }),
+  /** Teleport end letters: frame 0 = A, 1 = B, 2/3 = highlighted A/B. */
+  teleport: (f) => {
+    const A = ['..XXXX..', '.XXXXXX.', 'XX....XX', 'XX....XX', 'XXXXXXXX', 'XXXXXXXX', 'XX....XX', 'XX....XX', 'XX....XX', 'XX....XX'];
+    const B = ['XXXXXX..', 'XXXXXXX.', 'XX...XX.', 'XX...XX.', 'XXXXXX..', 'XXXXXXX.', 'XX....XX', 'XX....XX', 'XXXXXXX.', 'XXXXXX..'];
+    return iconFrame(bitmap(f % 2 ? B : A, { X: f >= 2 ? '#fef9c3' : '#ffffff' }, 4, 3));
+  }
+};
+
+/**
+ * Zone disc (64x64): translucent fill, faint inner ring, a 2 px dotted border whose dashes advance a
+ * quarter step per frame (seamless loop), and a dark rim for contrast on bright nebulae.
+ */
+function zoneDisc({ c, hot, fill = 0.16, frames = 4, style = () => ({}) }) {
+  const strip = new PixCanvas(ZS * frames, ZS);
+  const C = ZS / 2 - 0.5, R = ZS / 2 - 2;
+  const DASHES = 14;
+  for (let f = 0; f < frames; f++) {
+    const st = { c, hot, fill, phase: f / frames, ...style(f) };
+    const fr = new PixCanvas(ZS, ZS);
+    for (let y = 0; y < ZS; y++) for (let x = 0; x < ZS; x++) {
+      const dx = x - C, dy = y - C, d = Math.hypot(dx, dy);
+      if (d > R + 1) continue;
+      if (d > R) { fr.set(x, y, OUTLINE, 0.55); continue; }
+      if (d > R - 2) {
+        const u = frac(((Math.atan2(dy, dx) + Math.PI) / TAU) * DASHES + st.phase * 0.5);
+        fr.set(x, y, u < 0.5 ? st.hot : st.c, u < 0.5 ? 0.95 : 0.35);
+        continue;
+      }
+      if (d > R - 8 && d <= R - 7) { fr.set(x, y, st.c, 0.3); continue; }
+      fr.set(x, y, st.c, st.fill);
+    }
+    strip.blit(fr, f * ZS, 0);
+  }
+  return strip;
 }
 
 const ZONES = {
-  boostZone: () => {
-    const c = hex('#22d3ee'), w = hex('#cffafe');
-    return (x, y, t, px) => {
-      const r = Math.hypot(x - ZC, y - ZC) / ZR;
-      zoneBase(px, r, c, 0.12, 0.5);
-      for (let k = 0; k < 3; k++) {
-        const p = frac(t + k / 3), rad = 0.1 + p * 0.82;
-        px.glow(w, Math.sin(Math.PI * p) * 0.4 * Math.exp(-Math.pow((r - rad) / 0.035, 2)));
-      }
-    };
-  },
-  slowZone: () => {
-    const c = hex('#8b5cf6'), w = hex('#ddd6fe');
-    return (x, y, t, px) => {
-      const r = Math.hypot(x - ZC, y - ZC) / ZR;
-      if (r < 1.02) px.glow(c, 0.08 * fbm(x + Math.cos(TAU * t) * 4, y + Math.sin(TAU * t) * 4, 64, 3, 3, 707));
-      zoneBase(px, r, c, 0.16, 0.45);
-      for (let k = 0; k < 3; k++) {
-        const p = frac(-t + k / 3), rad = 0.1 + p * 0.82;
-        px.glow(w, Math.sin(Math.PI * p) * 0.3 * Math.exp(-Math.pow((r - rad) / 0.05, 2)));
-      }
-    };
-  },
-  teleport: () => {
-    // near-white so runtime setTint(color) on teleporter pads colours it cleanly
-    const c = hex('#e0f7ff'), w = hex('#ffffff');
-    return (x, y, t, px) => {
-      const dx = x - ZC, dy = y - ZC, r = Math.hypot(dx, dy) / ZR, th = Math.atan2(dy, dx);
-      zoneBase(px, r, c, 0.1, 0.55);
-      if (r < 0.95) {
-        const arms = Math.pow(0.5 + 0.5 * Math.cos(2 * th - 7 * r + TAU * t), 3);
-        px.glow(c, arms * 0.35 * (1 - r) * smooth(0.05, 0.25, r));
-      }
-      px.glow(w, 0.5 * Math.exp(-Math.pow(r / 0.18, 2)) * (0.8 + 0.2 * Math.cos(TAU * t)));
-    };
-  },
-  pulseDamage: () => {
-    const c = hex('#f59e0b'), red = hex('#ef4444'), w = hex('#fef3c7');
-    return (x, y, t, px) => {
-      const r = Math.hypot(x - ZC, y - ZC) / ZR;
-      const beat = 0.35 + 0.65 * Math.pow(0.5 + 0.5 * Math.cos(TAU * t), 2);
-      zoneBase(px, r, mix(red, c, 0.4 + 0.6 * r), 0.3, 0.6, beat);
-      px.glow(w, beat * 0.35 * Math.exp(-Math.pow((r - 0.94 * (1 - beat * 0.2)) / 0.04, 2)));
-    };
-  },
-  wind: () => {
-    const c = hex('#c4b5fd'), w = hex('#eef2ff');
-    return (x, y, t, px) => {
-      const dx = x - ZC, dy = y - ZC, r = Math.hypot(dx, dy) / ZR, th = Math.atan2(dy, dx);
-      zoneBase(px, r, c, 0.07, 0.3);
-      if (r < 0.92) {
-        // curved streaks swirling, 4-fold symmetry → rotate a quarter per loop
-        const s = 0.5 + 0.5 * Math.cos(4 * (th - (TAU / 4) * t) + 3 * r);
-        const band = Math.sin(Math.PI * clamp01((r - 0.2) / 0.7));
-        px.glow(w, Math.pow(s, 8) * band * 0.45);
-      }
-    };
-  },
-  gravity: () => {
-    const c = hex('#8b5cf6'), g = hex('#fcd34d');
-    return (x, y, t, px) => {
-      const dx = x - ZC, dy = y - ZC, r = Math.hypot(dx, dy) / ZR, th = Math.atan2(dy, dx);
-      zoneBase(px, r, c, 0.12, 0.4);
-      if (r < 0.95) {
-        const arms = Math.pow(0.5 + 0.5 * Math.cos(3 * th + 8 * Math.log(r + 0.1) + TAU * t), 4);
-        px.glow(g, arms * 0.3 * (1 - r) * smooth(0.08, 0.25, r));
-      }
-      px.glow(c, 0.45 * Math.exp(-Math.pow(r / 0.15, 2)));
-    };
-  }
+  boostZone: () => zoneDisc({ c: '#22d3ee', hot: '#cffafe' }),
+  slowZone: () => zoneDisc({ c: '#a78bfa', hot: '#ede9fe', fill: 0.2 }),
+  // teleport zones render as portals; the disc stays a neutral fallback
+  teleport: () => zoneDisc({ c: '#22d3ee', hot: '#ffffff', fill: 0.12 }),
+  // frames 0-1 idle (amber, calm), 2-3 active (red, hot): MapManager picks the frame from the pulse phase
+  pulseDamage: () => zoneDisc({ c: '#f59e0b', hot: '#fde68a', fill: 0.14, style: (f) => (f >= 2 ? { c: '#ef4444', hot: '#fecaca', fill: 0.32 } : {}) }),
+  wind: () => zoneDisc({ c: '#c4b5fd', hot: '#eef2ff', fill: 0.1 }),
+  gravity: () => zoneDisc({ c: '#8b5cf6', hot: '#fcd34d', fill: 0.18 })
 };
+
+async function writeZones() {
+  for (const m of BIOME_MECHANICS) {
+    if (!ZONES[m] || !ICONS[m]) throw new Error(`missing zone/icon recipe for ${m}`);
+    await writePix(ZONES[m](), join(MAP_DIR, `zone-${m}.png`));
+    const strip = new PixCanvas(IS * MAP_ART.iconFrames, IS);
+    for (let f = 0; f < MAP_ART.iconFrames; f++) strip.blit(ICONS[m](f), f * IS, 0);
+    await writePix(strip, join(MAP_DIR, `zone-icon-${m}.png`));
+  }
+}
 
 // ---------------------------------------------------------------- borders (32x32, tileable, opaque)
 const BORDERS = {
@@ -966,6 +1068,11 @@ function drawBorder(id, i) {
 async function main() {
   mkdirSync(BG_DIR, { recursive: true });
   mkdirSync(MAP_DIR, { recursive: true });
+  if (ZONES_ONLY) {
+    await writeZones();
+    console.log(`wrote ${written.length} PNGs (zones + icons)`);
+    return;
+  }
   const biomes = Object.values(BIOMES);
   for (const [i, b] of biomes.entries()) {
     const recipe = BG[b.id];
@@ -983,10 +1090,7 @@ async function main() {
     const [kind, opts] = HAZARDS[t];
     await writePng(renderStrip(HZ, HZ, MAP_ART.hazardFrames, hazardShaders[kind](opts)), join(MAP_DIR, `hazard-${t}.png`));
   }
-  for (const m of BIOME_MECHANICS) {
-    if (!ZONES[m]) throw new Error(`missing zone recipe for ${m}`);
-    await writePng(renderStrip(ZS, ZS, MAP_ART.zoneFrames, ZONES[m]()), join(MAP_DIR, `zone-${m}.png`));
-  }
+  await writeZones();
   await writePng(renderStrip(MAP_ART.crateSize, MAP_ART.crateSize, 1, crateShader()), join(MAP_DIR, 'crate.png'));
 
   if (PREVIEW) {
@@ -1051,6 +1155,7 @@ async function contactSheet(biomes) {
   await place(borderTiles, 2, 6);
   await place(Object.keys(HAZARD_DEFS).map((t) => m(`hazard-${t}.png`)), 2, 4);
   await place(BIOME_MECHANICS.map((z) => m(`zone-${z}.png`)), 2, 3);
+  await place(BIOME_MECHANICS.map((z) => m(`zone-icon-${z}.png`)), 6, 3);
   mkdirSync(dirname(SHEET_PATH), { recursive: true });
   await sharp({ create: { width: W, height: y, channels: 4, background: '#0b1024ff' } })
     .composite(comps).png().toFile(SHEET_PATH);

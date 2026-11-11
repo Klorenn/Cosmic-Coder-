@@ -47,6 +47,9 @@ export const MAP_ART = Object.freeze({
   hazardFrames: 4,
   zoneSize: 64,
   zoneFrames: 4,
+  /** Pixel icon drawn at the centre of each mechanic zone (16x16, 4-frame strip; teleport = A/B letters). */
+  iconSize: 16,
+  iconFrames: 4,
   borderSize: 32,
   crateSize: 32
 });
@@ -105,44 +108,66 @@ export const LAYOUT_RULES = Object.freeze({
   edgeMargin: 96,
   gap: 24,
   stageGrowth: 0.15,
-  counts: { walls: 8, furniture: 14, hazards: 6, crates: 15 }
+  counts: { walls: 8, furniture: 14, hazards: 6, crates: 15 },
+  /** Mechanic zones per map (small and few so they read as landmarks, not wallpaper). */
+  zones: Object.freeze({ min: 1, max: 2, radiusMin: 70, radiusMax: 90 }),
+  /** Teleporter pad pairs per map; the teleport biome gets one pad pair (its zones are the second pair). */
+  teleporterPairs: 2,
+  teleporterPairsTeleportBiome: 1
 });
+
+/**
+ * Readability of mechanic zones (docs/MAPS.md): colour of the dotted disc + icon, the player tint while
+ * inside, and the i18n key of the one-time floating label (zones.*). Wind / gravity are global: no disc
+ * under the player, a small directional icon next to the player instead (gravity also marks its centre).
+ */
+export const ZONE_STYLE = Object.freeze({
+  boostZone: Object.freeze({ color: 0x22d3ee, css: '#22d3ee', tint: 0xa5f3fc, label: 'zones.boost', icon: 'boostZone' }),
+  slowZone: Object.freeze({ color: 0xa78bfa, css: '#a78bfa', tint: 0xc4b5fd, label: 'zones.slow', icon: 'slowZone' }),
+  pulseDamage: Object.freeze({ color: 0xf59e0b, css: '#f87171', tint: 0xfca5a5, label: 'zones.damage', icon: 'pulseDamage' }),
+  wind: Object.freeze({ color: 0xc4b5fd, css: '#c4b5fd', tint: null, label: 'zones.wind', icon: 'wind' }),
+  gravity: Object.freeze({ color: 0x8b5cf6, css: '#a78bfa', tint: null, label: 'zones.gravity', icon: 'gravity' }),
+  teleport: Object.freeze({ color: 0x22d3ee, css: '#22d3ee', tint: null, label: 'zones.teleport', icon: 'teleport' })
+});
+
+/** Teleporter pair colours: both ends of a pair share one colour (A/B letters mark the ends). */
+export const PORTAL_PAIR_SIDES = Object.freeze(['a', 'b']);
 
 export const BIOMES = {
   0: {
     id: 'debug-zone', bgVariant: 'debug-zone', name: 'DEBUG ZONE', wallTint: 0x00ffff, hazardDamage: 8,
     obstacles: ['codeBlock', 'terminal'], hazardTypes: ['bugSwarm', 'nullDeref'],
     interactives: ['crate', 'monitor'], density: 0.3,
-    mechanic: { type: 'boostZone', speedMult: 1.25, zoneCount: 3, zoneRadius: 90, color: 0x00ffff }
+    mechanic: { type: 'boostZone', speedMult: 1.25, zoneCount: 2, zoneRadius: 80, color: 0x22d3ee }
   },
   1: {
     id: 'memory-banks', bgVariant: 'memory-banks', name: 'MEMORY BANKS', wallTint: 0xaa00ff, hazardDamage: 12,
     obstacles: ['serverRack', 'memoryStick'], hazardTypes: ['memoryLeak', 'heapFragment'],
     interactives: ['crate', 'dataCore'], density: 0.4,
-    mechanic: { type: 'slowZone', speedMult: 0.55, zoneCount: 5, zoneRadius: 120, color: 0x8800cc }
+    mechanic: { type: 'slowZone', speedMult: 0.55, zoneCount: 2, zoneRadius: 85, color: 0xa78bfa }
   },
   2: {
     id: 'network-layer', bgVariant: 'network-layer', name: 'NETWORK LAYER', wallTint: 0x00ff00, hazardDamage: 15,
     obstacles: ['routerBox', 'cableBundle'], hazardTypes: ['packetStorm', 'packetLoss'],
     interactives: ['crate', 'signalBoost'], density: 0.35,
-    mechanic: { type: 'teleport', cooldownMs: 2500, zoneCount: 4, zoneRadius: 40, color: 0x00ff88 }
+    mechanic: { type: 'teleport', cooldownMs: 2500, zoneCount: 2, zoneRadius: 40, color: 0x00ff88 }
   },
   3: {
     id: 'kernel-space', bgVariant: 'kernel-space', name: 'KERNEL SPACE', wallTint: 0xff4400, hazardDamage: 22,
     obstacles: ['cpuCore', 'registerBlock'], hazardTypes: ['kernelPanic', 'thermal'],
     interactives: ['crate', 'processNode'], density: 0.45,
-    mechanic: { type: 'pulseDamage', dps: 12, periodMs: 3000, activeMs: 1000, zoneCount: 4, zoneRadius: 110, color: 0xff2200 }
+    mechanic: { type: 'pulseDamage', dps: 12, periodMs: 3000, activeMs: 1000, zoneCount: 2, zoneRadius: 80, color: 0xf59e0b }
   },
   4: {
     id: 'cloud-cluster', bgVariant: 'cloud-cluster', name: 'CLOUD CLUSTER', wallTint: 0x4488ff, hazardDamage: 18,
     obstacles: ['cloudServer', 'apiPortal'], hazardTypes: ['latencySpike', 'coldStart'],
     interactives: ['crate', 'containerPod'], density: 0.4,
-    mechanic: { type: 'wind', strength: 60, periodMs: 20000, zoneCount: 0, color: 0x88aaff }
+    mechanic: { type: 'wind', strength: 60, periodMs: 20000, zoneCount: 0, color: 0xc4b5fd }
   },
   5: {
     id: 'singularity', bgVariant: 'singularity', name: 'SINGULARITY', wallTint: 0xffd700, hazardDamage: 28,
     obstacles: ['voidFragment', 'eventHorizon'], hazardTypes: ['blackHole', 'entropyField'],
     interactives: ['crate', 'quantumCache'], density: 0.5,
-    mechanic: { type: 'gravity', strength: 70, falloffDist: 1000, zoneCount: 0, color: 0xffd700 }
+    mechanic: { type: 'gravity', strength: 70, falloffDist: 1000, zoneCount: 0, color: 0x8b5cf6 }
   }
 };

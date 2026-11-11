@@ -23,6 +23,30 @@ const HIT = (texKey, compose) => ({
 });
 
 /**
+ * Front (walk-down) and back (walk-up) walk cycles drawn by scripts/assets/gen-char-dirs.mjs.
+ * `prefix` is the character's anim prefix (CHARACTERS[*].animPrefix); the anims registered are
+ * `${prefix}-walk-down` / `${prefix}-walk-up` (+ `${prefix}-idle-down` / `-idle-up`: frame 0 held).
+ */
+const DIR = (char, prefix, dir) => ({
+  char,
+  prefix,
+  dir,
+  key: `${char}-walk-${dir}`,
+  file: `player/${char}-walk-${dir}.png`,
+  frameSize: 128,
+  frames: 8,
+  frameRate: 12
+});
+export const CHARACTER_DIR_SHEETS = [
+  DIR('robot', 'player', 'down'),
+  DIR('robot', 'player', 'up'),
+  DIR('destroyer', 'player-destroyer', 'down'),
+  DIR('destroyer', 'player-destroyer', 'up'),
+  DIR('swordsman', 'player-swordsman', 'down'),
+  DIR('swordsman', 'player-swordsman', 'up')
+];
+
+/**
  * One silhouette sheet per texture a player sprite can show while alive.
  * `compose` replicates how BootScene builds the composite (idle 0-5 clamped + walk 0-5).
  */
@@ -34,12 +58,13 @@ export const CHARACTER_HIT_SHEETS = [
   HIT('swordsman-walk', [{ file: 'player/swordsman-walk.png', frames: range(8) }]),
   HIT('robot-hurt', [{ file: 'player/robot-hurt.png', frames: range(4) }]),
   HIT('destroyer-hurt', [{ file: 'player/destroyer-hurt.png', frames: range(3) }]),
-  HIT('swordsman-hurt', [{ file: 'player/swordsman-hurt.png', frames: range(3) }])
+  HIT('swordsman-hurt', [{ file: 'player/swordsman-hurt.png', frames: range(3) }]),
+  ...CHARACTER_DIR_SHEETS.map((d) => HIT(d.key, [{ file: d.file, frames: range(d.frames) }]))
 ];
 
-/** Queue hit-flash sheets. Call from BootScene.preload(). */
+/** Queue hit-flash sheets + front/back walk sheets. Call from BootScene.preload(). */
 export function preloadCharacterAssets(scene) {
-  for (const s of CHARACTER_HIT_SHEETS) {
+  for (const s of [...CHARACTER_DIR_SHEETS, ...CHARACTER_HIT_SHEETS]) {
     if (scene.textures.exists(s.key)) continue;
     scene.load.spritesheet(s.key, getAssetPath(`assets/sprites/${s.file}`), {
       frameWidth: s.frameSize,
@@ -80,6 +105,38 @@ export function createCharacterAnims(scene) {
           repeat: -1
         });
       }
+    }
+  }
+  createDirectionalAnims(scene);
+}
+
+/**
+ * 4-direction walk: `${prefix}-walk-down` / `-walk-up` use the front / back sheets (override the old
+ * lateral fallbacks), `${prefix}-idle-down` / `-idle-up` hold frame 0 of them. VoidNull / SyncStorm
+ * idle-down reuses their (front-facing) idle cycle. `-walk-side` + flipX stays the lateral walk.
+ */
+export function createDirectionalAnims(scene) {
+  for (const d of CHARACTER_DIR_SHEETS) {
+    if (!scene.textures.exists(d.key)) continue;
+    recreate(scene, {
+      key: `${d.prefix}-walk-${d.dir}`,
+      frames: scene.anims.generateFrameNumbers(d.key, { start: 0, end: d.frames - 1 }),
+      frameRate: d.frameRate,
+      repeat: -1
+    });
+    const idleKey = `${d.prefix}-idle-${d.dir}`;
+    const frontIdle = d.dir === 'down' && d.prefix !== 'player' && scene.anims.exists(`${d.prefix}-idle`);
+    if (frontIdle) {
+      const base = scene.anims.get(`${d.prefix}-idle`);
+      recreate(scene, {
+        key: idleKey,
+        frames: base.frames.map((f) => ({ key: f.textureKey, frame: f.textureFrame })),
+        frameRate: base.frameRate,
+        yoyo: base.yoyo,
+        repeat: -1
+      });
+    } else {
+      recreate(scene, { key: idleKey, frames: [{ key: d.key, frame: 0 }], frameRate: 1, repeat: -1 });
     }
   }
 }

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ENEMIES, MINI_BOSSES, BOSSES } from '../data/enemies.js';
 import { ITEMS } from '../data/items.js';
 import { ENEMY_SPRITES, ITEM_ICONS, ITEM_FX_IMAGES, PROCEDURAL_TEXTURES, XP_GEM_SPRITES, getEnemySprite } from '../scenes/boot/enemyAssets.js';
-import { CHARACTER_HIT_SHEETS } from '../scenes/boot/characterAssets.js';
+import { CHARACTER_HIT_SHEETS, CHARACTER_DIR_SHEETS } from '../scenes/boot/characterAssets.js';
 import { WEAPONS, EVOLUTION_RECIPES } from '../data/weapons.js';
 import { WEAPON_SHEETS, WEAPON_IMAGES, WEAPON_TEXTURE_KEYS, ALL_WEAPON_IDS, weaponTextureKey, weaponAnimKey } from '../scenes/boot/weaponAssets.js';
 
@@ -72,8 +72,27 @@ describe('asset manifest', () => {
     for (const part of s.compose) expect(fs.existsSync(path.join(SPRITES, part.file))).toBe(true);
   });
 
+  it.each(CHARACTER_DIR_SHEETS.map((s) => [s.key, s]))('%s front/back walk sheet exists with a hit-flash twin', (_key, s) => {
+    const file = path.join(SPRITES, s.file);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(pngSize(file)).toEqual({ width: s.frameSize * s.frames, height: s.frameSize });
+    expect(s.frames).toBeGreaterThanOrEqual(6);
+    expect(s.frames).toBeLessThanOrEqual(8);
+    expect(['down', 'up']).toContain(s.dir);
+    const hit = CHARACTER_HIT_SHEETS.find((h) => h.texKey === s.key);
+    expect(hit, `${s.key}-hit-v2`).toBeDefined();
+    expect(hit.frames).toBe(s.frames);
+  });
+
+  it('every character has both a walk-down and a walk-up sheet', () => {
+    for (const prefix of ['player', 'player-destroyer', 'player-swordsman']) {
+      const dirs = CHARACTER_DIR_SHEETS.filter((s) => s.prefix === prefix).map((s) => s.dir).sort();
+      expect(dirs, prefix).toEqual(['down', 'up']);
+    }
+  });
+
   it('texture and anim keys are unique', () => {
-    const keys = [...ENEMY_SPRITES.map((s) => s.key), ...ENEMY_SPRITES.map((s) => s.anim), ...XP_GEM_SPRITES.map((s) => s.key), ...XP_GEM_SPRITES.map((s) => s.anim), ...ITEM_ICONS.map((i) => i.key), ...ITEM_FX_IMAGES.map((i) => i.key), ...CHARACTER_HIT_SHEETS.map((s) => s.key)];
+    const keys = [...ENEMY_SPRITES.map((s) => s.key), ...ENEMY_SPRITES.map((s) => s.anim), ...XP_GEM_SPRITES.map((s) => s.key), ...XP_GEM_SPRITES.map((s) => s.anim), ...ITEM_ICONS.map((i) => i.key), ...ITEM_FX_IMAGES.map((i) => i.key), ...CHARACTER_HIT_SHEETS.map((s) => s.key), ...CHARACTER_DIR_SHEETS.map((s) => s.key)];
     expect(new Set(keys).size).toBe(keys.length);
   });
 

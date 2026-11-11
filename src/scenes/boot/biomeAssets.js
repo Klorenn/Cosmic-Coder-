@@ -17,6 +17,9 @@ export const hazardKey = (type) => `map-haz-${type}`;
 export const hazardAnimKey = (type) => `map-haz-${type}-loop`;
 export const zoneKey = (mechanic) => `map-zone-${mechanic}`;
 export const zoneAnimKey = (mechanic) => `map-zone-${mechanic}-loop`;
+/** 16x16 pixel icon at the centre of a zone (what the zone does); teleport = A/B letters (frames 0/1). */
+export const zoneIconKey = (mechanic) => `map-zone-icon-${mechanic}`;
+export const zoneIconAnimKey = (mechanic) => `map-zone-icon-${mechanic}-loop`;
 export const CRATE_KEY = 'map-crate';
 /** Animated teleporter portals (scripts/assets/gen-items.mjs): pair A cyan, pair B magenta. */
 export const PORTAL_SIDES = ['a', 'b'];
@@ -44,6 +47,11 @@ export function biomeAssetManifest() {
     key: zoneKey(m), path: `${MAP_DIR}/zone-${m}.png`, kind: 'sheet',
     frameWidth: MAP_ART.zoneSize, frameHeight: MAP_ART.zoneSize, frames: MAP_ART.zoneFrames,
     width: MAP_ART.zoneSize * MAP_ART.zoneFrames, height: MAP_ART.zoneSize
+  }));
+  BIOME_MECHANICS.forEach((m) => out.push({
+    key: zoneIconKey(m), path: `${MAP_DIR}/zone-icon-${m}.png`, kind: 'sheet',
+    frameWidth: MAP_ART.iconSize, frameHeight: MAP_ART.iconSize, frames: MAP_ART.iconFrames,
+    width: MAP_ART.iconSize * MAP_ART.iconFrames, height: MAP_ART.iconSize
   }));
   // Animated space background (one variant per stage; scripts/assets/gen-space-bg.mjs). The legacy
   // biome-<id>-far/near keys above stay loaded for compatibility (ArenaScene checks them).
@@ -80,6 +88,8 @@ export function ensureBiomeAnims(scene) {
     });
   };
   Object.keys(HAZARD_DEFS).forEach((t) => make(hazardAnimKey(t), hazardKey(t), MAP_ART.hazardFrames, 6));
-  BIOME_MECHANICS.forEach((m) => make(zoneAnimKey(m), zoneKey(m), MAP_ART.zoneFrames, 5));
+  // pulseDamage frames are driven by the pulse phase in MapManager (0-1 idle, 2-3 active); teleport icons are letters.
+  BIOME_MECHANICS.forEach((m) => { if (m !== 'pulseDamage') make(zoneAnimKey(m), zoneKey(m), MAP_ART.zoneFrames, 4); });
+  BIOME_MECHANICS.forEach((m) => { if (m !== 'pulseDamage' && m !== 'teleport') make(zoneIconAnimKey(m), zoneIconKey(m), MAP_ART.iconFrames, 4); });
   PORTAL_SIDES.forEach((side) => make(portalAnimKey(side), portalKey(side), PORTAL_ART.frames, PORTAL_ART.frameRate));
 }

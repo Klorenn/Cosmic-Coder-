@@ -465,6 +465,14 @@ export default {
       blink: 'REDIRECCIÓN'
     }
   },
+  zones: {
+    boost: 'VELOCIDAD',
+    slow: 'LENTO',
+    damage: 'DAÑO',
+    wind: 'VIENTO',
+    gravity: 'GRAVEDAD',
+    teleport: 'TELEPORT'
+  },
   items: {
     health_patch: 'PARCHE DE VIDA',
     cache_hit: 'CACHE HIT',
