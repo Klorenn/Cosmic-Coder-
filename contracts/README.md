@@ -87,9 +87,11 @@ SOURCE_ACCOUNT=<identity> ./scripts/deploy_contracts_testnet.sh
 ```
 
 Deploys both verifiers and `cosmic_coder` (constructor args `--admin --game_hub`), wires the
-Groth16 verifier, pins the GameRun VK from `circuits/build/contract_proof.json` and stores the Noir VK
-from `public/circuits/GameRun_vk.json`. `set_unlock_vk` must be called manually with the
-SkillProof VK in contract hex format.
+Groth16 verifier, pins the GameRun VK (`ZK_CIRCUIT=v3` by default, from
+`circuits/build/contract_proof_v3.json`) and pins the SkillProof unlock VK via `set_unlock_vk`
+(`UNLOCK_VK_JSON`, default `circuits/build/contract_proof_skill.json`). The script is idempotent:
+re-running it re-pins the VKs on the existing contracts. Current testnet IDs and transaction hashes
+live in `docs/TESTNET_DEPLOYMENT.md`.
 
 The UltraHonk **stub is NOT wired** (`set_noir_verifier` is skipped), so `submit_zk_noir` fails
 with `#16 NoirVerifierNotSet`. `ENABLE_NOIR_STUB=1` wires it anyway for an insecure demo (prints a
