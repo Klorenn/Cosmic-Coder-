@@ -861,24 +861,14 @@ export default class TitleScene extends Phaser.Scene {
     const overlay = this.add.container(0, 0);
     overlay.setDepth(6000);
 
+    // Pixel-kit loading card: dim backdrop + bevelled panel + bitmap-font message.
     const backdrop = this.add.rectangle(cx, cy, w + 100, h + 100, 0x000000, 0.65);
-    const panel = this.add.rectangle(cx, cy, boxW, boxH, 0x0a0a14, 1);
-    panel.setStrokeStyle(2, 0x00ffff);
-
-    const label = this.add.text(cx, cy - 18, 'ZK', {
-      fontFamily: 'monospace',
-      fontSize: `${Math.round(20 * uiScale)}px`,
-      color: '#00ffff',
-      fontStyle: 'bold'
-    }).setOrigin(0.5);
-
-    const msg = this.add.text(cx, cy + 18, String(text || 'Loading...'), {
-      fontFamily: 'monospace',
-      fontSize: `${Math.round(12 * uiScale)}px`,
-      color: '#ffffff',
-      align: 'center',
-      wordWrap: { width: boxW - 40 }
-    }).setOrigin(0.5);
+    const px = Math.max(2, Math.round(2 * uiScale));
+    const panel = pixelPanel(this, cx - boxW / 2, cy - boxH / 2, boxW, boxH, 'panel-accent', { px });
+    const label = pixelText(this, cx, cy - 20, 'COSMIC CODER', { size: 8 * px, color: 0x4fe3ff, align: 'center' });
+    label.setOrigin(0.5);
+    const msg = pixelText(this, cx, cy + 16, String(text || 'Loading...'), { size: 8 * px, color: 0xffffff, align: 'center' });
+    msg.setOrigin(0.5);
 
     overlay.add([backdrop, panel, label, msg]);
     this.startupLoadingOverlay = overlay;
