@@ -5,7 +5,8 @@
 #   ultrahonk_verifier  Noir/UltraHonk verifier (STRUCTURAL STUB, legacy VITE_ZK_BACKEND=noir only)
 #   cosmic_coder        game policy; constructor(admin, game_hub)
 #
-# Order: deploy -> constructor -> set_verifier (groth16) -> set_run_vk (GameRunV3 VK, circuits/build/contract_proof_v3.json).
+# Order: deploy -> constructor -> set_verifier (groth16) -> set_run_vk (GameRunV3 VK, circuits/build/contract_proof_v3.json)
+#        -> set_unlock_vk (SkillProof VK, UNLOCK_VK_JSON, default circuits/build/contract_proof_skill.json).
 # Ranked (submit_zk, Groth16) is only verified on-chain once set_run_vk ran, so a missing
 # VK file aborts the script instead of leaving the board unverifiable.
 #
@@ -17,6 +18,8 @@
 # Optional:
 #   ADMIN=G...        admin of cosmic_coder and ultrahonk_verifier (default: SOURCE_ACCOUNT's address)
 #   GAME_HUB=C...     Game Hub contract (default: hackathon testnet hub below)
+#   UNLOCK_VK_JSON=path  SkillProof contract-format proof whose "vk" set_unlock_vk pins (re-applied on every
+#                     run; default circuits/build/contract_proof_skill.json from scripts/zk/generate_skill_proof.js).
 #   ZK_CIRCUIT=v1     pin the LEGACY GameRun VK (circuits/build/contract_proof.json, no private witness:
 #                     any score >= wave*5 is provable). Default v3 = GameRunV3 (scripts/zk/build_GameRunV3.sh).
 #                     The frontend VITE_ZK_CIRCUIT must match, or every ranked submit fails with #8 VkMismatch.
@@ -47,6 +50,9 @@ case "$ZK_CIRCUIT" in
 esac
 # RUN_PROOF_JSON contains the run VK (hex, contract format) that set_run_vk pins.
 NOIR_VK_JSON="$ROOT/public/circuits/GameRun_vk.json"         # UltraHonk VK payload
+# SkillProof VK (contract hex, ic x3) pinned with set_unlock_vk; any contract_proof_skill.json made with
+# circuits/build/SkillProof_final.zkey carries it (the browser/prover must use that same zkey).
+UNLOCK_VK_JSON="${UNLOCK_VK_JSON:-$ROOT/circuits/build/contract_proof_skill.json}"
 
 for w in groth16_verifier ultrahonk_verifier cosmic_coder; do
   if [ ! -f "$WASM_DIR/$w.wasm" ]; then
@@ -68,7 +74,7 @@ Manual steps (replace <SOURCE>, <ADMIN>):
   stellar contract deploy --source-account <SOURCE> --network $NETWORK --wasm $WASM_DIR/cosmic_coder.wasm -- --admin <ADMIN> --game_hub $GAME_HUB
   stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_verifier --verifier <VERIFIER_ID>
   stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_run_vk --vk '<"vk" of $RUN_PROOF_JSON, hex without 0x: {"alpha":hex,"beta":hex,"gamma":hex,"delta":hex,"ic":[hex x8]}>'
-  stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_unlock_vk --vk '<SkillProof VK JSON, ic x3>'
+  stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_unlock_vk --vk '<"vk" of $UNLOCK_VK_JSON, same hex format, ic x3>'
   # Legacy VITE_ZK_BACKEND=noir only, with a REAL UltraHonk verifier (the bundled one is a stub => ranked forgeable):
   # stellar contract invoke --id <POLICY_ID> --source-account <SOURCE> --network $NETWORK -- set_noir_verifier --verifier <NOIR_VERIFIER_ID>
   stellar contract invoke --id <NOIR_VERIFIER_ID> --source-account <SOURCE> --network $NETWORK -- set_vk --vk_json <hex of $NOIR_VK_JSON>
@@ -126,7 +132,8 @@ if [ ! -f "$RUN_PROOF_JSON" ]; then
   exit 1
 fi
 echo "Registering run VK ($ZK_CIRCUIT) from $RUN_PROOF_JSON..."
-RUN_VK=$(python3 -I -c 'import json,sys; vk=json.load(open(sys.argv[1]))["vk"]; s=lambda h: h[2:] if h.startswith("0x") else h; print(json.dumps({k:(list(map(s,v)) if k=="ic" else s(v)) for k,v in vk.items()}))' "$RUN_PROOF_JSON")
+vk_arg() { python3 -I -c 'import json,sys; vk=json.load(open(sys.argv[1]))["vk"]; n=int(sys.argv[2]); assert len(vk["ic"])==n, "%s: ic has %d points, expected %d" % (sys.argv[1], len(vk["ic"]), n); s=lambda h: h[2:] if h.startswith("0x") else h; print(json.dumps({k:(list(map(s,v)) if k=="ic" else s(v)) for k,v in vk.items()}))' "$1" "$2"; }
+RUN_VK=$(vk_arg "$RUN_PROOF_JSON" 8)
 invoke "$POLICY_ID" set_run_vk --vk "$RUN_VK"
 
 if [ "${ENABLE_NOIR_STUB:-0}" = "1" ]; then
@@ -150,7 +157,12 @@ else
   echo "WARN: $NOIR_VK_JSON not found. submit_zk_noir fails (VerifierError) until set_vk is called."
 fi
 
-echo "NOTE: unlock_weapon stays disabled (VkNotSet) until the admin calls set_unlock_vk with the SkillProof VK (contract hex format, ic x3)."
+if [ -f "$UNLOCK_VK_JSON" ]; then
+  echo "Registering unlock VK (SkillProof) from $UNLOCK_VK_JSON..."
+  invoke "$POLICY_ID" set_unlock_vk --vk "$(vk_arg "$UNLOCK_VK_JSON" 3)"
+else
+  echo "WARN: $UNLOCK_VK_JSON not found (run node scripts/zk/generate_skill_proof.js). unlock_weapon fails with #7 VkNotSet until set_unlock_vk is called."
+fi
 echo ""
 echo "================ Deployed contract IDs ($NETWORK) ================"
 echo "  groth16_verifier   VERIFIER_ID=$VERIFIER_ID"

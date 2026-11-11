@@ -5,6 +5,8 @@ vi.mock('../services/NoirService.js', () => ({ NoirService: class {} }));
 vi.mock('../utils/stellarWallet.js', () => ({ getFreighterNetwork: async () => null }));
 
 import { buildUnlockWeaponArgs, CONTRACT_WEAPON_THRESHOLDS } from '../contracts/weaponClient.js';
+import realProof from '../../circuits/fixtures/skillproof_w2_t1000.json';
+import acceptedTx from '../../circuits/fixtures/skillproof_w2_t1000.unlock_tx.json';
 
 const hex = (n, byte) => byte.toString(16).padStart(2, '0').repeat(n);
 const prover = () => ({
@@ -57,5 +59,24 @@ describe('buildUnlockWeaponArgs', () => {
     await expect(buildUnlockWeaponArgs(player, 2, { ...p, pub_signals: [hex(32, 0)] })).rejects.toThrow(/pub_signals/);
     await expect(buildUnlockWeaponArgs(player, 2, { ...p, vk: undefined })).rejects.toThrow();
     await expect(buildUnlockWeaponArgs(player, 2, null)).rejects.toThrow();
+  });
+});
+
+// Real SkillProof (weapon 2, threshold 1000, circuits/build/SkillProof_final.zkey) and the args of the
+// testnet unlock_weapon tx that the contract accepted with it (circuits/fixtures/README.md).
+
+describe('buildUnlockWeaponArgs with the real testnet SkillProof', () => {
+  it('produces byte-for-byte the ScVals unlock_weapon accepted on testnet', async () => {
+    const args = await buildUnlockWeaponArgs(acceptedTx.player, acceptedTx.weapon_id, realProof);
+    expect(args.map((a) => a.toXDR('base64'))).toEqual(acceptedTx.args_xdr);
+  });
+
+  it('keeps pub_signals = [threshold, public_hash] with threshold == contract table', async () => {
+    const args = await buildUnlockWeaponArgs(acceptedTx.player, 2, realProof);
+    const signals = args[4].vec().map((s) => Buffer.from(s.bytes()).toString('hex'));
+    expect(signals).toEqual(realProof.pub_signals);
+    expect(BigInt('0x' + signals[0])).toBe(BigInt(CONTRACT_WEAPON_THRESHOLDS[1]));
+    expect(args[5].u32()).toBe(1000);
+    expect(args[3].map().find((e) => e.key().sym().toString() === 'ic').val().vec()).toHaveLength(3);
   });
 });

@@ -1647,3 +1647,52 @@ fn test_unlock_replay_with_non_canonical_hash_is_rejected() {
     );
     assert!(!c.is_weapon_unlocked(&q, &2));
 }
+
+/// Real SkillProof for weapon 2 (threshold 1000, score 1500 private) proven with
+/// circuits/build/SkillProof_final.zkey; its VK is the one pinned on testnet with set_unlock_vk.
+const SKILL_W2_T1000_PROOF: &str = include_str!("../../../circuits/fixtures/skillproof_w2_t1000.json");
+
+/// Real unlock proof: threshold mismatch -> ThresholdMismatch, tampered public_hash -> InvalidProof,
+/// accepted once, then AlreadyUnlocked for the same player and Replay for any other player.
+#[test]
+fn test_real_skill_proof_w2_unlock_mismatch_replay() {
+    let ctx = bare();
+    let env = &ctx.env;
+    let (proof, vk, raw) = parse_real_proof(env, SKILL_W2_T1000_PROOF);
+    assert_eq!(raw.len() as u32, UNLOCK_PUBLIC_SIGNALS);
+    assert_eq!(be_u64(&raw[0]), 1000);
+
+    let c = ctx.client();
+    c.set_verifier(&env.register(Groth16Verifier, ()));
+    c.set_unlock_vk(&vk);
+
+    let signals = |raw: &[[u8; 32]]| {
+        let mut v = SorobanVec::new(env);
+        for a in raw {
+            v.push_back(BytesN::from_array(env, a));
+        }
+        v
+    };
+    let sig = signals(&raw);
+    let unlock = |p: &Address, weapon: u32, sig: &SorobanVec<BytesN<32>>, threshold: u32| {
+        match c.try_unlock_weapon(p, &weapon, &proof, &vk, sig, &threshold) {
+            Ok(Ok(())) => Ok(()),
+            Err(Ok(e)) => Err(e),
+            other => panic!("unexpected host-level result: {:?}", other),
+        }
+    };
+    let p = Address::generate(env);
+
+    assert_eq!(unlock(&p, 2, &sig, 5000), Err(CosmicCoderError::ThresholdMismatch));
+    assert_eq!(unlock(&p, 3, &sig, 5000), Err(CosmicCoderError::SignalMismatch));
+    let mut forged = raw.clone();
+    forged[1][31] ^= 1;
+    assert_eq!(unlock(&p, 2, &signals(&forged), 1000), Err(CosmicCoderError::InvalidProof));
+    assert!(!c.is_weapon_unlocked(&p, &2));
+
+    assert_eq!(unlock(&p, 2, &sig, 1000), Ok(()));
+    assert!(c.is_weapon_unlocked(&p, &2));
+    assert_eq!(c.get_unlocked_weapons(&p), vec![env, 2u32]);
+    assert_eq!(unlock(&p, 2, &sig, 1000), Err(CosmicCoderError::AlreadyUnlocked));
+    assert_eq!(unlock(&Address::generate(env), 2, &sig, 1000), Err(CosmicCoderError::Replay));
+}

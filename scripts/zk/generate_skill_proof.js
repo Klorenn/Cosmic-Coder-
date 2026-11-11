@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 /**
- * Generate a Groth16 proof from SkillProof circuit + input.json, then export for contract.
+ * Generate + verify a Groth16 proof from SkillProof circuit + input.json, then export for contract
+ * (circuits/build/contract_proof_skill.json).
  * Usage: node generate_skill_proof.js [path/to/input.json] [path/to/circuits/build]
  */
 import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exportProof, exportVk, exportPubSignals } from './export_for_contract.js';
+import { toContractFormat } from './export_for_contract.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '../..');
@@ -39,26 +40,16 @@ execSync(
   { stdio: 'inherit' }
 );
 
-console.log('Exporting for contract...');
-const outPath = path.join(buildDir, 'skill_contract_proof.json');
+console.log('Verifying with snarkjs...');
+execSync(
+  `cd "${buildDir}" && snarkjs groth16 verify ${CIRCUIT_NAME}_vkey.json skill_public.json skill_proof.json`,
+  { stdio: 'inherit' }
+);
 
-// Contract-ready hex (same encoding as export_for_contract.js / contract_proof.json):
-// G1 = x||y, G2 = x_c1||x_c0||y_c1||y_c0, public signals = 32-byte big-endian. The client
-// (buildUnlockWeaponArgs) also accepts the old decimal layout for older provers.
-const proof = exportProof(path.join(buildDir, 'skill_proof.json'));
-const vk = exportVk(path.join(buildDir, 'SkillProof_vkey.json'));
-const pub = exportPubSignals(path.join(buildDir, 'skill_public.json'));
-const payload = {
-  proof: { a: proof.a.toString('hex'), b: proof.b.toString('hex'), c: proof.c.toString('hex') },
-  vk: {
-    alpha: vk.alpha.toString('hex'),
-    beta: vk.beta.toString('hex'),
-    gamma: vk.gamma.toString('hex'),
-    delta: vk.delta.toString('hex'),
-    ic: vk.ic.map((b) => b.toString('hex'))
-  },
-  pub_signals: pub.map((b) => b.toString('hex'))
-};
-
+// Contract-ready hex via export_for_contract.js: G1 = x||y, G2 = x_c1||x_c0||y_c1||y_c0,
+// pub_signals = [threshold, publicHash] as 32-byte big-endian (order checked by unlock_weapon).
+const read = (f) => JSON.parse(fs.readFileSync(path.join(buildDir, f), 'utf8'));
+const payload = toContractFormat(read('skill_proof.json'), read(`${CIRCUIT_NAME}_vkey.json`), read('skill_public.json'));
+const outPath = path.join(buildDir, 'contract_proof_skill.json');
 fs.writeFileSync(outPath, JSON.stringify(payload, null, 2));
 console.log('Done. Contract-ready skill proof:', outPath);

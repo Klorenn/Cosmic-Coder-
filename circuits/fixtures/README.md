@@ -14,3 +14,11 @@ All proven with `circuits/build/GameRun_final.zkey` (VK = `circuits/build/GameRu
 
 V3 fixtures belong to `GameRunV3_final.zkey`: re-running `scripts/zk/build_GameRunV3.sh` makes a new setup, so copy
 `circuits/build/contract_proof_v3{,.snarkjs}.json` over the two V3 fixtures afterwards.
+
+SkillProof fixtures belong to `circuits/build/SkillProof_final.zkey` (VK pinned on testnet with `set_unlock_vk`):
+
+| File | What |
+|------|------|
+| `skillproof_w2_t1000.json` | contract-format proof+VK, weapon 2, threshold 1000 (score 1500 private); used by `test_real_skill_proof_w2_unlock_mismatch_replay` and the Vitest client test |
+| `skillproof_w2_t1000.snarkjs.json` | raw snarkjs `{ proof, public, input }` |
+| `skillproof_w2_t1000.unlock_tx.json` | base64 ScVal args of the testnet `unlock_weapon` tx that accepted it (`buildUnlockWeaponArgs` must reproduce them) |

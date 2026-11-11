@@ -122,7 +122,7 @@ export function generateSkillProof(body) {
     timeout: 60000
   });
 
-  const outPath = path.join(BUILD_DIR, 'skill_contract_proof.json');
+  const outPath = path.join(BUILD_DIR, 'contract_proof_skill.json');
   const raw = JSON.parse(fs.readFileSync(outPath, 'utf8'));
   return raw;
 }

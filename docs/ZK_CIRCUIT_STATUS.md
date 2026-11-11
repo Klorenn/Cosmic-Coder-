@@ -7,6 +7,7 @@
 | Ranked submit, payload WITH `seed` + `kills` (`VITE_ZK_CIRCUIT` = `v3`, default) | `circuits/GameRunV3.circom` (7 public signals, private `seed, kills, events_hash`) | browser snarkjs (`generateLocalProof`, `public/circuits/build/GameRunV3_*`) then `POST /zk/prove_v3` | `submit_zk` | **Yes** once the deploy pinned the V3 VK (`scripts/deploy_contracts_testnet.sh` default) |
 | Ranked submit, payload WITHOUT `seed`/`kills`, or `VITE_ZK_CIRCUIT=v1` (legacy) | `circuits/GameRun.circom` (7 public signals, no private witness) | browser snarkjs then `POST /zk/prove` (`requestZkProofV2`) | `submit_zk` | Only on a deploy that pinned the GameRun VK (`ZK_CIRCUIT=v1`); against a V3 deploy -> #8 VkMismatch |
 | Legacy ranked (`VITE_ZK_BACKEND=noir`) | Noir `circuits/noir` (ACIR in `public/circuits/GameRun.json`) | browser (NoirService, UltraHonk) | `submit_zk_noir` | **No**: `ultrahonk_verifier.verify_proof` only checks the blob shape; also needs `set_noir_verifier` (#16 otherwise) |
+| Weapon unlock | `circuits/SkillProof.circom` (2 public signals `[threshold, publicHash]`, private `score, wallet, nonce`) | server `POST /skill-proof` (`server/skillProof.js` -> `scripts/zk/generate_skill_proof.js`); browser artifacts in `public/circuits/build/SkillProof_*` | `unlock_weapon` | **Yes**: SkillProof VK pinned on testnet with `set_unlock_vk` (docs/TESTNET_DEPLOYMENT.md, "Unlock VK") |
 | `POST /zk/prove_v2` | `circuits/GameRunV2.circom` (12 public signals) | server | none (`submit_zk` needs 7 signals) | off-chain only |
 
 `requestZkProofV2` calls `/zk/prove_v3` (V3 payload) or `/zk/prove` (GameRun), never `/zk/prove_v2`; it is the fallback of the ranked submit and the ArenaScene connectivity check.
@@ -16,6 +17,10 @@
 
 - `GameRun_final.zkey` <-> `GameRun_vkey.json` <-> VK in `circuits/build/contract_proof.json` (the one the deploy script pins): identical.
 - `GameRunV2_final.zkey` <-> `GameRunV2_vkey.json`: identical.
+- `SkillProof_final.zkey` (new local testnet setup, circom 2.2.2) <-> `SkillProof_vkey.json` <-> VK in `circuits/build/contract_proof_skill.json` <-> VK pinned on testnet: identical; `snarkjs zkey verify` against `pot12_final.ptau` OK; `public/circuits/build/SkillProof_*` synced.
+- Real SkillProof weapon 2 / threshold 1000 (`circuits/fixtures/skillproof_w2_t1000*.json`): `snarkjs groth16 verify` OK; accepted on testnet by `unlock_weapon`; native test
+  `test_real_skill_proof_w2_unlock_mismatch_replay`: threshold 5000 -> `ThresholdMismatch`, weapon 3 -> `SignalMismatch`, tampered hash -> `InvalidProof`,
+  OK once, then `AlreadyUnlocked` (same player) / `Replay` (other player). `buildUnlockWeaponArgs` rebuilds the accepted tx args byte-for-byte (`src/__tests__/contractsClientWeapon.test.js`).
 - Browser artifacts `public/circuits/build/GameRun_*` == `circuits/build/GameRun_*` (wasm, zkey, vkey; served by Vite at `/circuits/build/...`).
 - Real proof score=300 wave=3 (`circuits/fixtures/gamerun_s300_w3*.json`): `snarkjs groth16 verify` OK; native contract test
   `test_real_proof_s300_w3_submit_mismatch_replay`: `set_run_vk` + `submit_zk` OK, claimed score 301 -> `SignalMismatch`,

@@ -15,7 +15,7 @@
 | Game Hub (Stellar Game Studio) | `CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG` | pre-existing; interface `start_game`/`end_game` checked with `stellar contract info interface` |
 
 - Admin / deployer (public): `GBYTM7WYFHS6JGZXO2JKD3RP4DLSS3GZ6Q3G7AZRVSYEGDNRIF3YQJEY` (stellar CLI identity `cosmic-deployer`, friendbot-funded; the secret lives only in `~/.config/stellar`, never in the repo).
-- `set_unlock_vk` was NOT run: `unlock_weapon` returns `#7 VkNotSet` until the admin pins the SkillProof VK.
+- Unlock VK (SkillProof) pinned with `set_unlock_vk` (see "Unlock VK" below); `unlock_weapon` verified with a real proof.
 - WASM sizes (`wasm32v1-none`, release, `opt-level = "z"`): cosmic_coder 48 KB, groth16_verifier 14 KB, ultrahonk_verifier 9.1 KB.
 
 ## Deploy / configuration transactions
@@ -26,6 +26,7 @@
 | `set_verifier` | `27f2fd5a28f1b7ba4ed18a90c35c1a29251af801ab930630894b9c6c6f0c9b40` |
 | `set_run_vk` (V3) | `57452dc8a7930120ddac4d45ccc7db992ebf62c1a3e15e2994623868179f5a45` |
 | ultrahonk `set_vk` | `c73806b56e79577aae273eb3c083a3b10744d6acfee6ee91e85ebfa4328c9cd5` |
+| `set_unlock_vk` (SkillProof) | `2e81accfc0a4b4f71d3f200561f686bfdf360ea149b2425541117de49ee7737b` |
 
 ## On-chain verification (2026-11-11)
 
@@ -43,6 +44,48 @@ The nonce is fixed inside the proof's public signals, so the fixture proof can b
 contract instance. Frontend smoke (`gameClient.js` against this deploy): `getLeaderboardBySeason`, `isNonceUsed`,
 `getActiveSession` decode the live contract.
 
+## Unlock VK (SkillProof, 2026-11-11)
+
+Artifacts (one local trusted setup, TESTNET ONLY: fresh `pot12` with 1 contribution + 1 zkey contribution, random
+entropy, `snarkjs zkey verify` OK against `circuits/build/pot12_final.ptau`, which is gitignored and kept locally):
+
+| File | What |
+|------|------|
+| `circuits/build/SkillProof.r1cs`, `SkillProof_js/` | circom 2.2.2 build of `circuits/SkillProof.circom` (642 constraints, public `[threshold, publicHash]`) |
+| `circuits/build/SkillProof_final.zkey` / `SkillProof_vkey.json` | prover key / VK (== `zkey export verificationkey`) |
+| `public/circuits/build/SkillProof_*` | same wasm/zkey/vkey for the browser |
+| `circuits/build/contract_proof_skill.json` | contract-format proof+VK from `scripts/zk/generate_skill_proof.js` (the deploy script's `UNLOCK_VK_JSON`) |
+| `circuits/fixtures/skillproof_w2_t1000{,.snarkjs,.unlock_tx}.json` | the real proof below (contract / raw snarkjs + input / accepted tx args) |
+
+Proof: weapon 2 (Shotgun), `threshold = WEAPON_THRESHOLDS[1] = 1000`, private score 1500, wallet = field of the
+deployer address (`server/skillProof.js` `walletToField`), nonce 20261111. `pub_signals = [0x03e8, publicHash]`.
+
+| Check (player = deployer) | Result |
+|-------|--------|
+| `unlock_weapon` before the pin | rejected in simulation: `Error(Contract, #7)` VkNotSet |
+| `set_unlock_vk` | SUCCESS, tx `2e81accfc0a4b4f71d3f200561f686bfdf360ea149b2425541117de49ee7737b`, event `config_updated` field `unlock_vk` |
+| `unlock_weapon` weapon 2, threshold 5000 | rejected in simulation: `Error(Contract, #13)` ThresholdMismatch (no tx) |
+| `unlock_weapon` weapon 2, threshold 1000 | SUCCESS, tx `9dc8f259a0f11a3f040098461ab65c1c03e52dcab06830e9c14a9522aeec763d` (ledger 5680037), event `weapon_unlocked` |
+| `is_weapon_unlocked(deployer, 2)` / `get_unlocked_weapons(deployer)` | `true` / `[2]` |
+| same proof again | rejected in simulation: `Error(Contract, #14)` AlreadyUnlocked (no tx, never broadcast) |
+
+The `public_hash` is now burned (`UnlockProof` replay key): the same proof from any other account fails with `#2`
+Replay (native test). Because `wallet` is a PRIVATE input and the contract does not bind the proof to `player`, a
+pending unlock tx can be front-run from another account (see `contracts/README.md`, known limitations).
+
+```bash
+node scripts/zk/generate_skill_proof.js circuits/build/skill_input.json  # fullprove + snarkjs verify + contract_proof_skill.json
+# or through the prover: generateSkillProof({ score, wallet, nonce, threshold }) in server/skillProof.js
+P=CAEE26RL4PQ3SDRRDRWY2DUWUELG7YNTXYJUQTM2QFDY6BEU5TUX3F6F
+V=$(python3 -I -c 'import json;print(json.dumps(json.load(open("circuits/build/contract_proof_skill.json"))["vk"]))')
+stellar contract invoke --id $P --source-account cosmic-deployer --network testnet -- set_unlock_vk --vk "$V"
+TESTNET_SMOKE=1 npx vitest run src/__tests__/weaponUnlockTestnet.smoke.test.js   # isWeaponUnlocked / getUnlockedWeapons live
+```
+
+The deploy script re-applies `set_unlock_vk` on every run from `UNLOCK_VK_JSON` (default
+`circuits/build/contract_proof_skill.json`). Rebuilding SkillProof = new setup = new VK: re-pin it, re-sync
+`public/circuits/build/SkillProof_*` and regenerate the fixtures.
+
 ## Exact commands
 
 ```bash
@@ -52,7 +95,7 @@ stellar keys generate cosmic-deployer --network testnet --fund     # or reuse: s
 SOURCE_ACCOUNT=cosmic-deployer ZK_CIRCUIT=v3 bash scripts/deploy_contracts_testnet.sh
 ```
 
-Idempotent re-run (reuses contracts that still exist, re-applies `set_verifier` / `set_run_vk`):
+Idempotent re-run (reuses contracts that still exist, re-applies `set_verifier` / `set_run_vk` / `set_unlock_vk`):
 
 ```bash
 SOURCE_ACCOUNT=cosmic-deployer ZK_CIRCUIT=v3 \
