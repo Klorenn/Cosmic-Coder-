@@ -17,6 +17,8 @@ import { assertValidSubmit, normalizeTxResult, toContractError, ContractError } 
 import { buildRunWitness } from '../zk/gameProof.js';
 
 const TESTNET_RPC = 'https://soroban-testnet.stellar.org';
+/** Source account for read-only simulations (all-zero ed25519 key; must be a valid StrKey, it never signs). */
+export const SIM_SOURCE_ACCOUNT = 'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF';
 const TESTNET_PASSPHRASE = 'Test SDF Network ; September 2015';
 
 /** Transaction validity window (seconds). 30s was causing txTooLate when user signs slowly or RPC is slow. */
@@ -321,7 +323,7 @@ async function simulateRead(method, scArgs, fallback) {
     const { Contract, TransactionBuilder, Account, BASE_FEE, scValToNative } = await import('@stellar/stellar-sdk');
     const server = await getServer();
     const built = new TransactionBuilder(
-      new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', '0'),
+      new Account(SIM_SOURCE_ACCOUNT, '0'),
       { fee: BASE_FEE, networkPassphrase: TESTNET_PASSPHRASE }
     )
       .addOperation(new Contract(contractId).call(method, ...scArgs))
@@ -936,7 +938,7 @@ export async function getLeaderboard(limit = 10) {
     const { Contract, TransactionBuilder, Account, BASE_FEE, xdr } = await import('@stellar/stellar-sdk');
     const server = await getServer();
     const built = new TransactionBuilder(
-      new Account('GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', '0'),
+      new Account(SIM_SOURCE_ACCOUNT, '0'),
       { fee: BASE_FEE, networkPassphrase: TESTNET_PASSPHRASE }
     )
       .addOperation(new Contract(contractId).call('get_leaderboard', xdr.ScVal.scvU32(limit)))
@@ -974,7 +976,7 @@ export async function getLeaderboardBySeason(seasonId = 1, limit = 10) {
     const server = await getServer();
     const contract = new Contract(contractId);
     const dummyAccount = new Account(
-      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      SIM_SOURCE_ACCOUNT,
       '0'
     );
     const built = new TransactionBuilder(dummyAccount, {
@@ -1089,7 +1091,7 @@ export async function getPlayerMilestone(playerAddress, seasonId = 1) {
     const server = await getServer();
     const contract = new Contract(getContractId());
     const dummyAccount = new Account(
-      'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      SIM_SOURCE_ACCOUNT,
       '0'
     );
     const built = new TransactionBuilder(dummyAccount, {

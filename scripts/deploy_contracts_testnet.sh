@@ -20,6 +20,10 @@
 #   ZK_CIRCUIT=v1     pin the LEGACY GameRun VK (circuits/build/contract_proof.json, no private witness:
 #                     any score >= wave*5 is provable). Default v3 = GameRunV3 (scripts/zk/build_GameRunV3.sh).
 #                     The frontend VITE_ZK_CIRCUIT must match, or every ranked submit fails with #8 VkMismatch.
+#   VERIFIER_ID=C... NOIR_VERIFIER_ID=C... POLICY_ID=C...
+#                     reuse already-deployed contracts (idempotent re-run: skips deploys whose contract
+#                     still exists on testnet, re-applies the admin configuration). After a testnet reset
+#                     leave them unset so everything is redeployed.
 #   ENABLE_NOIR_STUB=1  ALSO wire the ultrahonk_verifier STUB into cosmic_coder (set_noir_verifier).
 #                       OFF by default: the stub does not verify proofs, so wiring it makes ranked
 #                       submissions (submit_zk_noir) FORGEABLE. Demo/testnet use only.
@@ -82,21 +86,36 @@ if [ -z "${ADMIN:-}" ]; then
 fi
 echo "Admin: $ADMIN"
 echo "Game Hub: $GAME_HUB"
+if ! stellar contract info interface --id "$GAME_HUB" --network "$NETWORK" >/dev/null 2>&1; then
+  echo "ERROR: Game Hub $GAME_HUB not found on $NETWORK (testnet reset?). Deploy a Game Hub exposing" >&2
+  echo "  start_game(game_id, session_id: u32, player1, player2, player1_points: i128, player2_points: i128) and" >&2
+  echo "  end_game(session_id: u32, player1_won: bool), then rerun with GAME_HUB=<its id>." >&2
+  exit 1
+fi
 
 cd "$CONTRACTS"
 deploy() { stellar contract deploy --source-account "$SOURCE_ACCOUNT" --network "$NETWORK" "$@" | tail -1; }
 invoke() { local id="$1"; shift; stellar contract invoke --id "$id" --source-account "$SOURCE_ACCOUNT" --network "$NETWORK" -- "$@"; }
 
-echo "Deploying groth16_verifier..."
-VERIFIER_ID=$(deploy --wasm "$WASM_DIR/groth16_verifier.wasm")
+# Reuse an existing contract when its ID is given and it still exists (testnet resets wipe them).
+exists() { [ -n "$1" ] && stellar contract info interface --id "$1" --network "$NETWORK" >/dev/null 2>&1; }
+
+if exists "${VERIFIER_ID:-}"; then echo "Reusing groth16_verifier $VERIFIER_ID"; else
+  echo "Deploying groth16_verifier..."
+  VERIFIER_ID=$(deploy --wasm "$WASM_DIR/groth16_verifier.wasm")
+fi
 echo "VERIFIER_ID=$VERIFIER_ID"
 
-echo "Deploying ultrahonk_verifier (admin=$ADMIN)..."
-NOIR_VERIFIER_ID=$(deploy --wasm "$WASM_DIR/ultrahonk_verifier.wasm" -- --admin "$ADMIN")
+if exists "${NOIR_VERIFIER_ID:-}"; then echo "Reusing ultrahonk_verifier $NOIR_VERIFIER_ID"; else
+  echo "Deploying ultrahonk_verifier (admin=$ADMIN)..."
+  NOIR_VERIFIER_ID=$(deploy --wasm "$WASM_DIR/ultrahonk_verifier.wasm" -- --admin "$ADMIN")
+fi
 echo "NOIR_VERIFIER_ID=$NOIR_VERIFIER_ID"
 
-echo "Deploying cosmic_coder (admin=$ADMIN, game_hub=$GAME_HUB)..."
-POLICY_ID=$(deploy --wasm "$WASM_DIR/cosmic_coder.wasm" -- --admin "$ADMIN" --game_hub "$GAME_HUB")
+if exists "${POLICY_ID:-}"; then echo "Reusing cosmic_coder $POLICY_ID"; else
+  echo "Deploying cosmic_coder (admin=$ADMIN, game_hub=$GAME_HUB)..."
+  POLICY_ID=$(deploy --wasm "$WASM_DIR/cosmic_coder.wasm" -- --admin "$ADMIN" --game_hub "$GAME_HUB")
+fi
 echo "POLICY_ID=$POLICY_ID"
 
 echo "Wiring Groth16 verifier..."
@@ -133,7 +152,14 @@ fi
 
 echo "NOTE: unlock_weapon stays disabled (VkNotSet) until the admin calls set_unlock_vk with the SkillProof VK (contract hex format, ic x3)."
 echo ""
-echo "Done. Add to .env:"
+echo "================ Deployed contract IDs ($NETWORK) ================"
+echo "  groth16_verifier   VERIFIER_ID=$VERIFIER_ID"
+echo "  ultrahonk_verifier NOIR_VERIFIER_ID=$NOIR_VERIFIER_ID (stub, not wired)"
+echo "  cosmic_coder       POLICY_ID=$POLICY_ID"
+echo "  game hub           GAME_HUB=$GAME_HUB"
+echo "  admin              $ADMIN"
+echo "=================================================================="
+echo "Done. Add to .env / public/config.json:"
 echo "  VITE_COSMIC_CODER_CONTRACT_ID=$POLICY_ID"
 echo "Add to GitHub Secrets (Settings -> Secrets and variables -> Actions):"
 echo "  VITE_COSMIC_CODER_CONTRACT_ID = $POLICY_ID"

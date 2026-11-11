@@ -4,6 +4,10 @@ Ejecuta estos comandos **desde la raíz del repo** una vez tengas Stellar CLI co
 
 ## Contratos desplegados (referencia)
 
+> **Deploy actual (2026-11-11):** `cosmic_coder` = `CAEE26RL4PQ3SDRRDRWY2DUWUELG7YNTXYJUQTM2QFDY6BEU5TUX3F6F`,
+> `groth16_verifier` = `CAU6UVGUBSPQPVYV6ZGDVMJJLQJ364YKKEU7O2XM2CYPNISVR5D7E5JY`, VK GameRunV3. Detalle, hashes y
+> re-deploy tras reset de testnet: [`TESTNET_DEPLOYMENT.md`](TESTNET_DEPLOYMENT.md).
+>
 > **OBSOLETO:** los IDs anteriores (`CC73YP4H...` cosmic_coder, `CCQQDZBS...` zk_verifier) corresponden a la version
 > v0.2.0 (con `init` y `submit_proof`) y **ya no son compatibles** con el cliente actual. No los uses.
 > Despliega de nuevo (ver abajo) y usa el nuevo ID de `cosmic_coder` en `VITE_COSMIC_CODER_CONTRACT_ID`.
@@ -20,9 +24,7 @@ Usa **rustup** (no Homebrew). Para Soroban testnet hace falta el target **wasm32
 export PATH="$HOME/.cargo/bin:$PATH"
 rustup target add wasm32v1-none
 cd contracts
-cargo build -p zk_types
-cargo build -p zk_verifier --target wasm32v1-none --release
-cargo build -p cosmic_coder --target wasm32v1-none --release
+cargo build --target wasm32v1-none --release -p groth16_verifier -p ultrahonk_verifier -p cosmic_coder
 cd ..
 ```
 
@@ -32,7 +34,7 @@ Necesitas una cuenta en testnet con XLM (p. ej. desde [Friendbot](https://labora
 
 ```bash
 cd contracts
-stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/zk_verifier.wasm
+stellar contract deploy --source-account <SOURCE> --network testnet --wasm target/wasm32v1-none/release/groth16_verifier.wasm
 ```
 
 **Guarda el ID que devuelve** como `VERIFIER_ID`.
@@ -60,7 +62,7 @@ INV="stellar contract invoke --id <POLICY_ID> --source-account <ADMIN> --network
 # Orden: deploy -> constructor (paso 3) -> set_verifier -> set_run_vk (-> set_unlock_vk)
 # Verifier Groth16 (submit_zk, unlock_weapon). El ranked del frontend usa esta ruta.
 $INV set_verifier --verifier <VERIFIER_ID>
-# VK fijada del circuito GameRun (ic.len() == 8), tomada de circuits/build/contract_proof.json (campo "vk",
+# VK fijada del circuito GameRun (ic.len() == 8), tomada de circuits/build/contract_proof_v3.json (campo "vk",
 # hex sin 0x). submit_zk rechaza cualquier otra VK (error 8 VkMismatch). Sin esto: error 7 VkNotSet.
 $INV set_run_vk --vk '<GAMERUN_VK_JSON>'
 # VK fijada del circuito SkillProof / unlock (ic.len() == 3). Sin esto unlock_weapon falla con error 7 VkNotSet
@@ -99,6 +101,7 @@ En el `.env` de la raíz del proyecto:
 VITE_COSMIC_CODER_CONTRACT_ID=<POLICY_ID>
 VITE_ZK_PROVER_URL=http://localhost:3333
 VITE_ZK_BACKEND=groth16
+VITE_ZK_CIRCUIT=v3
 ```
 
 `VITE_ZK_BACKEND` (default `groth16`, tambien en `public/config.json`): el ranked prueba en el navegador con snarkjs

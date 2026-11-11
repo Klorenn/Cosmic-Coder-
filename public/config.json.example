@@ -2,7 +2,7 @@
   "_comment": "Copy to public/config.json (or generate via scripts/write_config_from_env.js). Unset values fall back to env VITE_* then http://localhost:3333.",
   "VITE_API_URL": "http://localhost:3333",
   "VITE_GAME_HUB_CONTRACT_ID": "CB4VZAT2U3UC6XFK3N23SKRF2NDCMP3QHJYMCHHFMZO7MRQO6DQ2EMYG",
-  "_comment_contract_id": "VITE_COSMIC_CODER_CONTRACT_ID must point to a deploy of the NEW cosmic_coder contract (scripts/deploy_contracts_testnet.sh). Its ABI is incompatible with the previous contract CAQYJZYU2JC27RLHE2WFHYFUDDLX3LSA4QVLTJYNORI7FZYC3XN3AJF2; calls against the old ID fail.",
+  "_comment_contract_id": "VITE_COSMIC_CODER_CONTRACT_ID must point to a deploy of the NEW cosmic_coder contract (scripts/deploy_contracts_testnet.sh). Current testnet deploy (2026-11-11): CAEE26RL4PQ3SDRRDRWY2DUWUELG7YNTXYJUQTM2QFDY6BEU5TUX3F6F, see docs/TESTNET_DEPLOYMENT.md. Testnet resets wipe it; redeploy and update this value.",
   "VITE_COSMIC_CODER_CONTRACT_ID": "",
   "VITE_ZK_PROVER_URL": "http://localhost:3333",
   "VITE_PROGRESS_API_URL": "http://localhost:3333",
